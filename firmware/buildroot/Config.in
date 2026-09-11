@@ -1,0 +1,4 @@
+menu "QDOS"
+	source "$BR2_EXTERNAL_QDOS_PATH/package/quadrate/Config.in"
+	source "$BR2_EXTERNAL_QDOS_PATH/package/qdos/Config.in"
+endmenu

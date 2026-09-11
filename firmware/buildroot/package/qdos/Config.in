@@ -1,0 +1,13 @@
+config BR2_PACKAGE_QDOS
+	bool "qdos"
+	select BR2_PACKAGE_QUADRATE
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_INSTALL_LIBSTDCPP
+	help
+	  QDOS, a calculator operating system whose shell is the Quadrate
+	  language.
+
+	  https://github.com/quadrate-language/qdos
+
+comment "qdos needs a toolchain with C++ and threads"
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS

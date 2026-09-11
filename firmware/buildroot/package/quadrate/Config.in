@@ -1,0 +1,13 @@
+config BR2_PACKAGE_QUADRATE
+	bool "quadrate"
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_INSTALL_LIBSTDCPP
+	help
+	  The Quadrate language runtime, compiler front-end and AST
+	  interpreter, built without LLVM. Provides the static libraries
+	  QDOS links: libinterp, libqc, librt and libu8t.
+
+	  https://github.com/quadrate-language/quadrate
+
+comment "quadrate needs a toolchain with C++ and threads"
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS

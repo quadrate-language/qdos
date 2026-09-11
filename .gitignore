@@ -1,0 +1,27 @@
+# Build outputs
+build/
+dist/
+compile_commands.json
+
+# Firmware image build. The default output is ~/.cache/qdos-firmware, but
+# QDOS_BUILD_DIR can point it back inside the tree.
+firmware/build/
+firmware/buildroot-*/
+*.img
+
+# Simulated persistent storage, written by the SDL3 backend
+qdos-store/
+
+# IDE/Editor
+.cache/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# AI assistant context (local only)
+CLAUDE.md

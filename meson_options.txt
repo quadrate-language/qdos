@@ -1,0 +1,14 @@
+option('quadrate_src', type: 'string', value: '../quadrate',
+		description: 'Path to the Quadrate source tree (absolute, or relative to this project)')
+
+option('quadrate_dist', type: 'string', value: 'dist',
+		description: 'Distribution directory inside the Quadrate tree (produced by `make release`)')
+
+option('sim', type: 'boolean', value: true,
+		description: 'Build the SDL3 simulator backend')
+
+option('device', type: 'boolean', value: true,
+		description: 'Build the Linux framebuffer/evdev device backend')
+
+option('static', type: 'boolean', value: false,
+		description: 'Link QDOS statically. Produces a self-contained binary with no runtime library dependencies, which is what a firmware rootfs wants.')
