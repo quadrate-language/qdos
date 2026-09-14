@@ -10,9 +10,7 @@
 #include <string.h>
 
 uint16_t qdos_fb_gray_to_rgb565(uint8_t gray) {
-	// 5 bits red, 6 green, 5 blue. Taking the high bits of the same gray level
-	// for each channel keeps the result neutral; the low bits are discarded,
-	// which is why a 16bpp panel shows banding a 32bpp one does not.
+	// 5-6-5, high bits of the same level; the low bits are dropped.
 	const uint16_t r = (uint16_t)((gray & 0xF8u) >> 3);
 	const uint16_t g = (uint16_t)((gray & 0xFCu) >> 2);
 	const uint16_t b = (uint16_t)(gray >> 3);
@@ -26,8 +24,7 @@ bool qdos_fb_supported(const qdos_fb_info* info) {
 	if (info->bpp != 16 && info->bpp != 32) {
 		return false;
 	}
-	// A pitch shorter than the visible width would make writes run into the
-	// next scanline
+	// A short pitch would run writes into the next scanline.
 	return info->pitch >= info->width * (info->bpp / 8u);
 }
 
@@ -46,9 +43,7 @@ void qdos_fb_blit(const qdos_fb_info* info, uint8_t* dst, const uint8_t* src) {
 		uint8_t* line = dst + (size_t)(y + off_y) * info->pitch;
 
 		if (info->bpp == 32) {
-			// Byte-wise rather than through a uint32_t*: the mapped framebuffer
-			// and pitch are only guaranteed byte-aligned, and an unaligned
-			// 32-bit store is a fault on some ARM configurations
+			// Byte-wise: an unaligned 32-bit store faults on some ARM.
 			uint8_t* px = line + (size_t)off_x * 4u;
 			for (uint32_t x = 0; x < copy_w; x++) {
 				const uint8_t gray = row[x];

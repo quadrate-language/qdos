@@ -1,14 +1,6 @@
 /**
  * @file test_keypad.c
  * @brief Keypad tests, including one against a real kernel input device
- *
- * The mapping tests run anywhere. The device test creates a virtual keypad
- * through /dev/uinput, injects real key presses, and reads them back through
- * the same code the Pi will use — so the evdev path is exercised against the
- * kernel rather than a mock, without hardware and without root.
- *
- * It skips when /dev/uinput is unavailable, which is the normal case in a
- * container or on a locked-down host.
  */
 
 // POSIX interfaces on top of a strict c11 build
@@ -33,33 +25,87 @@ static void test_mapping(void) {
 	qdos_key_event ev;
 
 	// Digits, from both the main row and the numeric keypad
-	CHECK(qdos_keypad_map(KEY_1, &ev) && ev.key == QDOS_KEY_1);
-	CHECK(qdos_keypad_map(KEY_KP1, &ev) && ev.key == QDOS_KEY_1);
-	CHECK(qdos_keypad_map(KEY_0, &ev) && ev.key == QDOS_KEY_0);
-	CHECK(qdos_keypad_map(KEY_9, &ev) && ev.key == QDOS_KEY_9);
+	CHECK(qdos_keypad_map(KEY_1, false, false, &ev) && ev.key == QDOS_KEY_1);
+	CHECK(qdos_keypad_map(KEY_KP1, false, false, &ev) && ev.key == QDOS_KEY_1);
+	CHECK(qdos_keypad_map(KEY_0, false, false, &ev) && ev.key == QDOS_KEY_0);
+	CHECK(qdos_keypad_map(KEY_9, false, false, &ev) && ev.key == QDOS_KEY_9);
 
 	// Operators
-	CHECK(qdos_keypad_map(KEY_KPPLUS, &ev) && ev.key == QDOS_KEY_ADD);
-	CHECK(qdos_keypad_map(KEY_MINUS, &ev) && ev.key == QDOS_KEY_SUB);
-	CHECK(qdos_keypad_map(KEY_KPASTERISK, &ev) && ev.key == QDOS_KEY_MUL);
-	CHECK(qdos_keypad_map(KEY_SLASH, &ev) && ev.key == QDOS_KEY_DIV);
+	CHECK(qdos_keypad_map(KEY_KPPLUS, false, false, &ev) && ev.key == QDOS_KEY_ADD);
+	CHECK(qdos_keypad_map(KEY_MINUS, false, false, &ev) && ev.key == QDOS_KEY_SUB);
+	CHECK(qdos_keypad_map(KEY_KPASTERISK, false, false, &ev) && ev.key == QDOS_KEY_MUL);
+	CHECK(qdos_keypad_map(KEY_SLASH, false, false, &ev) && ev.key == QDOS_KEY_DIV);
 
 	// Control
-	CHECK(qdos_keypad_map(KEY_ENTER, &ev) && ev.key == QDOS_KEY_ENTER);
-	CHECK(qdos_keypad_map(KEY_BACKSPACE, &ev) && ev.key == QDOS_KEY_BACKSPACE);
-	CHECK(qdos_keypad_map(KEY_ESC, &ev) && ev.key == QDOS_KEY_CLEAR);
-	CHECK(qdos_keypad_map(KEY_POWER, &ev) && ev.key == QDOS_KEY_POWER);
+	CHECK(qdos_keypad_map(KEY_ENTER, false, false, &ev) && ev.key == QDOS_KEY_ENTER);
+	CHECK(qdos_keypad_map(KEY_BACKSPACE, false, false, &ev) && ev.key == QDOS_KEY_BACKSPACE);
+	CHECK(qdos_keypad_map(KEY_ESC, false, false, &ev) && ev.key == QDOS_KEY_CLEAR);
+	CHECK(qdos_keypad_map(KEY_POWER, false, false, &ev) && ev.key == QDOS_KEY_POWER);
 
 	// Space carries its character so it can reach the input line
-	CHECK(qdos_keypad_map(KEY_SPACE, &ev) && ev.key == QDOS_KEY_CHAR && ev.ch == ' ');
+	CHECK(qdos_keypad_map(KEY_SPACE, false, false, &ev) && ev.key == QDOS_KEY_CHAR && ev.ch == ' ');
 
 	// Keys the calculator has no use for must be rejected, not mapped to
 	// something arbitrary
-	CHECK(!qdos_keypad_map(KEY_F1, &ev));
-	CHECK(!qdos_keypad_map(KEY_LEFTSHIFT, &ev));
-	CHECK(!qdos_keypad_map(KEY_CAPSLOCK, &ev));
+	CHECK(!qdos_keypad_map(KEY_F1, false, false, &ev));
+	CHECK(!qdos_keypad_map(KEY_LEFTSHIFT, false, false, &ev));
+	CHECK(!qdos_keypad_map(KEY_CAPSLOCK, false, false, &ev));
 
-	CHECK(!qdos_keypad_map(KEY_1, NULL));
+
+	// Line mode needs a full keyboard: a keypad has no letters, but the machine
+	// is used with a USB keyboard long before it has its own keys
+	CHECK(qdos_keypad_map(KEY_SEMICOLON, true, false, &ev) && ev.key == QDOS_KEY_CHAR && ev.ch == ':');
+	CHECK(qdos_keypad_map(KEY_SEMICOLON, false, false, &ev) && ev.ch == ';');
+	CHECK(qdos_keypad_map(KEY_A, false, false, &ev) && ev.key == QDOS_KEY_CHAR && ev.ch == 'a');
+	CHECK(qdos_keypad_map(KEY_A, true, false, &ev) && ev.ch == 'A');
+	CHECK(qdos_keypad_map(KEY_LEFTBRACE, true, false, &ev) && ev.ch == '{');
+	CHECK(qdos_keypad_map(KEY_RIGHTBRACE, true, false, &ev) && ev.ch == '}');
+	CHECK(qdos_keypad_map(KEY_APOSTROPHE, true, false, &ev) && ev.ch == '"');
+	CHECK(qdos_keypad_map(KEY_EQUAL, true, false, &ev) && ev.key == QDOS_KEY_ADD);
+	CHECK(qdos_keypad_map(KEY_8, true, false, &ev) && ev.key == QDOS_KEY_MUL);
+	CHECK(qdos_keypad_map(KEY_COMMA, true, false, &ev) && ev.ch == '<');
+
+	// A digit is the calculator's digit key from either row
+	CHECK(qdos_keypad_map(KEY_1, false, false, &ev) && ev.key == QDOS_KEY_1);
+	CHECK(qdos_keypad_map(KEY_KP1, false, false, &ev) && ev.key == QDOS_KEY_1);
+	CHECK(qdos_keypad_map(KEY_1, true, false, &ev) && ev.ch == '!');
+
+	// Shift itself is a modifier, never an event
+	CHECK(!qdos_keypad_map(KEY_LEFTSHIFT, false, false, &ev));
+	CHECK(!qdos_keypad_map(KEY_RIGHTSHIFT, false, false, &ev));
+
+
+	// evdev gives the key, not the label, so the layout decides the character.
+	// On a Swedish keyboard the braces a function declaration needs are on
+	// AltGr, and the parentheses sit one key left of where US puts them.
+	CHECK(qdos_keypad_set_layout("se"));
+	CHECK(qdos_keypad_layout() == QDOS_LAYOUT_SE);
+
+	CHECK(qdos_keypad_map(KEY_7, false, true, &ev) && ev.ch == '{');
+	CHECK(qdos_keypad_map(KEY_0, false, true, &ev) && ev.ch == '}');
+	CHECK(qdos_keypad_map(KEY_8, true, false, &ev) && ev.ch == '(');
+	CHECK(qdos_keypad_map(KEY_9, true, false, &ev) && ev.ch == ')');
+	CHECK(qdos_keypad_map(KEY_2, true, false, &ev) && ev.ch == '"');
+	CHECK(qdos_keypad_map(KEY_DOT, true, false, &ev) && ev.ch == ':');
+	CHECK(qdos_keypad_map(KEY_SLASH, false, false, &ev) && ev.key == QDOS_KEY_SUB);
+	CHECK(qdos_keypad_map(KEY_7, true, false, &ev) && ev.key == QDOS_KEY_DIV);
+	CHECK(qdos_keypad_map(KEY_MINUS, false, false, &ev) && ev.key == QDOS_KEY_ADD);
+	CHECK(qdos_keypad_map(KEY_BACKSLASH, true, false, &ev) && ev.key == QDOS_KEY_MUL);
+	CHECK(qdos_keypad_map(KEY_102ND, true, false, &ev) && ev.ch == '>');
+
+	// Letters are the same on both, and the calculator keys never move
+	CHECK(qdos_keypad_map(KEY_A, false, false, &ev) && ev.ch == 'a');
+	CHECK(qdos_keypad_map(KEY_KP1, false, false, &ev) && ev.key == QDOS_KEY_1);
+
+	CHECK(qdos_keypad_set_layout("us"));
+	CHECK(qdos_keypad_map(KEY_LEFTBRACE, true, false, &ev) && ev.ch == '{');
+	CHECK(qdos_keypad_map(KEY_9, true, false, &ev) && ev.ch == '(');
+
+	CHECK(!qdos_keypad_set_layout("klingon"));
+	CHECK(qdos_keypad_layout() == QDOS_LAYOUT_US); // unchanged by a bad name
+	CHECK(!qdos_keypad_set_layout(NULL));
+
+	CHECK(!qdos_keypad_map(KEY_1, false, false, NULL));
 }
 
 static void test_poll_guards(void) {
@@ -109,11 +155,6 @@ fail:
 }
 
 /**
- * Find the event node the kernel created for our uinput device.
- *
- * UI_GET_SYSNAME names the sysfs input directory, which contains the eventN
- * directory. Going through sysfs avoids guessing at or scanning other people's
- * input devices.
  */
 static bool uinput_event_path(int uifd, char* path, size_t cap) {
 	char sysname[64];

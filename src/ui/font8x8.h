@@ -19,10 +19,6 @@ extern "C" {
 
 /**
  * @brief Row bitmap for one character
- *
- * Bit 0 is the leftmost pixel. Characters outside the printable ASCII range
- * render as blank.
- *
  * @param ch  Character to look up
  * @param row Row index, 0 through QDOS_FONT_H - 1
  * @return Bitmask of lit pixels in that row

@@ -19,7 +19,45 @@ meson compile -C build
 ./build/qdos                    # SDL3 simulator
 ```
 
-Escape clears, F10 powers off, everything else types.
+### Using it
+
+Two modes, because a calculator is operated by reflex and a language is typed
+into deliberately.
+
+**Calculator** (`>`). Digits build a number; `Enter` pushes it; an operator
+applies immediately:
+
+```
+6  Enter  7  *        ->  42
+7  Enter  Enter  *    ->  49   (bare Enter duplicates, as on an HP)
+```
+
+**Line** (`:`). Press `:` to type whole Quadrate — control flow, stored
+registers, and function definitions. `Enter` evaluates and you stay in line
+mode, so a word can be defined and then used. `Escape` returns to the
+calculator.
+
+A line with an open brace or paren continues rather than evaluating, so a
+definition can be typed the way it reads. The prompt becomes `..` while one is
+open:
+
+```
+:  fn sq(x:i64 -- r:i64) {   Enter
+..   dup *                   Enter
+..  }                        Enter     defines
+:  7 sq                      Enter     -> 49
+:  Escape
+```
+
+Braces inside a string are text, not structure, and an unmatched closer submits
+so the parser can report it.
+
+Backspace edits, F10 powers off.
+
+On the device the evdev mapping covers a full keyboard, so line mode is usable
+with a USB keyboard before the machine has its own keys. Set `QDOS_KEYMAP` to
+`us` or `se`: evdev reports which key was pressed, not what it is labelled, and
+on a Swedish keyboard the braces a function needs are on AltGr.
 
 ### Platform dependencies
 
@@ -70,6 +108,7 @@ meson test -C build/uchar
 ./cross/run.sh                          # Build for Cortex-A53, test under emulation
 ./firmware/stage-to-raspios.sh pi@host  # Bring-up: onto Raspberry Pi OS Lite
 ./firmware/build-image.sh               # Firmware: a Buildroot sdcard.img
+./firmware/run-qemu.sh                  # Boot that image under QEMU, no hardware needed
 ```
 
 Flash the image with:
@@ -104,14 +143,26 @@ The machine's capabilities reach typed Quadrate as native words:
 value slot sto      store in a numbered register (0-99), any type
 slot rcl            recall it
 slot clr            empty it
+"name" forget       remove a Quadrate-defined word
 cls                 clear the message line
 ```
 
 Registers persist through the HAL, and the stack itself is saved on power-off
 and restored on start, so the machine comes back holding what it held.
 
-Not yet: control flow (`if`, `loop`), Quadrate-defined functions, variables, and
-routing `print` output to the display instead of stdout.
+Control flow works — `if`/`else`, `loop`, `break`, `continue` — with a step
+budget, because nothing can interrupt a running evaluation on a calculator and
+an unbounded `loop {}` would otherwise need a power cycle.
+
+Quadrate-defined functions work: declare one in line mode and call it from
+either mode, and `"name" forget` removes one again. Recursion is bounded, since
+each level costs a C stack frame.
+
+The keypad has two modes: pressing an operator evaluates immediately, and `:`
+switches to typing whole lines of Quadrate.
+
+Not yet: `for`, named locals (both `for i` and named parameters need a variable
+scope), and routing `print` output to the display instead of stdout.
 
 ## Links
 

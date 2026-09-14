@@ -12,12 +12,7 @@
 extern "C" {
 #endif
 
-/**
- * @brief Fill in @p hal with the Linux framebuffer/evdev backend
- *
- * Reads QDOS_FB (default /dev/fb0), QDOS_INPUT (default /dev/input/event0) and
- * QDOS_STORE (default /var/lib/qdos) from the environment.
- */
+/** @brief Fill in @p hal with the Linux framebuffer/evdev backend */
 void qdos_device_hal(qdos_hal* hal);
 
 #ifdef __cplusplus

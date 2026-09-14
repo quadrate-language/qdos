@@ -56,8 +56,7 @@ void qdos_console_puts_right(qdos_console* con, int row, const char* text) {
 
 	const size_t len = strlen(text);
 	if (len >= QDOS_COLS) {
-		// Too long to fit: keep the tail, which is where the least significant
-		// and most recently typed characters are
+		// Keep the tail: that is where the recent characters are.
 		qdos_console_puts(con, 0, row, text + (len - QDOS_COLS));
 		return;
 	}
@@ -83,8 +82,39 @@ void qdos_console_rule(qdos_console* con, int row) {
 	if (!con || row < 0 || row >= QDOS_ROWS)
 		return;
 
-	// Sit the rule on the last pixel row of the cell so it reads as a divider
-	// under the line above rather than a stripe through its own row
 	const int y = row * QDOS_FONT_H + QDOS_FONT_H - 1;
 	memset(&con->fb[(size_t)y * QDOS_SCREEN_W], con->ink, QDOS_SCREEN_W);
+}
+
+void qdos_console_puts_centered(qdos_console* con, int row, const char* text, int scale) {
+	if (!con || !text || scale < 1)
+		return;
+
+	const int len = (int)strlen(text);
+	const int width = len * QDOS_FONT_W * scale;
+	const int x0 = (QDOS_SCREEN_W - width) / 2;
+	const int y0 = row * QDOS_FONT_H;
+
+	for (int i = 0; i < len; i++) {
+		for (int gy = 0; gy < QDOS_FONT_H; gy++) {
+			const uint8_t bits = qdos_font_row(text[i], gy);
+			for (int gx = 0; gx < QDOS_FONT_W; gx++) {
+				if (!(bits & (1u << gx)))
+					continue;
+
+				// One font pixel becomes a scale x scale block
+				for (int sy = 0; sy < scale; sy++) {
+					const int y = y0 + gy * scale + sy;
+					if (y < 0 || y >= QDOS_SCREEN_H)
+						continue;
+					for (int sx = 0; sx < scale; sx++) {
+						const int x = x0 + (i * QDOS_FONT_W + gx) * scale + sx;
+						if (x < 0 || x >= QDOS_SCREEN_W)
+							continue;
+						con->fb[(size_t)y * QDOS_SCREEN_W + x] = con->ink;
+					}
+				}
+			}
+		}
+	}
 }

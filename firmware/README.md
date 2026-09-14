@@ -21,6 +21,113 @@ chase whatever the board actually enumerates without rebuilding:
 sudo systemctl edit qdos     # add Environment=QDOS_FB=/dev/fb1
 ```
 
+## Emulation: QEMU
+
+```bash
+./firmware/run-qemu.sh              # graphical; Ctrl-C quits
+./firmware/run-qemu.sh --serial     # console in this terminal; Ctrl-A X quits
+./firmware/run-qemu.sh --vnc        # screen on localhost:5900
+./firmware/run-qemu.sh --screenshot # boot headless, write a PNG
+```
+
+Uses QEMU from the host if installed, otherwise a container. Installing it
+natively is smoother for the graphical mode, since a container has no GPU access
+and needs the X socket plumbed in:
+
+```bash
+sudo pacman -S qemu-system-aarch64          # Arch
+sudo apt install qemu-system-arm qemu-system-gui   # Debian/Ubuntu
+```
+
+`--screenshot` needs no display at all, which makes it the mode that always
+works — and the one CI would use. Serial always lands in
+`~/.cache/qdos-firmware/serial.log`.
+
+**The screen is black for the first ~10 seconds, by design.** Nothing draws to
+the framebuffer during boot: the kernel logo is off, the console is on serial,
+and QDOS paints only once init starts it. A black screen after that is a real
+failure; before it, it is the intended behaviour.
+
+For `--vnc`, note that most viewers take a *display number*, not a port:
+`vncviewer localhost:0` reaches port 5900, while `vncviewer localhost:5900`
+tries port 11900 and finds nothing. Clients that want a port usually take two
+colons: `localhost::5900`.
+
+Boots the real image on QEMU's `raspi3b`, the closest machine it offers to a
+Zero 2 W: both quad Cortex-A53 on the same Broadcom silicon family. QEMU does
+not emulate the GPU bootloader, so the kernel is loaded directly rather than
+through `bootcode.bin` and `start.elf`; everything above that is the real image,
+including the framebuffer, the SD card and USB input.
+
+Worth running before touching hardware. It has already caught three bugs that
+would have been baffling on a real Pi:
+
+- `gpu_mem=16` starved the firmware framebuffer, which `CONFIG_FB_BCM2708`
+  allocates from GPU memory — a black screen with no explanation.
+- The console echoed every keystroke over the display, because QDOS had not
+  taken the input device exclusively. Fixed with `EVIOCGRAB`.
+- Buildroot silently shipped a stale binary, because it does not notice a local
+  package's source changed.
+
+### The boot screen
+
+`qdos --splash` paints a startup screen, run from the inittab as soon as init
+starts. Without it the panel is black from power-on until the shell is ready and
+the machine looks dead rather than busy.
+
+It cannot cover the whole boot. The framebuffer exists about a second before
+init runs, and nothing in userspace can draw before then:
+
+```
+~1.5s   framebuffer registered      black
+~2.6s   init starts, splash drawn   QDOS
+~4s     shell paints                the calculator
+```
+
+Before 1.25s nothing in Linux can draw at all — the framebuffer driver does not
+exist yet. That gap belongs to the **Pi's own firmware splash**, which is why
+`disable_splash=1` is deliberately absent from `config.txt`. It is the Raspberry
+Pi test pattern rather than anything of ours, but it appears within a few
+hundred milliseconds of power-on, which nothing else can.
+
+**None of that shows under QEMU**, which loads the kernel directly and never runs
+the GPU bootloader. Emulated boots therefore look worse than the real thing at
+the start, and the gap you see there is not the gap the hardware has.
+
+`board/logo.png` is built from the QDOS font as a kernel logo, and is compiled
+in, but is not displayed: fbcon will not draw a logo onto a console that is
+already live, and `console=tty1` makes it live from 0.009s. Putting the console
+there would also put `sysinit` output on the panel. Left disabled.
+
+QDOS takes the VT in `KD_GRAPHICS` mode while it runs, so nothing can draw over
+the calculator afterwards whatever the console is set to. The splash
+deliberately does not hand the console back on exit: doing so makes the console
+repaint and erase what it just drew.
+
+### Boot messages you can ignore
+
+Three warnings appear under QEMU and are not defects:
+
+| | |
+|---|---|
+| `bcm2835-aux-uart: unable to register 8250 port` | QEMU does not emulate the mini UART. Real hardware registers it. |
+| `bcm2835-power: ASB register ID returned 0x00000000` | QEMU's power controller is a stub. |
+| `mmc1: Timeout waiting for hardware interrupt` | QEMU has no SDIO wifi on mmc1. |
+
+A fourth appears on hardware too:
+
+`Warning: unable to open an initial console` — the kernel probes for
+`/dev/console` before the root filesystem is mounted, so a node inside the
+rootfs cannot satisfy it. Nothing depends on it: the inittab names `tty1` and
+`ttyAMA0` explicitly, so QDOS and the getty each get their own device. The node
+is in the image regardless, via `board/device_table.txt`, because a rootfs
+without one is wrong even when nothing notices.
+
+A few things the emulator needs that hardware does not: `earlycon`, because the
+PL011 console otherwise registers too late to show the boot; a power-of-two SD
+image, so the script pads a copy; and software GL, because the container cannot
+reach the GPU.
+
 ## Firmware: a Buildroot image
 
 ```bash
@@ -53,6 +160,16 @@ The rootfs is mounted **read-only** and everything QDOS writes goes to the third
 partition. A calculator is always switched off by pulling the power, so the
 filesystem holding the system must never be mid-write when that happens.
 
+The kernel console is on **serial only**. QDOS draws straight into `/dev/fb0`,
+and the framebuffer console draws there too — with `console=tty1` the two fight
+over the same pixels and boot messages land on top of the calculator. Kernel
+output therefore goes to ttyAMA0, and `logo.nologo`, `vt.global_cursor_default=0`
+and `consoleblank=0` keep anything else off the panel.
+
+Note that `print` and `nl` in Quadrate still write to stdout, which is the same
+problem one level up: on the device that output lands on the console rather than
+the display. Routing it into the shell's own scrollback is outstanding.
+
 QDOS is respawned by init rather than being PID 1. As PID 1 it would save a
 little boot time, but a crash would panic the kernel with no console to explain
 why — not a trade worth making before the hardware exists. A serial getty stays
@@ -76,6 +193,31 @@ buildroot/
 command-line tools and with them the LLVM dependency. That is the interpreter
 tier paying off: the language runs on the device without its compiler.
 
+### Rebuilding after a source change
+
+QDOS is rebuilt on every `build-image.sh` run, because Buildroot does not notice
+that a local package's source changed and would otherwise keep shipping whatever
+was built first. Changes to the **Quadrate** source are not picked up
+automatically:
+
+```bash
+./firmware/build-image.sh quadrate-rebuild
+./firmware/build-image.sh
+```
+
+### Changing config.txt
+
+`config.txt` is copied into the image by the `rpi-firmware` package at install
+time, so editing it and rebuilding is not enough — the package is already
+installed and will not re-copy. Force it:
+
+```bash
+./firmware/build-image.sh rpi-firmware-reinstall
+./firmware/build-image.sh
+```
+
+`cmdline.txt` has no such problem; `post-build.sh` copies it every build.
+
 ### Display and keypad
 
 `board/config.txt` boots to HDMI by default, which is right for bring-up. An SPI
@@ -88,10 +230,11 @@ no changes for either, only the right overlay lines.
 
 ## Status
 
-The image builds and is structurally sound: three partitions, the kernel and Pi
-firmware on the boot partition, QDOS and its libraries on the rootfs, init
-configured to launch it.
+**The image boots and runs under QEMU.** Kernel to init to QDOS drawing on the
+framebuffer, with USB keyboard input evaluated and displayed — the whole chain,
+on emulated Pi silicon.
 
-It has never been booted. There is no Pi yet, and nothing here has been verified
-against real hardware — the display, the keypad and the boot itself are all
-unknowns until one exists.
+Not yet verified on real hardware: the specific SPI panel, the GPIO keypad
+matrix, boot timing and power behaviour. QEMU emulates a generic framebuffer and
+USB keyboard, so it proves the software path but says nothing about the parts
+that do not exist yet.

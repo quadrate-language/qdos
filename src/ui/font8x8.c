@@ -1,12 +1,6 @@
 /**
  * @file font8x8.c
  * @brief 8x8 bitmap font
- *
- * Glyphs are written as pixel art rather than hex so that a wrong pixel is
- * visible in review rather than hidden in a byte, and are packed into a bitmap
- * on first use. The unpacked form costs a few KB of rodata, which is free on
- * this class of hardware and would be worth revisiting only for a freestanding
- * build with no room to spare.
  */
 
 #include "font8x8.h"

@@ -10,11 +10,23 @@ fixup_file=fixup.dat
 kernel=Image
 arm_64bit=1
 
-# Nothing here drives a display through the GPU, so give it the minimum
-gpu_mem=16
+# The kernel uses the firmware framebuffer (CONFIG_FB_BCM2708), which is
+# allocated out of GPU memory, so this cannot be trimmed to the minimum while
+# the display is HDMI. Drop it to 16 once an SPI panel driven by fbtft is used
+# instead: that framebuffer is in system memory and the GPU is then unused.
+gpu_mem=64
 
-# Skip the rainbow splash and the boot delay
-disable_splash=1
+# Produce output even if the display is attached after power-on, which is the
+# usual way to lose an hour during bring-up
+hdmi_force_hotplug=1
+
+# The firmware splash is left on deliberately. It is the only thing that can
+# appear before Linux -- the framebuffer driver does not exist until about a
+# second in, and QDOS's own splash waits for init after that. Not branded, but
+# it fills the gap where nothing else can.
+#
+# It never shows under QEMU, which loads the kernel directly and never runs the
+# GPU bootloader at all.
 boot_delay=0
 
 disable_overscan=1

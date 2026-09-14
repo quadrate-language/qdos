@@ -1,0 +1,9 @@
+# Device nodes present in the rootfs before devtmpfs is mounted.
+#
+# Buildroot's dynamic /dev leaves these to the kernel, which mounts devtmpfs
+# only after it has already looked for a console -- hence "unable to open an
+# initial console" on every boot. Harmless, because our inittab names tty1 and
+# ttyAMA0 explicitly, but it is noise in a product's boot log.
+#
+# <name>	<type>	<mode>	<uid>	<gid>	<major>	<minor>	<start>	<inc>	<count>
+/dev/console	c	622	0	0	5	1	-	-	-

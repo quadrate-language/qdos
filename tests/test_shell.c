@@ -1,11 +1,6 @@
 /**
  * @file test_shell.c
  * @brief End-to-end shell test over a scripted backend
- *
- * Drives the real shell with a HAL that replays a fixed key sequence and keeps
- * the last framebuffer, which exercises the whole path — key handling, the
- * evaluator, and rendering — without a display. Reading results back out of the
- * pixels is the point: it is the only way to test what the user actually sees.
  */
 
 #include "check.h"
@@ -124,9 +119,35 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->impl = st;
 }
 
+/* Where the shell draws things, mirroring shell.c's layout. */
+#define ROW_TOP_VALUE (QDOS_ROWS - 5)
+#define ROW_MESSAGE_LINE (QDOS_ROWS - 3)
+
+/** Press one key. */
+static void key(qdos_key_event* script, size_t* n, qdos_key k) {
+	script[(*n)++] = (qdos_key_event){k, 0};
+}
+
+/** Press the keys for a number, as a keypad would. */
+static void digits(qdos_key_event* script, size_t* n, const char* text) {
+	for (const char* p = text; *p; p++) {
+		if (*p >= '0' && *p <= '9')
+			script[(*n)++] = (qdos_key_event){(qdos_key)(QDOS_KEY_0 + (*p - '0')), 0};
+		else if (*p == '.')
+			script[(*n)++] = (qdos_key_event){QDOS_KEY_DOT, 0};
+	}
+}
+
+/** Type a whole line in line mode: ':', the text, then Enter. */
+static void type_line(qdos_key_event* script, size_t* n, const char* text) {
+	script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	for (const char* p = text; *p; p++)
+		script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	script[(*n)++] = (qdos_key_event){QDOS_KEY_ENTER, 0};
+}
+
 /**
  * @brief Does the cell at (col,row) hold this character?
- *
  * @param inverted Match against inverted pixels, as the shell draws errors and
  *                 the cursor
  */
@@ -183,207 +204,476 @@ static void run_script(const qdos_key_event* script, size_t count, uint8_t* fb_o
 	memcpy(fb_out, st.last_fb, (size_t)QDOS_SCREEN_W * QDOS_SCREEN_H);
 }
 
-static void test_types_and_evaluates(void) {
-	// "2 3 +" then Enter — the keypad path, not a string handed to the evaluator
-	const qdos_key_event script[] = {
-		{QDOS_KEY_2, 0},
-		{QDOS_KEY_CHAR, ' '},
-		{QDOS_KEY_3, 0},
-		{QDOS_KEY_ADD, 0},
-		{QDOS_KEY_ENTER, 0},
-	};
+/**
+ */
+static void test_operator_evaluates_immediately(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "6");
+	key(script, &n, QDOS_KEY_ENTER); // separates the two numbers, as on an HP
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_MUL); // no Enter: the operator applies
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script(script, sizeof(script) / sizeof(script[0]), fb);
+	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
 
-	// The header reports one value on the stack
 	read_row(fb, 0, row, sizeof(row));
 	CHECK(strstr(row, "depth 1") != NULL);
-
-	// The result sits on the bottom stack line, right-aligned
-	read_row(fb, QDOS_ROWS - 5, row, sizeof(row));
-	CHECK(strstr(row, "1:") != NULL);
-	CHECK(strstr(row, "5") != NULL);
 }
 
-static void test_division_by_zero_survives(void) {
-	// The machine must still be running, and showing an error, afterwards
-	const qdos_key_event script[] = {
-		{QDOS_KEY_1, 0},
-		{QDOS_KEY_CHAR, ' '},
-		{QDOS_KEY_0, 0},
-		{QDOS_KEY_DIV, 0},
-		{QDOS_KEY_ENTER, 0},
-	};
+/** Digits accumulate until something ends the entry. */
+static void test_digits_accumulate(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "123");
+	key(script, &n, QDOS_KEY_ENTER);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script(script, sizeof(script) / sizeof(script[0]), fb);
+	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 3, row, sizeof(row));
-	CHECK(strstr(row, "Division by zero") != NULL);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "123") != NULL); // one number, not three
+	read_row(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "depth 1") != NULL);
 }
 
-static void test_backspace_and_clear(void) {
-	// Type 99, back over both, then 7 — the line must read just "7"
-	const qdos_key_event script[] = {
-		{QDOS_KEY_9, 0},
-		{QDOS_KEY_9, 0},
-		{QDOS_KEY_BACKSPACE, 0},
-		{QDOS_KEY_BACKSPACE, 0},
-		{QDOS_KEY_7, 0},
-		{QDOS_KEY_ENTER, 0},
-	};
+/** Decimals work, and an operator commits them. */
+static void test_decimal_entry(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "1.5");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_MUL);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script(script, sizeof(script) / sizeof(script[0]), fb);
+	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 5, row, sizeof(row));
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+}
+
+/** Enter with nothing typed duplicates the top, as on an RPN calculator. */
+static void test_bare_enter_duplicates(void) {
+	store_reset();
+
+	// 7 ENTER ENTER * is how such a calculator squares a number
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_MUL);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "49") != NULL);
+}
+
+/** Backspace edits the pending number; clear discards it. */
+static void test_entry_editing(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "99");
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "7") != NULL);
 	CHECK(strstr(row, "9") == NULL);
 }
 
-/**
- * The memory keys, which are native C functions registered with the
- * interpreter. This is the shell exposing a machine capability to typed
- * Quadrate rather than only evaluating arithmetic — `42 0 sto` reaches the
- * HAL's storage, and `0 rcl` brings it back.
- */
+/** A failed operation reports itself and leaves the machine usable. */
+static void test_operator_error_is_shown(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "0");
+	key(script, &n, QDOS_KEY_DIV);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "Division by zero") != NULL);
+}
+
+/** ':' switches to typing Quadrate; the prompt says so. */
+static void test_line_mode_prompt(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(row[0] == ':'); // not '>'
+}
+
+/** Escape leaves line mode. */
+static void test_escape_leaves_line_mode(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	key(script, &n, QDOS_KEY_CLEAR); // Escape
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(row[0] == '>'); // back to the calculator
+}
+
+/** Line mode stays put, so a word can be defined and then used. */
+static void test_line_mode_persists(void) {
+	store_reset();
+
+	// One ':' then two lines: the second must still be evaluated as source
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	for (const char* p = "2 3 +"; *p; p++)
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	key(script, &n, QDOS_KEY_ENTER);
+	for (const char* p = "10 *"; *p; p++)
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "50") != NULL);
+
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(row[0] == ':'); // still in line mode
+}
+
+/** Switching modes commits what was typed rather than losing it. */
+static void test_entry_survives_mode_switch(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "12");
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'}; // with 12 half-typed
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "12") != NULL); // committed, not discarded
+}
+
+/** Native words reach the HAL, typed in line mode. */
 static void test_native_words_reach_the_hal(void) {
 	store_reset();
 
-	// "42 0 sto" then "0 rcl" — typed, evaluated, through registered natives
-	const qdos_key_event script[] = {
-		{QDOS_KEY_4, 0}, {QDOS_KEY_2, 0}, {QDOS_KEY_CHAR, ' '},
-		{QDOS_KEY_0, 0}, {QDOS_KEY_CHAR, ' '},
-		{QDOS_KEY_CHAR, 's'}, {QDOS_KEY_CHAR, 't'}, {QDOS_KEY_CHAR, 'o'},
-		{QDOS_KEY_ENTER, 0},
-		{QDOS_KEY_0, 0}, {QDOS_KEY_CHAR, ' '},
-		{QDOS_KEY_CHAR, 'r'}, {QDOS_KEY_CHAR, 'c'}, {QDOS_KEY_CHAR, 'l'},
-		{QDOS_KEY_ENTER, 0},
-	};
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "42 0 sto");
+	type_line(script, &n, "0 rcl");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script(script, sizeof(script) / sizeof(script[0]), fb);
+	run_script(script, n, fb);
 
-	CHECK(g_store[0].used); // the native actually reached the HAL
+	CHECK(g_store[0].used);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 5, row, sizeof(row));
-	CHECK(strstr(row, "42") != NULL); // and the value came back
-
-	read_row(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "depth 1") != NULL);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
 }
 
-/** An empty register must report itself, not crash or return a stale value. */
+/** An empty register says so. */
 static void test_recall_of_empty_register(void) {
 	store_reset();
 
-	const qdos_key_event script[] = {
-		{QDOS_KEY_7, 0}, {QDOS_KEY_CHAR, ' '},
-		{QDOS_KEY_CHAR, 'r'}, {QDOS_KEY_CHAR, 'c'}, {QDOS_KEY_CHAR, 'l'},
-		{QDOS_KEY_ENTER, 0},
-	};
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "7 rcl");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script(script, sizeof(script) / sizeof(script[0]), fb);
+	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 3, row, sizeof(row));
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(strstr(row, "empty") != NULL);
 }
 
-/** Typing a sequence of characters as individual key events. */
-static void type_into(qdos_key_event* script, size_t* n, const char* text) {
-	for (const char* p = text; *p; p++) {
-		qdos_key_event ev = {QDOS_KEY_CHAR, *p};
-		if (*p >= '0' && *p <= '9')
-			ev = (qdos_key_event){(qdos_key)(QDOS_KEY_0 + (*p - '0')), 0};
-		script[(*n)++] = ev;
-	}
-	script[(*n)++] = (qdos_key_event){QDOS_KEY_ENTER, 0};
-}
-
-/** A register can be emptied, and reads as empty afterwards. */
+/** A register can be emptied. */
 static void test_clear_a_register(void) {
 	store_reset();
 
 	qdos_key_event script[64];
 	size_t n = 0;
-	type_into(script, &n, "5 3 sto");
-	type_into(script, &n, "3 clr");
-	type_into(script, &n, "3 rcl");
+	type_line(script, &n, "5 3 sto");
+	type_line(script, &n, "3 clr");
+	type_line(script, &n, "3 rcl");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 3, row, sizeof(row));
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(strstr(row, "empty") != NULL);
 }
 
-/** Strings round-trip, not just numbers. */
+/** Strings round-trip through storage. */
 static void test_store_a_string(void) {
 	store_reset();
 
 	qdos_key_event script[64];
 	size_t n = 0;
-	type_into(script, &n, "\"pi\" 9 sto");
-	type_into(script, &n, "9 rcl");
+	type_line(script, &n, "\"pi\" 9 sto");
+	type_line(script, &n, "9 rcl");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 5, row, sizeof(row));
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "pi") != NULL);
+}
+
+/** Control flow, typed as a line. */
+static void test_control_flow_in_line_mode(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "0 loop { 1 + dup 5 >= if { break } }");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "5") != NULL);
+}
+
+/**
+ */
+static void test_session_survives_power_cycle(void) {
+	store_reset();
+
+	qdos_key_event first[32];
+	size_t n = 0;
+	digits(first, &n, "11");
+	key(first, &n, QDOS_KEY_ENTER);
+	digits(first, &n, "31");
+	key(first, &n, QDOS_KEY_ADD);
+	key(first, &n, QDOS_KEY_POWER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(first, n, fb);
+
+	// A fresh shell, as after a reboot
+	qdos_key_event second[16];
+	n = 0;
+	digits(second, &n, "2");
+	key(second, &n, QDOS_KEY_MUL);
+	run_script(second, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "84") != NULL); // 42 restored, then doubled
+}
+
+/**
+ */
+static void test_open_line_continues(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	for (const char* p = "fn sq(x:i64 -- r:i64) {"; *p; p++)
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	key(script, &n, QDOS_KEY_ENTER); // open: continues
+	for (const char* p = "dup *"; *p; p++)
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	key(script, &n, QDOS_KEY_ENTER); // still open
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, '}'};
+	key(script, &n, QDOS_KEY_ENTER); // closed: evaluates
+	for (const char* p = "7 sq"; *p; p++)
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "49") != NULL); // defined across lines, then called
+}
+
+/** While a line is open the prompt says so. */
+static void test_continuation_prompt(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, '{'};
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(row[0] == '.' && row[1] == '.'); // not ':'
+}
+
+/** A balanced line still evaluates on Enter. */
+static void test_balanced_line_evaluates(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "223");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "223") != NULL);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(row[0] == ':'); // not continuing
+}
+
+/** A brace inside a string is text, not structure. */
+static void test_braces_in_strings_do_not_open_a_line(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"{\"");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(row[0] == ':'); // evaluated, not left open
 
 	read_row(fb, 0, row, sizeof(row));
 	CHECK(strstr(row, "depth 1") != NULL);
 }
 
-/**
- * The stack survives a power cycle.
- *
- * This is what makes the machine feel instant-on despite a real boot: the user
- * gets back what they left, so the seconds spent booting are not also seconds
- * spent re-entering values.
- */
-static void test_session_survives_power_cycle(void) {
+/** An unmatched closer submits, so the parser can report it. */
+static void test_unmatched_closer_still_submits(void) {
 	store_reset();
 
-	// First run: leave two values on the stack, then power off
-	qdos_key_event first[16];
+	qdos_key_event script[32];
 	size_t n = 0;
-	type_into(first, &n, "11 31 +");
-	first[n++] = (qdos_key_event){QDOS_KEY_POWER, 0};
+	type_line(script, &n, "}");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script(first, n, fb);
-
-	// Second run: a fresh shell, as after a reboot
-	qdos_key_event second[8];
-	n = 0;
-	type_into(second, &n, "2 *");
-	run_script(second, n, fb);
+	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 5, row, sizeof(row));
-	CHECK(strstr(row, "84") != NULL); // 42 restored, then doubled
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(row[0] != '\0'); // an error, rather than a line that cannot be sent
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(row[0] == ':');
+}
+
+/** A word can be declared and then forgotten. */
+static void test_forget_a_word(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * }");
+	type_line(script, &n, "7 sq");
+	type_line(script, &n, "\"sq\" forget");
+	type_line(script, &n, "clear 7 sq");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL); // gone after forgetting
+}
+
+/** Forgetting something that was never declared says so. */
+static void test_forget_unknown(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"nosuch\" forget");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "not declared") != NULL);
 }
 
 int main(void) {
-	test_types_and_evaluates();
-	test_division_by_zero_survives();
-	test_backspace_and_clear();
+	test_operator_evaluates_immediately();
+	test_digits_accumulate();
+	test_decimal_entry();
+	test_bare_enter_duplicates();
+	test_entry_editing();
+	test_operator_error_is_shown();
+	test_line_mode_prompt();
+	test_escape_leaves_line_mode();
+	test_line_mode_persists();
+	test_open_line_continues();
+	test_continuation_prompt();
+	test_balanced_line_evaluates();
+	test_braces_in_strings_do_not_open_a_line();
+	test_unmatched_closer_still_submits();
+	test_forget_a_word();
+	test_forget_unknown();
+	test_entry_survives_mode_switch();
 	test_native_words_reach_the_hal();
 	test_recall_of_empty_register();
 	test_clear_a_register();
 	test_store_a_string();
+	test_control_flow_in_line_mode();
 	test_session_survives_power_cycle();
 	return check_report("shell");
 }

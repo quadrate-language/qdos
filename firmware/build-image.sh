@@ -5,6 +5,10 @@
 #   ./firmware/build-image.sh            # build
 #   ./firmware/build-image.sh menuconfig # adjust the configuration
 #
+# QDOS is rebuilt every time, and the defconfig is reread when it changes.
+# Changes to the Quadrate source are not picked up automatically -- run
+# ./firmware/build-image.sh quadrate-rebuild first.
+#
 # The first build downloads and compiles a toolchain and a kernel, so expect
 # 30-60 minutes. Later builds reuse firmware/build and are far quicker.
 #
@@ -61,8 +65,21 @@ docker run --rm $TTY \
 	qdos-firmware \
 	bash -c '
 		set -e
+		DEFCONFIG=/work/qdos/firmware/buildroot/configs/qdos_zero2w_defconfig
 		if [ ! -f /work/build/.config ]; then
 			make O=/work/build qdos_zero2w_defconfig
+		elif [ "$DEFCONFIG" -nt /work/build/.config ]; then
+			# Buildroot does not reread the defconfig on its own, so an edit
+			# there would otherwise be silently ignored. This discards anything
+			# set with menuconfig -- put lasting changes in the defconfig.
+			echo ">>> defconfig changed; regenerating .config"
+			make O=/work/build qdos_zero2w_defconfig
+		fi
+		if [ -z "'"${TARGET}"'" ]; then
+			# qdos is a local package under active development. Buildroot will
+			# not notice its source changed, so it would otherwise keep shipping
+			# whatever was built first. Cheap: one small binary.
+			make O=/work/build qdos-rebuild
 		fi
 		make O=/work/build '"${TARGET}"'
 	'

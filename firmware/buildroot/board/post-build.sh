@@ -13,15 +13,26 @@ BOARD_DIR="$(dirname "$0")"
 cat > "${TARGET_DIR}/etc/inittab" <<'EOF'
 ::sysinit:/bin/mount -t proc proc /proc
 ::sysinit:/bin/mount -t sysfs sysfs /sys
-::sysinit:/bin/mount -t devtmpfs devtmpfs /dev
+# /dev is not mounted here: the kernel has CONFIG_DEVTMPFS_MOUNT, so it has
+# already done it, and mounting again just fails noisily.
+
+# The panel exists from about a second into the boot but nothing draws to it
+# until the shell is ready. Say something in between, so the machine looks busy
+# rather than dead.
+::sysinit:/usr/bin/qdos --splash --device
+
 ::sysinit:/bin/mkdir -p /dev/pts
 ::sysinit:/bin/mount -t devpts devpts /dev/pts
 ::sysinit:/bin/mount -o remount,ro /
 ::sysinit:/bin/mkdir -p /var/lib/qdos
 ::sysinit:/bin/mount -t ext4 /dev/mmcblk0p3 /var/lib/qdos
 
-# The calculator itself, restarted if it ever exits
-tty1::respawn:/usr/bin/qdos --device
+# The calculator itself, restarted if it ever exits.
+#
+# QDOS_KEYMAP tells it how to read a USB keyboard: evdev reports which key was
+# pressed, not what it is labelled. Irrelevant once the machine has its own
+# keypad, whose keys mean the same thing everywhere.
+tty1::respawn:/usr/bin/env QDOS_KEYMAP=se /usr/bin/qdos --device
 
 # Serial console for bring-up
 ttyAMA0::respawn:/sbin/getty -L ttyAMA0 115200 vt100

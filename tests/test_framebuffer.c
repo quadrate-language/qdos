@@ -1,12 +1,6 @@
 /**
  * @file test_framebuffer.c
  * @brief Framebuffer conversion tests
- *
- * The device backend cannot be run here, but the pixel packing can: these
- * blit into ordinary memory shaped like a framebuffer and read the bytes back.
- * Stride, offsets and channel order are exactly the things that produce a
- * skewed or tinted display on first bring-up, and they are all checkable
- * without hardware.
  */
 
 // POSIX interfaces on top of a strict c11 build
@@ -200,16 +194,6 @@ static void test_blit_rejects_bad_input(void) {
 
 
 /**
- * Probe a real framebuffer device.
- *
- * Covers the part the pure tests cannot: that the ioctls return what the code
- * expects, that the geometry passes our own validation, and that the size
- * implied by pitch and height is actually mappable. Nothing is written to the
- * device — the blit goes into a private buffer shaped from the real geometry,
- * so running this never disturbs whatever is on screen.
- *
- * Skips when there is no readable framebuffer, which is the normal case for an
- * unprivileged user.
  */
 static void test_real_framebuffer_device(void) {
 	const char* path = getenv("QDOS_FB");

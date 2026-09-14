@@ -1,15 +1,6 @@
 /**
  * @file device_linux.c
  * @brief Device backend — Linux framebuffer and evdev
- *
- * The deployment target: an mmapped framebuffer for the panel and an evdev
- * node for the keypad. Both are kernel interfaces rather than board-specific
- * ones, so this backend works over SSH on a Pi with an HDMI or SPI panel
- * before any custom hardware exists, and stays correct once it does.
- *
- * Untested against real hardware — there is none yet. The framebuffer and
- * input paths are written against the documented ioctl and event interfaces;
- * expect the first bring-up to shake out format assumptions.
  */
 
 // POSIX interfaces (fileno, fsync, nanosleep) on top of a strict c11 build
@@ -23,6 +14,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
+#include <linux/kd.h>
+#include <linux/vt.h>
 #include <linux/input.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +37,8 @@ typedef struct {
 	uint32_t fb_pitch; ///< Bytes per scanline
 	bool running;
 	const char* store_dir;
+	int tty_fd;		 ///< The VT whose text output is suspended while we draw
+	bool first_paint;
 } device_state;
 
 static const char* env_or(const char* name, const char* fallback) {
@@ -95,13 +90,23 @@ static int device_init(qdos_hal* hal) {
 		return 1;
 	}
 
-	// The keypad is optional at bring-up: a panel with no input is still worth
-	// seeing, and saying so beats refusing to start
+	const char* layout = env_or("QDOS_KEYMAP", "us");
+	if (!qdos_keypad_set_layout(layout)) {
+		fprintf(stderr, "qdos: unknown QDOS_KEYMAP '%s', using us\n", layout);
+	}
+
 	const char* input_path = env_or("QDOS_INPUT", "/dev/input/event0");
 	st->input_fd = qdos_keypad_open(input_path);
 	if (st->input_fd < 0)
 		fprintf(stderr, "qdos: no keypad on %s: %s\n", input_path, strerror(errno));
 
+	// Stop the console drawing over the calculator.
+	st->tty_fd = open(env_or("QDOS_TTY", "/dev/tty1"), O_RDWR);
+	if (st->tty_fd >= 0) {
+		ioctl(st->tty_fd, KDSETMODE, KD_GRAPHICS);
+	}
+
+	st->first_paint = true;
 	st->running = true;
 	return 0;
 }
@@ -110,6 +115,13 @@ static void device_shutdown(qdos_hal* hal) {
 	device_state* st = (device_state*)hal->impl;
 	if (!st)
 		return;
+
+	// Hand the console back, or a later login would type onto a dead screen
+	if (st->tty_fd >= 0) {
+		ioctl(st->tty_fd, KDSETMODE, KD_TEXT);
+		close(st->tty_fd);
+		st->tty_fd = -1;
+	}
 
 	if (st->fb_mem)
 		munmap(st->fb_mem, st->fb_size);
@@ -126,6 +138,12 @@ static void device_present(qdos_hal* hal, const uint8_t* fb) {
 	device_state* st = (device_state*)hal->impl;
 	if (!st->fb_mem) {
 		return;
+	}
+
+	// Clear once: the boot logo and console text are still out there.
+	if (st->first_paint) {
+		memset(st->fb_mem, 0, st->fb_size);
+		st->first_paint = false;
 	}
 
 	const qdos_fb_info info = {
@@ -148,9 +166,7 @@ static bool device_running(qdos_hal* hal) {
 
 static void device_idle(qdos_hal* hal) {
 	(void)hal;
-	// A real idle belongs here: block on the input fd with a timeout rather
-	// than sleeping, so the CPU is not woken 60 times a second to find nothing.
-	// Battery life depends on getting this right.
+	// A real idle would block on the input fd. Battery life depends on it.
 	const struct timespec frame = {.tv_sec = 0, .tv_nsec = 16 * 1000 * 1000};
 	nanosleep(&frame, NULL);
 }
@@ -199,8 +215,7 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 		return QDOS_STORE_IO_ERROR;
 
 	const size_t written = fwrite(buf, 1, len, f);
-	// Flash wears and power can vanish mid-write; fsync before declaring
-	// success so a stored program is actually stored
+	// fsync before reporting success: power can vanish mid-write.
 	fflush(f);
 	fsync(fileno(f));
 	const bool ok = (fclose(f) == 0) && (written == len);
@@ -213,6 +228,7 @@ void qdos_device_hal(qdos_hal* hal) {
 	memset(&g_device, 0, sizeof(g_device));
 	g_device.fb_fd = -1;
 	g_device.input_fd = -1;
+	g_device.tty_fd = -1;
 
 	hal->init = device_init;
 	hal->shutdown = device_shutdown;

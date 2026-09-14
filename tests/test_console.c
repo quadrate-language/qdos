@@ -1,15 +1,12 @@
 /**
  * @file test_console.c
  * @brief Console and font tests
- *
- * Run with --dump to print the whole font as pixel art. A bitmap font is the
- * kind of data where a wrong pixel passes every automated check and still looks
- * wrong, so the eyeball test is part of the tooling rather than a one-off.
  */
 
 #include "check.h"
 
 #include "../src/ui/console.h"
+#include "../src/ui/splash.h"
 
 #include <stdlib.h>
 
@@ -127,6 +124,67 @@ static void dump_font(void) {
 	}
 }
 
+static uint8_t g_presented[QDOS_SCREEN_W * QDOS_SCREEN_H];
+static int g_present_calls;
+
+static void capture(qdos_hal* hal, const uint8_t* fb) {
+	(void)hal;
+	memcpy(g_presented, fb, sizeof(g_presented));
+	g_present_calls++;
+}
+
+/** The startup screen draws something, and says what machine this is. */
+static void test_splash(void) {
+	qdos_hal hal;
+	memset(&hal, 0, sizeof(hal));
+	hal.present = capture;
+	g_present_calls = 0;
+
+	qdos_splash_draw(&hal);
+	CHECK(g_present_calls == 1);
+
+	int lit = 0;
+	for (size_t i = 0; i < sizeof(g_presented); i++)
+		if (g_presented[i] < 0x80)
+			lit++;
+	CHECK(lit > 500); // not a blank screen
+
+	// A backend with no display must be survivable
+	qdos_splash_draw(NULL);
+	memset(&hal, 0, sizeof(hal));
+	qdos_splash_draw(&hal);
+	CHECK(1);
+}
+
+/** Enlarged text is centred and actually larger. */
+static void test_scaled_text(void) {
+	qdos_console con;
+	qdos_console_init(&con);
+
+	qdos_console_puts_centered(&con, 2, "X", 3);
+
+	int lit = 0, min_x = QDOS_SCREEN_W, max_x = 0;
+	for (int y = 0; y < QDOS_SCREEN_H; y++)
+		for (int x = 0; x < QDOS_SCREEN_W; x++)
+			if (con.fb[(size_t)y * QDOS_SCREEN_W + x] == con.ink) {
+				lit++;
+				if (x < min_x) min_x = x;
+				if (x > max_x) max_x = x;
+			}
+
+	CHECK(lit > 0);
+	CHECK(max_x - min_x > QDOS_FONT_W); // wider than one unscaled glyph
+
+	// Centred: the margins either side should match within a glyph
+	const int left = min_x;
+	const int right = QDOS_SCREEN_W - 1 - max_x;
+	CHECK(left - right < QDOS_FONT_W * 3 && right - left < QDOS_FONT_W * 3);
+
+	qdos_console_puts_centered(&con, 0, NULL, 3); // must not crash
+	qdos_console_puts_centered(&con, 0, "X", 0);
+	CHECK(1);
+}
+
 int main(int argc, char** argv) {
 	if (argc > 1 && strcmp(argv[1], "--dump") == 0) {
 		dump_font();
@@ -140,5 +198,7 @@ int main(int argc, char** argv) {
 	test_puts_right();
 	test_invert();
 	test_rule();
+	test_splash();
+	test_scaled_text();
 	return check_report("console");
 }

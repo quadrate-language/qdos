@@ -13,6 +13,7 @@ BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y
 BR2_GLOBAL_PATCH_DIR="board/raspberrypi/patches"
 BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
 
+BR2_ROOTFS_DEVICE_TABLE="system/device_table.txt $(BR2_EXTERNAL_QDOS_PATH)/board/device_table.txt"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_QDOS_PATH)/board/rootfs-overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_QDOS_PATH)/board/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_QDOS_PATH)/board/post-image.sh"
@@ -24,6 +25,10 @@ BR2_LINUX_KERNEL_DEFCONFIG="bcmrpi3"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2710-rpi-zero-2-w"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+# Drawn the moment the framebuffer exists, about a second before init runs.
+# Rendered from QDOS's own font so the machine looks the same from the first
+# thing on screen to the shell.
+BR2_LINUX_KERNEL_CUSTOM_LOGO_PATH="$(BR2_EXTERNAL_QDOS_PATH)/board/logo.png"
 
 BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
 BR2_PACKAGE_XZ=y

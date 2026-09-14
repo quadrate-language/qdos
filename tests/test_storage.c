@@ -1,11 +1,6 @@
 /**
  * @file test_storage.c
  * @brief Storage encoding and session persistence
- *
- * The encoding tests matter more than they look: these bytes outlive the
- * firmware that wrote them, so a record must either decode to exactly what was
- * stored or be refused outright. Silently misreading a register is worse than
- * losing it.
  */
 
 #include "check.h"

@@ -1,14 +1,12 @@
 /**
  * @file main.c
  * @brief QDOS entry point
- *
- * Selects a hardware backend and runs the shell on it. On the device this is
- * PID 1; on a desktop it is an ordinary program with the SDL3 simulator behind
- * it. Nothing above this file knows the difference.
  */
 
 #include <qdos/hal.h>
 #include <qdos/shell.h>
+
+#include "ui/splash.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -23,21 +21,25 @@
 
 static void usage(const char* argv0) {
 	fprintf(stderr,
-			"usage: %s [--sim | --device]\n"
+			"usage: %s [--sim | --device] [--splash]\n"
 			"\n"
 			"  --sim     SDL3 simulator (default where built in)\n"
-			"  --device  Linux framebuffer and evdev\n",
+			"  --device  Linux framebuffer and evdev\n"
+			"  --splash  Paint the startup screen and exit\n",
 			argv0);
 }
 
 int main(int argc, char** argv) {
 	bool want_device = false;
+	bool splash_only = false;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--device") == 0) {
 			want_device = true;
 		} else if (strcmp(argv[i], "--sim") == 0) {
 			want_device = false;
+		} else if (strcmp(argv[i], "--splash") == 0) {
+			splash_only = true;
 		} else {
 			usage(argv[0]);
 			return 2;
@@ -66,6 +68,12 @@ int main(int argc, char** argv) {
 	if (hal.init(&hal) != 0) {
 		hal.shutdown(&hal);
 		return 1;
+	}
+
+	// No shutdown(): handing the console back repaints over the splash.
+	if (splash_only) {
+		qdos_splash_draw(&hal);
+		return 0;
 	}
 
 	qdos_shell* shell = qdos_shell_create(&hal);

@@ -12,11 +12,7 @@
 extern "C" {
 #endif
 
-/**
- * @brief Fill in @p hal with the SDL3 simulator backend
- *
- * Does not open a window; call hal->init() for that.
- */
+/** @brief Fill in @p hal with the SDL3 simulator backend */
 void qdos_sim_hal(qdos_hal* hal);
 
 #ifdef __cplusplus

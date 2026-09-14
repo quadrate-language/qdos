@@ -15,8 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
-// "QDS" plus a format version. Bumping the version makes older firmware treat
-// the record as unreadable rather than misread it.
+// Bumping the version makes older firmware refuse the record.
 static const uint8_t STORE_MAGIC[3] = {'Q', 'D', 'S'};
 #define STORE_VERSION 1
 
@@ -65,8 +64,7 @@ bool qdos_value_encode(const qdos_value* value, uint8_t* out, size_t* len) {
 			return true;
 
 		case QDOS_VALUE_FLOAT: {
-			// Through the bit pattern rather than the struct, so the record does
-			// not depend on how this compiler lays a double out
+			// Via the bit pattern, so the record does not depend on struct layout.
 			uint64_t bits = 0;
 			memcpy(&bits, &value->f, sizeof(bits));
 			put_u64(&out[PAYLOAD_OFFSET], bits);
@@ -152,8 +150,7 @@ qdos_store_result qdos_storage_load(qdos_hal* hal, const char* key, qdos_value* 
 		return result;
 	}
 
-	// Unreadable bytes are reported as absent: a store written by other
-	// firmware should leave the machine working, not wedge it
+	// Unreadable bytes read as absent: foreign firmware cannot wedge us.
 	return qdos_value_decode(buf, len, value) ? QDOS_STORE_OK : QDOS_STORE_NOT_FOUND;
 }
 
@@ -193,9 +190,7 @@ qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp) {
 		return header;
 	}
 
-	// Read the stack directly rather than through qd_interp_peek, whose text is
-	// formatted for display: a string comes back quoted there, and re-parsing
-	// that to recover the original would be silent data loss waiting to happen.
+	// Raw, not qd_interp_peek: that renders strings quoted for display.
 	const qd_stack* st = qd_interp_context(interp)->st;
 
 	// Written bottom-first so restoring pushes in the same order
@@ -260,8 +255,6 @@ qdos_store_result qdos_storage_restore_session(qdos_hal* hal, qd_interp* interp)
 
 		qdos_value value;
 		if (qdos_storage_load(hal, key, &value) != QDOS_STORE_OK) {
-			// A gap means the store is damaged; keep what was restored so far
-			// rather than discarding a partly good stack
 			return QDOS_STORE_IO_ERROR;
 		}
 

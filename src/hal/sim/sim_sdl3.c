@@ -1,12 +1,6 @@
 /**
  * @file sim_sdl3.c
  * @brief SDL3 simulator backend
- *
- * Stands in for the calculator on a desktop: an SDL window shows the panel at
- * an integer scale, the host keyboard drives the keypad, and storage is a
- * directory of files. Producing the same logical key events the real keypad
- * will produce is the point — it keeps the shell honest about the interface it
- * is coded against.
  */
 
 #include "sim_sdl3.h"
@@ -61,12 +55,9 @@ static int sim_init(qdos_hal* hal) {
 		return 1;
 	}
 
-	// Nearest-neighbour: this is a panel with real pixels, and smoothing them
-	// would misrepresent what the device will look like
+	// Nearest-neighbour: real pixels, not smoothed.
 	SDL_SetTextureScaleMode(st->texture, SDL_SCALEMODE_NEAREST);
 
-	// Text input gives correctly shifted characters without the backend having
-	// to model the host keymap itself
 	SDL_StartTextInput(st->window);
 
 	st->running = true;
@@ -106,13 +97,7 @@ static void sim_present(qdos_hal* hal, const uint8_t* fb) {
 	SDL_RenderPresent(st->renderer);
 }
 
-/**
- * @brief Map a typed character to a logical key
- *
- * Characters that exist as dedicated keys on the physical keypad report as
- * those keys, so the simulator emits the same event stream the hardware will.
- * Everything else printable travels as QDOS_KEY_CHAR.
- */
+/** @brief Map a typed character to a logical key */
 static void map_char(char ch, qdos_key_event* out) {
 	out->ch = 0;
 
@@ -145,9 +130,6 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 				return false;
 
 			case SDL_EVENT_TEXT_INPUT:
-				// One event can carry several characters; taking the first is
-				// enough while the shell drains poll_key in a loop and nothing
-				// on this keypad produces multi-character input
 				if (event.text.text[0]) {
 					map_char(event.text.text[0], out);
 					return true;
@@ -196,7 +178,6 @@ static void sim_idle(qdos_hal* hal) {
 
 /**
  * @brief Build the on-disk path for a stored entry
- *
  * @return true if the name is safe and the path fits
  */
 static bool store_path(const char* name, char* buf, size_t cap) {
@@ -220,8 +201,7 @@ static qdos_store_result sim_store_read(qdos_hal* hal, const char* name, void* b
 		return QDOS_STORE_NOT_FOUND;
 
 	const size_t got = fread(buf, 1, cap, f);
-	// A full buffer with bytes still unread means the caller's buffer is too
-	// small, which is a different failure from a short read
+	// A full buffer with bytes left is too-small, not a short read.
 	const bool overflowed = (got == cap) && (fgetc(f) != EOF);
 	fclose(f);
 

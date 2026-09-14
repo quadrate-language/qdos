@@ -1,10 +1,6 @@
 /**
  * @file shell.c
  * @brief The calculator's user-facing loop
- *
- * Reads keys from the HAL, maintains the input line, hands submitted lines to
- * the evaluator, and paints the stack. The stack is the display: this is an RPN
- * machine, so what the user needs to see at all times is what is on it.
  */
 
 #include <qdos/shell.h>
@@ -21,6 +17,9 @@
 /** Maximum characters in the input line. */
 #define INPUT_MAX 256
 
+/** Maximum characters in a pending numeric entry. */
+#define ENTRY_MAX 64
+
 /** Evaluator stack capacity, in elements. */
 #define STACK_SIZE 4096
 
@@ -33,28 +32,36 @@
 #define ROW_INPUT (QDOS_ROWS - 1)
 #define STACK_ROWS (ROW_BOTTOM_RULE - ROW_STACK_FIRST)
 
-/** Prompt drawn at the start of the input line. */
+/** Prompts. The character says which mode the keypad is in. */
 #define PROMPT "> "
+#define LINE_PROMPT ": "
+#define CONT_PROMPT ".."
 #define PROMPT_LEN 2
 
+/** @brief What the keypad is doing */
+typedef enum {
+	QDOS_MODE_CALC, ///< Digits build a number; an operator applies immediately
+	QDOS_MODE_LINE	///< Whole lines of Quadrate, evaluated on Enter
+} qdos_mode;
+
 struct qdos_shell {
-	qdos_hal* hal;	 ///< Borrowed, not owned
+	qdos_hal* hal;	   ///< Borrowed, not owned
 	qd_interp* interp; ///< Owned
 	qdos_console con;
 
-	char input[INPUT_MAX];
+	qdos_mode mode;
+
+	char entry[ENTRY_MAX]; ///< Number being typed, not yet on the stack
+	size_t entry_len;
+
+	char input[INPUT_MAX]; ///< Line being typed in QDOS_MODE_LINE
 	size_t input_len;
 
 	char message[QDOS_COLS + 1]; ///< Error or status under the stack
 	bool message_is_error;
 };
 
-/**
- * @brief Append text to the input line, silently ignoring overflow
- *
- * Overflow is dropped rather than reported because the only way to hit it is to
- * type 256 characters into a calculator, and a diagnostic there would be noise.
- */
+/** @brief Append text to the input line, silently ignoring overflow */
 static void input_append(qdos_shell* sh, const char* text) {
 	const size_t len = strlen(text);
 	if (sh->input_len + len >= INPUT_MAX)
@@ -79,9 +86,39 @@ static void set_message(qdos_shell* sh, const char* text, bool is_error) {
 	sh->message_is_error = is_error;
 }
 
-/**
- * @brief Evaluate the input line and report the outcome
- */
+/** @brief Is the line ready to evaluate, or still open? */
+static bool input_is_complete(const qdos_shell* sh) {
+	int depth = 0;
+	bool in_string = false;
+
+	for (size_t i = 0; i < sh->input_len; i++) {
+		const char ch = sh->input[i];
+
+		if (in_string) {
+			if (ch == '\\' && i + 1 < sh->input_len) {
+				i++; // an escaped character is never a delimiter
+			} else if (ch == '"') {
+				in_string = false;
+			}
+			continue;
+		}
+
+		switch (ch) {
+			case '"': in_string = true; break;
+			case '{':
+			case '(':
+			case '[': depth++; break;
+			case '}':
+			case ')':
+			case ']': depth--; break;
+			default: break;
+		}
+	}
+
+	return depth <= 0;
+}
+
+/** @brief Evaluate the input line and report the outcome */
 static void submit(qdos_shell* sh) {
 	if (sh->input_len == 0)
 		return;
@@ -94,10 +131,128 @@ static void submit(qdos_shell* sh) {
 	input_clear(sh);
 }
 
+/** @brief Translate a key press into an edit or an action */
+/** Append to the pending number, ignoring overflow. */
+static void entry_append(qdos_shell* sh, char ch) {
+	if (sh->entry_len + 1 >= ENTRY_MAX) {
+		return;
+	}
+	sh->entry[sh->entry_len++] = ch;
+	sh->entry[sh->entry_len] = '\0';
+}
+
+static void entry_clear(qdos_shell* sh) {
+	sh->entry_len = 0;
+	sh->entry[0] = '\0';
+}
+
 /**
- * @brief Translate a key press into an edit or an action
+ * @brief Put the pending number on the stack
+ * @return false if the entry would not parse
  */
-static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
+static bool entry_commit(qdos_shell* sh) {
+	if (sh->entry_len == 0) {
+		return true;
+	}
+
+	if (!qd_interp_eval(sh->interp, sh->entry)) {
+		set_message(sh, qd_interp_error(sh->interp), true);
+		return false;
+	}
+	entry_clear(sh);
+	return true;
+}
+
+/** @brief Apply a word to the stack, committing any pending number first */
+static void apply_word(qdos_shell* sh, const char* word) {
+	if (!entry_commit(sh)) {
+		return;
+	}
+	if (qd_interp_eval(sh->interp, word)) {
+		set_message(sh, "", false);
+	} else {
+		set_message(sh, qd_interp_error(sh->interp), true);
+	}
+}
+
+static void enter_line_mode(qdos_shell* sh) {
+	// Commit first, or the digits already typed are lost.
+	entry_commit(sh);
+	sh->mode = QDOS_MODE_LINE;
+	input_clear(sh);
+	set_message(sh, "line mode - Escape to leave", false);
+}
+
+static void leave_line_mode(qdos_shell* sh) {
+	sh->mode = QDOS_MODE_CALC;
+	input_clear(sh);
+	set_message(sh, "", false);
+}
+
+/** Keys while the keypad is a calculator. */
+static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
+	switch (ev->key) {
+		case QDOS_KEY_0: entry_append(sh, '0'); break;
+		case QDOS_KEY_1: entry_append(sh, '1'); break;
+		case QDOS_KEY_2: entry_append(sh, '2'); break;
+		case QDOS_KEY_3: entry_append(sh, '3'); break;
+		case QDOS_KEY_4: entry_append(sh, '4'); break;
+		case QDOS_KEY_5: entry_append(sh, '5'); break;
+		case QDOS_KEY_6: entry_append(sh, '6'); break;
+		case QDOS_KEY_7: entry_append(sh, '7'); break;
+		case QDOS_KEY_8: entry_append(sh, '8'); break;
+		case QDOS_KEY_9: entry_append(sh, '9'); break;
+		case QDOS_KEY_DOT: entry_append(sh, '.'); break;
+
+		case QDOS_KEY_ADD: apply_word(sh, "+"); break;
+		case QDOS_KEY_SUB: apply_word(sh, "-"); break;
+		case QDOS_KEY_MUL: apply_word(sh, "*"); break;
+		case QDOS_KEY_DIV: apply_word(sh, "/"); break;
+		case QDOS_KEY_DUP: apply_word(sh, "dup"); break;
+		case QDOS_KEY_DROP: apply_word(sh, "drop"); break;
+		case QDOS_KEY_SWAP: apply_word(sh, "swap"); break;
+
+		// Bare Enter duplicates: how an RPN calculator squares a number.
+		case QDOS_KEY_ENTER:
+			if (sh->entry_len > 0) {
+				if (entry_commit(sh)) {
+					set_message(sh, "", false);
+				}
+			} else {
+				apply_word(sh, "dup");
+			}
+			break;
+
+		case QDOS_KEY_BACKSPACE:
+			if (sh->entry_len > 0) {
+				sh->entry[--sh->entry_len] = '\0';
+			}
+			break;
+
+		case QDOS_KEY_CLEAR:
+			if (sh->entry_len > 0) {
+				entry_clear(sh);
+			} else {
+				qd_interp_eval(sh->interp, "clear");
+				set_message(sh, "stack cleared", false);
+			}
+			break;
+
+		case QDOS_KEY_CHAR:
+			if (ev->ch == ':') {
+				enter_line_mode(sh);
+			} else if (ev->ch != ' ') {
+				set_message(sh, "press : to type a line", false);
+			}
+			break;
+
+		default:
+			break;
+	}
+}
+
+/** Keys while whole lines of Quadrate are being typed. */
+static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 	switch (ev->key) {
 		case QDOS_KEY_0: input_append(sh, "0"); break;
 		case QDOS_KEY_1: input_append(sh, "1"); break;
@@ -111,15 +266,13 @@ static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_9: input_append(sh, "9"); break;
 		case QDOS_KEY_DOT: input_append(sh, "."); break;
 
-		// Operator keys carry their own separators, so pressing 1 2 + gives
-		// "12 +" rather than "12+" — one keypress, correctly tokenised
-		case QDOS_KEY_ADD: input_append(sh, " + "); break;
-		case QDOS_KEY_SUB: input_append(sh, " - "); break;
-		case QDOS_KEY_MUL: input_append(sh, " * "); break;
-		case QDOS_KEY_DIV: input_append(sh, " / "); break;
-		case QDOS_KEY_DUP: input_append(sh, " dup "); break;
-		case QDOS_KEY_DROP: input_append(sh, " drop "); break;
-		case QDOS_KEY_SWAP: input_append(sh, " swap "); break;
+		case QDOS_KEY_ADD: input_append(sh, "+"); break;
+		case QDOS_KEY_SUB: input_append(sh, "-"); break;
+		case QDOS_KEY_MUL: input_append(sh, "*"); break;
+		case QDOS_KEY_DIV: input_append(sh, "/"); break;
+		case QDOS_KEY_DUP: input_append(sh, "dup"); break;
+		case QDOS_KEY_DROP: input_append(sh, "drop"); break;
+		case QDOS_KEY_SWAP: input_append(sh, "swap"); break;
 
 		case QDOS_KEY_CHAR:
 			if (ev->ch) {
@@ -128,19 +281,20 @@ static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 			}
 			break;
 
-		case QDOS_KEY_ENTER: submit(sh); break;
-		case QDOS_KEY_BACKSPACE: input_backspace(sh); break;
-
-		// Clear wipes the line being typed; only when there is nothing left to
-		// wipe does it clear the stack, so a mistyped entry never costs the
-		// user their working values
-		case QDOS_KEY_CLEAR:
-			if (sh->input_len > 0) {
-				input_clear(sh);
+		case QDOS_KEY_ENTER:
+			if (input_is_complete(sh)) {
+				submit(sh);
 			} else {
-				qd_interp_eval(sh->interp, "clear");
-				set_message(sh, "stack cleared", false);
+				input_append(sh, "\n");
 			}
+			break;
+
+		case QDOS_KEY_BACKSPACE:
+			input_backspace(sh);
+			break;
+
+		case QDOS_KEY_CLEAR:
+			leave_line_mode(sh);
 			break;
 
 		default:
@@ -148,14 +302,19 @@ static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 }
 
-/**
- * @brief Repaint the whole display
- */
+static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
+	if (sh->mode == QDOS_MODE_LINE) {
+		handle_line_key(sh, ev);
+	} else {
+		handle_calc_key(sh, ev);
+	}
+}
+
+/** @brief Repaint the whole display */
 static void render(qdos_shell* sh) {
 	qdos_console* con = &sh->con;
 	qdos_console_clear(con);
 
-	// Header
 	char header[QDOS_COLS + 1];
 	const size_t depth = qd_interp_depth(sh->interp);
 	snprintf(header, sizeof(header), "QDOS");
@@ -167,8 +326,7 @@ static void render(qdos_shell* sh) {
 
 	qdos_console_rule(con, ROW_TOP_RULE);
 
-	// Stack, bottom-aligned: the top of the stack sits nearest the input line,
-	// so the value about to be consumed is the one closest to what is typed
+	// Top of stack nearest the input line.
 	const size_t visible = (depth < STACK_ROWS) ? depth : (size_t)STACK_ROWS;
 	for (size_t i = 0; i < visible; i++) {
 		qd_interp_value value;
@@ -188,20 +346,32 @@ static void render(qdos_shell* sh) {
 
 	qdos_console_rule(con, ROW_BOTTOM_RULE);
 
-	// Message
 	if (sh->message[0]) {
 		qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
 		if (sh->message_is_error)
 			qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
 	}
 
-	// Input line, with the tail visible when it is longer than the console
-	qdos_console_puts(con, 0, ROW_INPUT, PROMPT);
+	const bool line_mode = (sh->mode == QDOS_MODE_LINE);
+	const char* prompt = line_mode ? LINE_PROMPT : PROMPT;
+	const char* text = line_mode ? sh->input : sh->entry;
+	size_t len = line_mode ? sh->input_len : sh->entry_len;
+
+	if (line_mode) {
+		const char* newline = strrchr(sh->input, '\n');
+		if (newline != NULL) {
+			prompt = CONT_PROMPT;
+			text = newline + 1;
+			len = sh->input_len - (size_t)(newline + 1 - sh->input);
+		}
+	}
+
+	qdos_console_puts(con, 0, ROW_INPUT, prompt);
 
 	const int room = QDOS_COLS - PROMPT_LEN - 1; // reserve a cell for the cursor
-	const char* shown = sh->input;
-	if ((int)sh->input_len > room)
-		shown = sh->input + (sh->input_len - room);
+	const char* shown = text;
+	if ((int)len > room)
+		shown = text + (len - (size_t)room);
 
 	const int drawn = qdos_console_puts(con, PROMPT_LEN, ROW_INPUT, shown);
 	qdos_console_invert(con, PROMPT_LEN + drawn, ROW_INPUT, 1);
@@ -326,6 +496,25 @@ static int native_clr(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+/** `forget` - (name -- ) remove a Quadrate-defined word */
+static int native_forget(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+
+	char name[QDOS_VALUE_STRING_MAX];
+	if (qd_pop_s(ctx, name, sizeof(name)) != 0) {
+		qd_set_error_msg(ctx, "forget: give the name as a string");
+		return 1;
+	}
+
+	if (!qd_interp_undeclare(sh->interp, name)) {
+		char message[80];
+		snprintf(message, sizeof(message), "forget: '%.20s' is not declared", name);
+		qd_set_error_msg(ctx, message);
+		return 1;
+	}
+	return 0;
+}
+
 /** `cls` - ( -- ) clear the message line */
 static int native_cls(qd_context* ctx, void* userdata) {
 	(void)ctx;
@@ -339,6 +528,7 @@ static void register_natives(qdos_shell* sh) {
 	qd_interp_register(sh->interp, "sto", "(value:i64 slot:i64 -- )", native_sto, sh);
 	qd_interp_register(sh->interp, "rcl", "(slot:i64 -- value:i64)", native_rcl, sh);
 	qd_interp_register(sh->interp, "clr", "(slot:i64 -- )", native_clr, sh);
+	qd_interp_register(sh->interp, "forget", "(name:str -- )", native_forget, sh);
 	qd_interp_register(sh->interp, "cls", "( -- )", native_cls, sh);
 }
 
@@ -360,8 +550,6 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	register_natives(sh);
 	qdos_console_init(&sh->con);
 
-	// A calculator is expected to come back holding what it held. Nothing saved
-	// is a first boot, not a failure.
 	const qdos_store_result restored = qdos_storage_restore_session(hal, sh->interp);
 	if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
 		set_message(sh, "session restored", false);
