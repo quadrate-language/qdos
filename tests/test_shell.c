@@ -10,6 +10,8 @@
 #include <qdos/hal.h>
 #include <qdos/shell.h>
 
+#include "qdos_version.h"
+
 #include <stdlib.h>
 
 typedef struct {
@@ -150,9 +152,9 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 /* Where the shell draws things, mirroring shell.c's layout. */
 #define SOFT_WIDTH_T (QDOS_COLS / 5)
 #define ROW_HEADER_T 0
-#define ROW_CONTENT_FIRST_T 2
-#define ROW_BOTTOM_RULE_T (QDOS_ROWS - 4)
-#define ROW_TOP_VALUE (ROW_BOTTOM_RULE_T - 1)
+#define ROW_CONTENT_FIRST_T 1
+#define ROW_CONTENT_LAST_T (QDOS_ROWS - 4)
+#define ROW_TOP_VALUE ROW_CONTENT_LAST_T
 #define ROW_MESSAGE_LINE (QDOS_ROWS - 3)
 
 /** Press one key. */
@@ -200,8 +202,10 @@ static void type_partial(qdos_key_event* script, size_t* n, const char* text) {
  *                 the cursor
  */
 static bool cell_is(const uint8_t* fb, int col, int row, char ch, bool inverted) {
-	// A cell is QDOS_FONT_SCALE screen pixels per font pixel, so map back
-	for (int y = 0; y < QDOS_CELL_H; y++) {
+	// A cell is QDOS_FONT_SCALE screen pixels per font pixel, so map back.
+	// The last pixel row is skipped: a rule underlines a row of content there,
+	// and no glyph reaches it, so it says nothing about which character this is.
+	for (int y = 0; y < QDOS_CELL_H - 1; y++) {
 		const uint16_t bits = qdos_font_row(ch, y / QDOS_FONT_SCALE);
 		for (int x = 0; x < QDOS_CELL_W; x++) {
 			const size_t i = (size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + col * QDOS_CELL_W + x;
@@ -671,10 +675,10 @@ static void test_forget_a_word(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * }");
-	type_line(script, &n, "7 sq");
-	type_line(script, &n, "\"sq\" forget");
-	type_line(script, &n, "clear 7 sq");
+	type_line(script, &n, "fn sqr(x:i64 -- r:i64) { dup * }");
+	type_line(script, &n, "7 sqr");
+	type_line(script, &n, "\"sqr\" forget");
+	type_line(script, &n, "clear 7 sqr");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -731,15 +735,15 @@ static void test_forget_outlives_the_reboot(void) {
 
 	qdos_key_event first[160];
 	size_t n = 0;
-	type_line(first, &n, "fn sq(x:i64 -- r:i64) { dup * }");
-	type_line(first, &n, "\"sq\" forget");
+	type_line(first, &n, "fn sqr(x:i64 -- r:i64) { dup * }");
+	type_line(first, &n, "\"sqr\" forget");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(first, n, fb);
 
 	qdos_key_event second[64];
 	n = 0;
-	type_line(second, &n, "clear 7 sq");
+	type_line(second, &n, "clear 7 sqr");
 	run_script(second, n, fb);
 
 	char row[QDOS_COLS + 1];
@@ -872,10 +876,10 @@ static void test_list_shows_apps_and_origin(void) {
 
 	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
 	CHECK(strstr(row, "mine") != NULL);
-	CHECK(strstr(row, "YOURS") != NULL);
+	CHECK(strstr(row, "USER") != NULL);
 }
 
-/** Tab widens from the installed programs to the whole vocabulary. */
+/** Tab widens from the installed programs to the catalog. */
 static void test_list_toggles_to_all_words(void) {
 	store_reset();
 
@@ -889,7 +893,7 @@ static void test_list_toggles_to_all_words(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
-	CHECK(strstr(row, "WORDS") != NULL);
+	CHECK(strstr(row, "CATALOG") != NULL);
 
 	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
 	CHECK(row[0] != '\0');
@@ -1114,6 +1118,327 @@ static void test_check_leaves_session_alone(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "42") == NULL);
+}
+
+/** +/- while typing signs the entry, which a bare minus cannot do. */
+static void test_neg_signs_the_entry(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_NEG);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "-5") != NULL);
+}
+
+/** Pressing it twice puts the sign back. */
+static void test_neg_toggles(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_NEG);
+	key(script, &n, QDOS_KEY_NEG);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "-") == NULL);
+	CHECK(strstr(row, "5") != NULL);
+}
+
+/** With nothing being typed it negates what is on the stack, as an HP does. */
+static void test_neg_negates_x(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_NEG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "-7") != NULL);
+}
+
+/** A signed entry still works as the left operand. */
+static void test_neg_then_arithmetic(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_NEG);
+	key(script, &n, QDOS_KEY_ADD);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "-2") != NULL);
+}
+
+/** The catalog opens straight to every word, without going via the apps list. */
+static void test_catalog_opens_directly(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_CATALOG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "CATALOG") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(row[0] != '\0');
+}
+
+/** Picking from the catalog types the word, which is what it is for. */
+static void test_catalog_pick_types_the_word(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_CATALOG);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
+	CHECK(row[0] == ':');
+	CHECK(strlen(row) > 1); // something was typed
+}
+
+/** The maths words reach the stack in calculator mode, not just in a line. */
+static void test_function_keys_apply(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "9");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_SQRT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+}
+
+/** A function key commits the number being typed first, as an operator does. */
+static void test_function_key_commits_entry(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "16");
+	key(script, &n, QDOS_KEY_SQRT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "4") != NULL);
+}
+
+/** A word of yours shadows a built-in, and forgetting it brings the built-in back. */
+static void test_user_word_shadows_builtin(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * 1000 + }");
+	type_line(script, &n, "7 sq");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1049") != NULL);
+
+	n = 0;
+	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * 1000 + }");
+	type_line(script, &n, "\"sq\" forget");
+	type_line(script, &n, "clear 7 sq");
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "49") != NULL); // the built-in, not the shadow
+	CHECK(strstr(row, "1049") == NULL);
+}
+
+/** Typing a letter jumps the catalog to it, or 100 words would be unusable. */
+static void test_catalog_letter_jump(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_CATALOG);
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, 's'};
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(row[1] == 's'); // the pane starts at the first s word
+}
+
+/** Editing means nothing in the catalog, so the key is not offered there. */
+static void test_catalog_hides_edit(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_CATALOG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "EDIT") == NULL);
+	CHECK(strstr(row, "PICK") != NULL);
+}
+
+/** The about view reports the firmware it is actually running. */
+static void test_about_shows_the_version(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_ABOUT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "ABOUT") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "QDOS") != NULL);
+	CHECK(strstr(row, QDOS_VERSION) != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "BUILD") != NULL);
+	CHECK(strlen(row) > strlen("BUILD ")); // a commit, not an empty label
+}
+
+/** Escape puts you back where you came from. */
+static void test_about_returns(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_ABOUT);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "OFF") != NULL); // the calculator's own soft row
+}
+
+/** Rotate reaches the third entry, which nothing else on the keypad can. */
+static void test_rot_in_calculator_mode(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ROT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1") != NULL); // the one that was third
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 2, row, sizeof(row));
+	CHECK(strstr(row, "2") != NULL);
+}
+
+/** Three of them is a full turn, so the order comes back. */
+static void test_rot_three_times_is_a_full_turn(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	for (int i = 0; i < 3; i++)
+		key(script, &n, QDOS_KEY_ROT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+}
+
+/** over copies the second entry, and also had no way to run outside a line. */
+static void test_over_in_calculator_mode(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "9");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_OVER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 2, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL); // still where it was
 }
 
 /** A space is what keeps two numbers from merging into one. */
@@ -1367,6 +1692,22 @@ int main(void) {
 	test_edit_refuses_broken();
 	test_edit_discards();
 	test_space_separates_numbers();
+	test_rot_in_calculator_mode();
+	test_rot_three_times_is_a_full_turn();
+	test_over_in_calculator_mode();
+	test_about_shows_the_version();
+	test_about_returns();
+	test_user_word_shadows_builtin();
+	test_catalog_opens_directly();
+	test_catalog_letter_jump();
+	test_catalog_hides_edit();
+	test_catalog_pick_types_the_word();
+	test_function_keys_apply();
+	test_function_key_commits_entry();
+	test_neg_signs_the_entry();
+	test_neg_toggles();
+	test_neg_negates_x();
+	test_neg_then_arithmetic();
 	test_edit_check_reports_ok();
 	test_edit_check_reports_error();
 	test_check_leaves_session_alone();

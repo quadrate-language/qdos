@@ -58,7 +58,8 @@ typedef struct {
 	bool running;
 	int scale;
 	const char* pending; ///< Rest of a text button still to be delivered
-	bool shifted;
+	qdos_pad_layer layer;   ///< Which keypad face is showing
+	qdos_pad_layer locked;  ///< What a one-press layer hands back to
 
 	/** Staging buffer: the HAL speaks 8-bit gray, the texture wants RGB. */
 	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
@@ -128,7 +129,7 @@ static void sim_shutdown(qdos_hal* hal) {
 
 /** @brief Redraw the keypad over the last panel image and show it */
 static void push_frame(sim_state* st) {
-	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_SCREEN_H, st->shifted);
+	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_SCREEN_H, st->layer);
 
 	SDL_UpdateTexture(st->texture, NULL, st->rgb, WINDOW_W * 3);
 	SDL_RenderClear(st->renderer);
@@ -191,20 +192,32 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 				if (b == NULL)
 					break;
 
-				if (qdos_pad_is_shift(b)) {
-					st->shifted = !st->shifted;
+				qdos_pad_layer selects;
+				if (qdos_pad_modifier(b, &selects)) {
+					if (st->layer == selects) {
+						st->layer = QDOS_PAD_PLAIN;
+						st->locked = QDOS_PAD_PLAIN;
+					} else {
+						st->layer = selects;
+						// Letters lock, since a name is more than one press;
+						// symbols do not, and hand back to what was showing
+						if (selects == QDOS_PAD_ALPHA)
+							st->locked = QDOS_PAD_ALPHA;
+					}
 					push_frame(st);
 					break;
 				}
 
-				const qdos_pad_action* a = qdos_pad_action_for(b, st->shifted);
-				const bool was_shifted = st->shifted;
-				st->shifted = false;
+				const qdos_pad_action* a = qdos_pad_action_for(b, st->layer);
+				const qdos_pad_layer was = st->layer;
+				st->layer = st->locked;
 				if (a == NULL) {
-					if (was_shifted)
+					if (was != st->layer)
 						push_frame(st);
 					break;
 				}
+				if (was != st->layer)
+					push_frame(st);
 
 				if (a->key != QDOS_KEY_NONE) {
 					out->key = a->key;

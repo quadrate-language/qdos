@@ -8,6 +8,26 @@ project('qdos', 'c', 'cpp',
 
 fs = import('fs')
 
+# The about view reports what it is actually running, so the version is taken
+# from here and the commit from git, rather than written down twice.
+git_commit = 'unknown'
+git = find_program('git', required: false)
+if git.found()
+	described = run_command(git, '-C', meson.current_source_dir(),
+			'describe', '--always', '--dirty', check: false)
+	if described.returncode() == 0
+		git_commit = described.stdout().strip()
+	endif
+endif
+
+version_h = configure_file(
+		output: 'qdos_version.h',
+		configuration: configuration_data({
+			'QDOS_VERSION': '"' + meson.project_version() + '"',
+			'QDOS_COMMIT': '"' + git_commit + '"',
+		}))
+
+
 # ---------------------------------------------------------------------------
 # Quadrate
 #
@@ -23,9 +43,9 @@ if not quadrate_src.startswith('/')
 endif
 quadrate_dist = quadrate_src / get_option('quadrate_dist')
 
-# Order matters: interp references qc and rt, qc references rt and u8t
+# Order matters: interp references qc and rt, math and qc reference rt and u8t
 quadrate_libs = []
-foreach name : ['interp', 'qc', 'rt', 'u8t']
+foreach name : ['interp', 'qc', 'math', 'rt', 'u8t']
 	quadrate_libs += quadrate_dist / 'lib/quadrate/lib' + name + '.a'
 endforeach
 
@@ -50,14 +70,15 @@ endforeach
 # keeps its headers from tripping this project's warning level.
 quadrate_dep = declare_dependency(
 		compile_args: ['-isystem' + (quadrate_dist / 'include')],
-		link_args: quadrate_libs,
+		link_args: quadrate_libs + ['-lm'],
 )
 
 # ---------------------------------------------------------------------------
 # QDOS
 # ---------------------------------------------------------------------------
 
-qdos_inc = include_directories('include', 'src')
+# '.' also brings in the build directory, where qdos_version.h is generated
+qdos_inc = include_directories('include', 'src', '.')
 
 # Core: the shell and the display layer — everything that is
 # independent of which hardware backend is underneath. Split out as a library
@@ -69,6 +90,8 @@ qdos_core = static_library('qdos_core',
 			'src/shell/complete.c',
 			'src/shell/wordlist.c',
 			'src/shell/editor.c',
+			'src/shell/mathwords.c',
+			version_h,
 			'src/hal/sim/keypad_ui.c',
 			'src/ui/console.c',
 			'src/ui/font16x24.c',

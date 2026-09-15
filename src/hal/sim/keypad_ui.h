@@ -21,6 +21,13 @@ extern "C" {
 #define QDOS_PAD_BUTTON_H 36
 #define QDOS_PAD_H (QDOS_PAD_ROWS * QDOS_PAD_BUTTON_H)
 
+/** @brief Which face of the keypad is showing */
+typedef enum {
+	QDOS_PAD_PLAIN = 0, ///< The calculator
+	QDOS_PAD_ALPHA,		///< Letters, for names and strings
+	QDOS_PAD_SYMBOL		///< Quadrate's syntax
+} qdos_pad_layer;
+
 typedef struct {
 	const char* label;
 	qdos_key key;	  ///< QDOS_KEY_NONE when the button types text instead
@@ -29,21 +36,27 @@ typedef struct {
 
 typedef struct {
 	qdos_pad_action plain;
-	qdos_pad_action shifted; ///< Label NULL where shift does nothing
+	qdos_pad_action alpha;	///< Label NULL where the plain action stands in
+	qdos_pad_action symbol; ///< Label NULL where symbol does nothing
 } qdos_pad_button;
 
-/** @brief Marks the one button that toggles the shifted layer */
-bool qdos_pad_is_shift(const qdos_pad_button* b);
+/** @brief The layer this button switches to, if it is a modifier at all */
+bool qdos_pad_modifier(const qdos_pad_button* b, qdos_pad_layer* selects);
 
-void qdos_pad_draw(uint8_t* rgb, int stride_px, int y0, bool shifted);
+void qdos_pad_draw(uint8_t* rgb, int stride_px, int y0, qdos_pad_layer layer);
 
 /** @brief Button at a window coordinate, panel included in y */
 const qdos_pad_button* qdos_pad_at(int x, int y);
 
 const qdos_pad_button* qdos_pad_button_at(int col, int row);
 
-/** @brief The action a press should send, given the shift state */
-const qdos_pad_action* qdos_pad_action_for(const qdos_pad_button* b, bool shifted);
+/**
+ * @brief The action a press should send on this layer
+ *
+ * Alpha falls back to the plain action, so a locked layer still has its arrows,
+ * Enter and backspace. Symbol does not: a button with nothing on it stays quiet.
+ */
+const qdos_pad_action* qdos_pad_action_for(const qdos_pad_button* b, qdos_pad_layer layer);
 
 #ifdef __cplusplus
 }

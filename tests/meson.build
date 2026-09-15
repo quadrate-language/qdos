@@ -46,3 +46,9 @@ test_editor = executable('test_editor', 'test_editor.c',
 		dependencies: [qdos_core_dep],
 		link_language: 'cpp')
 test('editor', test_editor)
+
+test_mathwords = executable('test_mathwords', 'test_mathwords.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('mathwords', test_mathwords)

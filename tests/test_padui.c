@@ -9,6 +9,16 @@
 #include "../src/ui/font16x24.h"
 
 #include <stdlib.h>
+
+static bool is_modifier(const qdos_pad_button* b, qdos_pad_layer want) {
+	qdos_pad_layer selects;
+	return qdos_pad_modifier(b, &selects) && selects == want;
+}
+
+static bool is_any_modifier(const qdos_pad_button* b) {
+	qdos_pad_layer selects;
+	return qdos_pad_modifier(b, &selects);
+}
 #include <string.h>
 
 static void test_every_slot_is_filled(void) {
@@ -18,7 +28,7 @@ static void test_every_slot_is_filled(void) {
 			CHECK(b != NULL);
 			CHECK(b->plain.label != NULL && b->plain.label[0] != '\0');
 
-			const qdos_pad_action* layers[2] = {&b->plain, &b->shifted};
+			const qdos_pad_action* layers[2] = {&b->plain, &b->symbol};
 			for (int l = 0; l < 2; l++) {
 				const qdos_pad_action* a = layers[l];
 				if (a->label == NULL) {
@@ -26,7 +36,7 @@ static void test_every_slot_is_filled(void) {
 					continue;
 				}
 				// shf is the only button that is neither a key nor text
-				const bool is_shift = (l == 0 && qdos_pad_is_shift(b));
+				const bool is_shift = (l == 0 && is_any_modifier(b));
 				if (!is_shift)
 					CHECK((a->key != QDOS_KEY_NONE) != (a->text != NULL));
 			}
@@ -41,8 +51,8 @@ static void test_labels_fit_their_button(void) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			CHECK((int)strlen(b->plain.label) * QDOS_FONT_W <= QDOS_PAD_BUTTON_W);
-			if (b->shifted.label != NULL)
-				CHECK((int)strlen(b->shifted.label) * QDOS_FONT_W <= QDOS_PAD_BUTTON_W);
+			if (b->symbol.label != NULL)
+				CHECK((int)strlen(b->symbol.label) * QDOS_FONT_W <= QDOS_PAD_BUTTON_W);
 		}
 	}
 }
@@ -79,8 +89,9 @@ static void test_draw_stays_in_bounds(void) {
 	uint8_t* buf = malloc(bytes + 16);
 	memset(buf + bytes, 0xAA, 16); // canary
 
-	qdos_pad_draw(buf, w, 0, false);
-	qdos_pad_draw(buf, w, 0, true);
+	qdos_pad_draw(buf, w, 0, QDOS_PAD_PLAIN);
+	qdos_pad_draw(buf, w, 0, QDOS_PAD_ALPHA);
+	qdos_pad_draw(buf, w, 0, QDOS_PAD_SYMBOL);
 
 	for (int i = 0; i < 16; i++)
 		CHECK(buf[bytes + i] == 0xAA);
@@ -96,27 +107,32 @@ static void test_draw_stays_in_bounds(void) {
 
 static void test_shift_layer(void) {
 	const qdos_pad_button* shift = qdos_pad_button_at(0, 8);
-	CHECK(qdos_pad_is_shift(shift));
+	CHECK(is_modifier(shift, QDOS_PAD_ALPHA));
 
-	// Exactly one shift button, or the state machine has two masters
-	int shifts = 0;
+	// One key per layer and no more, or the state machine has two masters
+	int alpha = 0, symbol = 0;
 	for (int row = 0; row < QDOS_PAD_ROWS; row++)
-		for (int col = 0; col < QDOS_PAD_COLS; col++)
-			if (qdos_pad_is_shift(qdos_pad_button_at(col, row)))
-				shifts++;
-	CHECK(shifts == 1);
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			if (is_modifier(b, QDOS_PAD_ALPHA))
+				alpha++;
+			if (is_modifier(b, QDOS_PAD_SYMBOL))
+				symbol++;
+		}
+	CHECK(alpha == 1);
+	CHECK(symbol == 1);
 
 	// A button with no shifted label sends nothing while shift is held
-	const qdos_pad_button* bks = qdos_pad_button_at(4, 5);
-	CHECK(bks->shifted.label == NULL);
-	CHECK(qdos_pad_action_for(bks, false) == &bks->plain);
-	CHECK(qdos_pad_action_for(bks, true) == NULL);
+	const qdos_pad_button* f1 = qdos_pad_button_at(0, 0);
+	CHECK(f1->symbol.label == NULL);
+	CHECK(qdos_pad_action_for(f1, QDOS_PAD_PLAIN) == &f1->plain);
+	CHECK(qdos_pad_action_for(f1, QDOS_PAD_SYMBOL) == NULL);
 
 	const qdos_pad_button* seven = qdos_pad_button_at(1, 6);
-	CHECK(qdos_pad_action_for(seven, false)->key == QDOS_KEY_7);
-	CHECK(qdos_pad_action_for(seven, true)->text != NULL);
+	CHECK(qdos_pad_action_for(seven, QDOS_PAD_PLAIN)->key == QDOS_KEY_7);
+	CHECK(qdos_pad_action_for(seven, QDOS_PAD_SYMBOL)->text != NULL);
 
-	CHECK(qdos_pad_action_for(NULL, false) == NULL);
+	CHECK(qdos_pad_action_for(NULL, QDOS_PAD_PLAIN) == NULL);
 }
 
 /**
@@ -144,15 +160,15 @@ static void test_dm42_block(void) {
 	CHECK(qdos_pad_button_at(0, 5)->plain.key == QDOS_KEY_ENTER);
 	CHECK(qdos_pad_button_at(0, 6)->plain.key == QDOS_KEY_UP);
 	CHECK(qdos_pad_button_at(0, 7)->plain.key == QDOS_KEY_DOWN);
-	CHECK(qdos_pad_is_shift(qdos_pad_button_at(0, 8)));
+	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_ALPHA));
 	CHECK(qdos_pad_button_at(0, 9)->plain.key == QDOS_KEY_CLEAR);
 
 	// Off is shift-exit, so it cannot be hit by accident
-	CHECK(qdos_pad_button_at(0, 9)->shifted.key == QDOS_KEY_POWER);
+	CHECK(qdos_pad_button_at(0, 9)->symbol.key == QDOS_KEY_POWER);
 
 	// The arrows the DM42 has no room for
-	CHECK(qdos_pad_button_at(0, 6)->shifted.key == QDOS_KEY_LEFT);
-	CHECK(qdos_pad_button_at(0, 7)->shifted.key == QDOS_KEY_RIGHT);
+	CHECK(qdos_pad_button_at(0, 6)->symbol.key == QDOS_KEY_LEFT);
+	CHECK(qdos_pad_button_at(0, 7)->symbol.key == QDOS_KEY_RIGHT);
 }
 
 /** Without a space key, two numbers typed in a row become one. */
@@ -167,6 +183,95 @@ static void test_a_space_is_reachable(void) {
 	CHECK(spaces == 1);
 }
 
+/**
+ * The default layer is a calculator: what you can see without reaching for
+ * shift is arithmetic, not syntax.
+ */
+static void test_default_layer_is_the_calculator(void) {
+	int functions = 0, syntax = 0;
+	for (int row = 1; row < QDOS_PAD_ROWS; row++)
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			if (b->plain.key >= QDOS_KEY_FN_FIRST && b->plain.key <= QDOS_KEY_FN_LAST)
+				functions++;
+			if (b->symbol.text != NULL)
+				syntax++;
+		}
+	CHECK(functions >= 12); // sin through mod
+	CHECK(syntax >= 20);
+
+	// The catalog needs no key of its own: it is on the soft row
+	CHECK(is_modifier(qdos_pad_button_at(4, 3), QDOS_PAD_SYMBOL));
+}
+
+/**
+ * The default layer is the calculator's, so its buttons must reach it. Typed
+ * text only arrives in line mode, which would make such a button do nothing
+ * where it is most wanted.
+ */
+static void test_default_layer_reaches_the_calculator(void) {
+	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			if (b->plain.text == NULL)
+				continue;
+
+			// A space means nothing to the calculator, and ':' is how you leave it
+			const bool allowed = strcmp(b->plain.text, " ") == 0 || strcmp(b->plain.text, ":") == 0;
+			CHECK(allowed);
+		}
+}
+
+/** Every letter, exactly once, or something cannot be typed at all. */
+static void test_alpha_layer_has_the_alphabet(void) {
+	int seen[26] = {0};
+	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_action* a = &qdos_pad_button_at(col, row)->alpha;
+			if (a->label == NULL || a->text == NULL)
+				continue;
+			const char c = a->text[0];
+			if (c >= 'a' && c <= 'z' && strlen(a->text) == 1)
+				seen[c - 'a']++;
+		}
+
+	for (int i = 0; i < 26; i++)
+		CHECK(seen[i] == 1);
+}
+
+/**
+ * Alpha locks, so the keys you need while typing must survive it. Without this
+ * a locked layer has no Enter, no backspace and no way to move.
+ */
+static void test_alpha_keeps_the_editing_keys(void) {
+	static const qdos_key NEEDED[] = {
+			QDOS_KEY_ENTER, QDOS_KEY_BACKSPACE, QDOS_KEY_CLEAR, QDOS_KEY_UP, QDOS_KEY_DOWN};
+
+	for (size_t i = 0; i < sizeof(NEEDED) / sizeof(*NEEDED); i++) {
+		bool found = false;
+		for (int row = 0; row < QDOS_PAD_ROWS && !found; row++)
+			for (int col = 0; col < QDOS_PAD_COLS && !found; col++) {
+				const qdos_pad_button* b = qdos_pad_button_at(col, row);
+				if (b->plain.key != NEEDED[i])
+					continue;
+				const qdos_pad_action* a = qdos_pad_action_for(b, QDOS_PAD_ALPHA);
+				found = (a != NULL && a->key == NEEDED[i]);
+			}
+		CHECK(found);
+	}
+}
+
+/** A modifier is not a key: pressing it must never type anything. */
+static void test_modifiers_send_nothing(void) {
+	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			if (!is_any_modifier(b))
+				continue;
+			CHECK(b->plain.key == QDOS_KEY_NONE && b->plain.text == NULL);
+		}
+}
+
 int main(void) {
 	test_every_slot_is_filled();
 	test_labels_fit_their_button();
@@ -174,6 +279,11 @@ int main(void) {
 	test_shift_layer();
 	test_dm42_block();
 	test_a_space_is_reachable();
+	test_default_layer_is_the_calculator();
+	test_default_layer_reaches_the_calculator();
+	test_alpha_layer_has_the_alphabet();
+	test_alpha_keeps_the_editing_keys();
+	test_modifiers_send_nothing();
 	test_draw_stays_in_bounds();
 	return check_report("padui");
 }

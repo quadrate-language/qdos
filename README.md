@@ -62,7 +62,7 @@ first, so a program of yours with the same name shadows one of theirs. The HAL
 enforces this by shape rather than by a check: `store_read` and `store_list`
 take a scope, and `store_write` does not, so the system store has no path to it.
 
-`"name" edit` opens the program in an editor over the stack area -- four lines
+`"name" edit` opens the program in an editor over the stack area -- six lines
 at a time of the real source, comments and layout intact, scrolling as the
 cursor leaves the pane. Arrows move, `ent` splits a line, and the soft
 keys do the rest.
@@ -88,7 +88,7 @@ program can never be lost. Forgetting one you never overrode says `is built in`.
 Shipped today: `isqrt` and `hyp` (Pythagoras, in Quadrate, in
 `programs/system/`). `hello` is installed as a user app to start you off.
 
-`lst` (F1) browses the installed programs, marked `sys` or `yours`, and `yours*`
+`lst` (F1) browses the installed programs, marked `sys` or `user`, and `user*`
 where one of yours overrides a shipped one. Arrows move, `ent` picks the name
 into the input line, `clr` goes back. `tab` widens to every word the interpreter
 knows -- useful, but the sixty builtins bury three apps, which is why the
@@ -303,9 +303,16 @@ The kernel's boot logo is the same glyphs: `tools/genlogo.py` reads
 a framebuffer driver cannot drift from what the shell paints after. Regenerate
 both when the font changes.
 
-Everything is drawn at that one size, which leaves six stack entries visible
+Everything is drawn at that one size, which leaves seven stack entries visible
 above the input line. A 64-bit integer is 19 digits and fits across 25 columns
 beside its index label.
+
+A rule is a single pixel along the bottom edge of a row, and the lowest ink in
+the font is two pixels above that, so a rule underlines a row of content rather
+than occupying a row of its own. Ten rows is not enough to spend two of them on
+lines: the caption is underlined, the last row of content is underlined, and
+both of those rows still hold text. That is two rows back, which is a third of
+the pane in the list and the editor.
 
 The calculator does not caption itself. A title row costs a stack entry to say
 what the machine in your hand already is, and `1:` `2:` `3:` down the left edge
@@ -316,7 +323,7 @@ something the pane below cannot: `APPS` or `WORDS` with the position in the
 list, and the program name with `line:col`.
 
 What QDOS says for itself is in capitals -- headers, soft key labels, keycaps,
-status messages, the `SYS` and `YOURS` markers. Anything that is Quadrate stays exactly
+status messages, the `SYS` and `USER` markers. Anything that is Quadrate stays exactly
 as it is written: program names, the source in the editor, the line you are
 typing, and the word a runtime error is complaining about. The language is
 case-sensitive, so shouting a program name back at you would be a lie about
@@ -336,9 +343,9 @@ still about 1.6x life size; `QDOS_SIM_SCALE` enlarges it for inspecting pixels.
 
 Below the panel it draws a clickable 5x10 keypad, for trying a layout before
 wiring one. The table in `src/hal/sim/keypad_ui.c` is the whole layout, so
-rearranging it is a one-file edit. Each button carries two actions: unshifted is
-the calculator, and `shf` switches to the rest of the language. Buttons with
-nothing on the shifted layer dim rather than disappear.
+rearranging it is a one-file edit. Each button carries three actions, one per
+layer, and `ALP` and `SYM` switch between them. Buttons with nothing on the
+symbol layer dim rather than disappear.
 
 It is arranged like a SwissMicros DM42, because a calculator is operated by
 muscle memory and there is no reason to make ours a different shape. Keycaps are
@@ -346,41 +353,103 @@ capitals, being the machine's own lettering; what a key types is not, so `FN`
 types `fn ` and `I64` types `i64`:
 
 ```
-F1   F2   F3   F4   F5      menu keys, directly under the display
-(    )    "    {    }
-<    >    =    %    _       Quadrate's rows, which no calculator has
-SPC  CLR  IF   LOP  BRK
-DUP  DRP  OVR  ROT  LST     where the DM42 keeps sto, rcl and roll down
-ENT  SWP  NEG  TAB  BKS     enter, x<>y, +/-, e, backspace
-UP   7    8    9    /
-DN   4    5    6    *
-SHF  1    2    3    -
-ESC  0    .    :    +
+      plain                alpha (locks)          symbol (one press)
+F1  F2  F3  F4  F5
+SIN COS TAN LN  LOG      A   B   C   D   E      (   )   {   }   "
+SQRT SQ POW INV ABS      F   G   H   I   J      FN  --  I64 F64 STR
+FLR CEIL RND SPC SYM     K   L   M   SPC        IF  ELS LOP BRK
+DUP DRP OVR ROT MOD      N   O   P   Q   R      NIP PIK [   ]   =
+ENT SWP NEG TAB BKS      ENT S   T   U   BKS    APP ROL FRE <   >
+UP  7   8   9   /        UP  V   W   X   Y      LT  AND OR  XOR SHL
+DN  4   5   6   *        DN  Z   _   6   *      RT  NOT ==  !=  ,
+ALP 1   2   3   -        ALP 1   2   3   -          <=  >=  WTH INC
+ESC 0   .   :   +        ESC 0   .   :   +      PWR LEN NTH ;   DEC
 ```
 
 Navigation runs down the left column, the digits sit in a 3x3 block, and the
 operators run down the right in the DM42's order. `ESC` is its EXIT, and `PWR`
-is on the shifted layer of that key exactly as OFF is shift-EXIT there, so the
+is on the symbol layer of that key exactly as OFF is shift-EXIT there, so the
 machine cannot be switched off by a slip of the thumb. The DM42 has no left and
-right arrows; ours are the shifted layer of `UP` and `DN`, which costs a shift
-press in the editor and is the one place the resemblance is inconvenient. `:`
+right arrows; ours are the symbol layer of `UP` and `DN`, which costs a press
+in the editor and is the one place the resemblance is inconvenient. `:`
 takes the R/S slot, being the key that runs something.
 
 The numpad sits at the bottom of the pad with nothing under it, where a thumb
-expects it. That pushes Quadrate's three rows -- brackets, quotes, types, and
-the control-flow words, which are otherwise unreachable on a keypad with no
-letters on it -- up between the menu keys and the calculator, since the menu
-keys have to stay directly under the labels they answer to.
+expects it, and the menu keys stay directly under the labels they answer to.
+
+Three faces, because one modifier is not enough for a keypad this size -- the
+same reason a TI-83 carries both `2nd` and `ALPHA`. Plain is a calculator:
+trigonometry, roots and powers, rounding, the stack. `ALP` is the alphabet,
+without which no program name, word or string can be typed at all. `SYM` is
+Quadrate's syntax -- brackets, quotes, type names, control flow -- which cannot
+be reached any other way. Anything that is an ordinary word is in the catalog
+and needs no key at all, which is what leaves room for the other two.
+
+`ALP` locks and `SYM` does not, which follows from what each is for: a name is
+several letters and a bracket is one. `SYM` hands back to whichever layer was
+showing, so it can be used in the middle of a locked word. The alpha layer only
+replaces the buttons that carry a letter -- Enter, backspace, escape, the
+arrows, the digits and the space all keep working underneath it, or locking
+would strand you mid-word with no way to finish. A test asserts exactly that,
+along with all 26 letters being present exactly once.
+
+That is enough to write a program without touching a keyboard:
+`: SYM fn ALP h i ALP SYM ( SYM -- SYM ) SYM { 3 SYM } Enter` defines
+`fn hi( -- ) { 3 }` in nineteen presses.
+
+The maths comes from Quadrate's `lib/math`, which ships in the dist but is not
+registered with the interpreter; `src/shell/mathwords.c` registers its 34
+functions so they are words like any other. Integers coerce, so `9 sqrt` works
+without a decimal point. A word of yours shadows a built-in of the same name,
+and forgetting yours brings the built-in back.
+
+`lib/math` treats a domain error as fatal: `ln` of a negative prints a stack
+dump and aborts the process. That is reasonable for a program and fatal for a
+calculator, where pressing `LN` four times in a row is enough to get there --
+5 becomes 1.609, then 0.476, then -0.742. Eleven of the thirty-four have a
+domain to fall out of (`sqrt`, `ln`, `log10`, `log2`, `asin`, `acos`, `acosh`,
+`atanh`, `inv`, `fac`, `fmod`), so those check the argument first and raise an
+ordinary error instead, leaving the value on the stack. Anything they let
+through is still `lib/math`'s to compute. Which eleven was settled by running
+every function against out-of-range inputs in a forked child and recording
+which ones did not come back, rather than by reading the domains off a
+textbook; `tests/test_mathwords.c` keeps them honest.
+
+`INFO` (F4 from the calculator) shows what the firmware is: version, the git
+commit it was built from, and the panel. The version comes from `meson.build`
+and the commit from `git describe --dirty` at configure time, generated into
+`qdos_version.h`, so neither can be written down twice and drift; a tree without
+git reports `unknown` rather than failing to build.
+
+`CAT` opens the catalog, which is the TI-83's answer to a keyboard that cannot
+hold every function: all 102 words, alphabetical, and picking one types it into
+the line. Typing a letter jumps to it, since four rows at a time of 102 is not
+something to scroll through. The function keys are logical keys rather than
+typed text, so they apply to the stack in calculator mode -- `45` `SQRT` --
+which is the whole point of putting them on the front layer.
 
 A button either sends a logical key or types text; only the logical keys and `:`
 reach calculator mode, which is the same constraint a physical keypad would have.
+
+`DUP DRP OVR ROT SWP` are the stack, and `ROT` is the only way to reach the
+third entry: without it the keypad can see two deep and no further. Like `NEG`
+they are logical keys, not typed text -- a test walks the default layer and
+fails on any button that types, because such a button does nothing in the mode
+the layer exists for. Only a space and `:` are allowed to, the first meaning
+nothing to a calculator and the second being how you leave it.
+
+`NEG` is a logical key rather than typed text, because it is the only way to
+enter a negative number in calculator mode: `-` there is subtraction, so `5` `-`
+is an operator with one operand and nothing to take from. It works as `+/-` does
+on an HP -- while a number is being typed it flips that number's sign, and with
+nothing being typed it negates x.
 
 `SPC` earns its place because two numbers typed in a row would otherwise merge:
 `7` `8` `+` is the single token `78` followed by an operator with nothing to add
 it to. Operators and words need no separator -- the lexer breaks on the former,
 and every word button types its own surrounding spaces -- so a space is only
 ever needed between literals. ` depth ` gave up the slot, being already on the
-shifted layer of `ROT`.
+symbol layer of `ROT`.
 
 Not yet: `for`, named locals (both `for i` and named parameters need a variable
 scope), and routing `print` output to the display instead of stdout.

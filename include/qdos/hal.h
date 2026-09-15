@@ -32,6 +32,27 @@ typedef enum {
 
 	/* Stack — the operations an RPN keypad needs as dedicated keys */
 	QDOS_KEY_DUP, QDOS_KEY_DROP, QDOS_KEY_SWAP,
+	QDOS_KEY_NEG, ///< +/-, which a bare minus cannot do while entering a number
+
+	/* Words with a key of their own. Contiguous, and FUNCTION_WORD runs in step. */
+	QDOS_KEY_SIN,
+	QDOS_KEY_COS,
+	QDOS_KEY_TAN,
+	QDOS_KEY_LN,
+	QDOS_KEY_LOG,
+	QDOS_KEY_SQRT,
+	QDOS_KEY_SQ,
+	QDOS_KEY_POW,
+	QDOS_KEY_INV,
+	QDOS_KEY_ABS,
+	QDOS_KEY_FLOOR,
+	QDOS_KEY_CEIL,
+	QDOS_KEY_ROUND,
+	QDOS_KEY_MOD,
+	QDOS_KEY_ROT,
+	QDOS_KEY_OVER,
+#define QDOS_KEY_FN_FIRST QDOS_KEY_SIN
+#define QDOS_KEY_FN_LAST QDOS_KEY_OVER
 
 	/* Editing and control */
 	QDOS_KEY_ENTER,
@@ -48,7 +69,9 @@ typedef enum {
 	QDOS_KEY_LIST,
 	QDOS_KEY_SAVE,
 	QDOS_KEY_OPEN,	///< Edit the selection
-	QDOS_KEY_CHECK, ///< Compile what is in the editor without keeping it
+	QDOS_KEY_CHECK,   ///< Compile what is in the editor without keeping it
+	QDOS_KEY_CATALOG, ///< Every word there is, to pick from
+	QDOS_KEY_ABOUT,   ///< What this firmware is
 
 	/* Soft keys, labelled on screen because their meaning follows the mode */
 	QDOS_KEY_SOFT1,

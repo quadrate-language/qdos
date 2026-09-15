@@ -10,6 +10,9 @@
 #include "../ui/console.h"
 #include "complete.h"
 #include "editor.h"
+#include "mathwords.h"
+
+#include "qdos_version.h"
 #include "wordlist.h"
 #include "storage.h"
 
@@ -26,16 +29,19 @@
 /** Evaluator stack capacity, in elements. */
 #define STACK_SIZE 4096
 
-/* Screen layout, in rows. */
+/*
+ * Screen layout, in rows. A rule is one pixel on the bottom edge of a row, and
+ * no glyph reaches that far, so it underlines a row of content rather than
+ * taking a row of its own -- the panel has ten and cannot spare two for lines.
+ */
 /* The list and the editor caption themselves; the calculator does not need to */
 #define ROW_HEADER 0
-#define ROW_TOP_RULE 1
-#define ROW_CONTENT_FIRST 2
+#define ROW_CONTENT_FIRST 1
 
 /* Numbered rows already say how deep the stack is, so it starts at the top */
 #define ROW_STACK_FIRST 0
-#define ROW_BOTTOM_RULE (QDOS_ROWS - 4)
 #define ROW_MESSAGE (QDOS_ROWS - 3)
+#define ROW_CONTENT_LAST (ROW_MESSAGE - 1)
 #define ROW_INPUT (QDOS_ROWS - 2)
 
 /* Last row, so the labels sit against the edge the function keys are under */
@@ -44,7 +50,7 @@
 #define SOFT_KEYS 5
 #define SOFT_WIDTH (QDOS_COLS / SOFT_KEYS)
 
-#define STACK_ROWS (ROW_BOTTOM_RULE - ROW_STACK_FIRST)
+#define STACK_ROWS (ROW_CONTENT_LAST - ROW_STACK_FIRST + 1)
 
 /** Prompts. The character says which mode the keypad is in. */
 #define PROMPT "> "
@@ -57,7 +63,8 @@ typedef enum {
 	QDOS_MODE_CALC, ///< Digits build a number; an operator applies immediately
 	QDOS_MODE_LINE,	///< Whole lines of Quadrate, evaluated on Enter
 	QDOS_MODE_LIST,	///< Browsing the vocabulary
-	QDOS_MODE_EDIT	///< Editing a program in the stack area
+	QDOS_MODE_EDIT,	///< Editing a program in the stack area
+	QDOS_MODE_ABOUT ///< What this firmware is
 } qdos_mode;
 
 struct qdos_shell {
@@ -78,7 +85,8 @@ struct qdos_shell {
 	bool list_all; ///< Every word, rather than just the installed programs
 	size_t list_sel;
 	size_t list_top;
-	qdos_mode list_from; ///< Mode to return to
+	qdos_mode list_from;
+	qdos_mode about_from; ///< Mode to return to
 
 	qdos_editor ed;
 	size_t ed_top; ///< First visible line
@@ -181,22 +189,28 @@ typedef struct {
 	qdos_key key;
 } soft_key;
 
-static const soft_key SOFT[4][SOFT_KEYS] = {
-	[QDOS_MODE_CALC] = {{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"", QDOS_KEY_NONE},
-			{"", QDOS_KEY_NONE}, {"OFF", QDOS_KEY_POWER}},
+static const soft_key SOFT[5][SOFT_KEYS] = {
+	[QDOS_MODE_CALC] = {{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
+			{"INFO", QDOS_KEY_ABOUT}, {"OFF", QDOS_KEY_POWER}},
 	[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
-			{"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}},
+			{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_NONE}},
 	// down then up, so the pair sits like vim's j and k
 	[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {"DOWN", QDOS_KEY_DOWN}, {"UP", QDOS_KEY_UP},
 			{"PICK", QDOS_KEY_ENTER}, {"EDIT", QDOS_KEY_OPEN}},
 	[QDOS_MODE_EDIT] = {{"DROP", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
 			{"", QDOS_KEY_NONE}, {"SAVE", QDOS_KEY_SAVE}},
+	[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
+			{"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}},
 };
 
 static void render_soft(qdos_shell* sh, qdos_console* con) {
 	for (int i = 0; i < SOFT_KEYS; i++) {
 		const char* label = SOFT[sh->mode][i].label;
 		if (label[0] == '\0')
+			continue;
+
+		// Only a program can be edited, and the catalog lists words too
+		if (sh->mode == QDOS_MODE_LIST && sh->list_all && SOFT[sh->mode][i].key == QDOS_KEY_OPEN)
 			continue;
 
 		const int width = (int)strlen(label);
@@ -315,7 +329,43 @@ static void leave_line_mode(qdos_shell* sh) {
 }
 
 /** Keys while the keypad is a calculator. */
+/* In QDOS_KEY_FN_FIRST..QDOS_KEY_FN_LAST order */
+static const char* const FUNCTION_WORD[] = {
+	"sin", "cos", "tan", "ln", "log10", "sqrt", "sq",
+	"pow", "inv", "abs", "floor", "ceil", "round", "mod",
+	"rot", "over",
+};
+
+static const char* function_word(qdos_key key) {
+	if (key < QDOS_KEY_FN_FIRST || key > QDOS_KEY_FN_LAST)
+		return NULL;
+	return FUNCTION_WORD[key - QDOS_KEY_FN_FIRST];
+}
+
+/* Flips the sign of the number being typed, or negates x when none is */
+static void entry_negate(qdos_shell* sh) {
+	if (sh->entry_len == 0) {
+		apply_word(sh, "neg");
+		return;
+	}
+
+	if (sh->entry[0] == '-') {
+		memmove(sh->entry, sh->entry + 1, sh->entry_len);
+		sh->entry_len--;
+	} else if (sh->entry_len + 1 < ENTRY_MAX) {
+		memmove(sh->entry + 1, sh->entry, sh->entry_len + 1);
+		sh->entry[0] = '-';
+		sh->entry_len++;
+	}
+}
+
 static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
+	const char* word = function_word(ev->key);
+	if (word != NULL) {
+		apply_word(sh, word);
+		return;
+	}
+
 	switch (ev->key) {
 		case QDOS_KEY_0: entry_append(sh, '0'); break;
 		case QDOS_KEY_1: entry_append(sh, '1'); break;
@@ -336,6 +386,7 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_DUP: apply_word(sh, "dup"); break;
 		case QDOS_KEY_DROP: apply_word(sh, "drop"); break;
 		case QDOS_KEY_SWAP: apply_word(sh, "swap"); break;
+		case QDOS_KEY_NEG: entry_negate(sh); break;
 
 		// Bare Enter duplicates: how an RPN calculator squares a number.
 		case QDOS_KEY_ENTER:
@@ -378,6 +429,14 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 /** Keys while whole lines of Quadrate are being typed. */
 static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
+	const char* word = function_word(ev->key);
+	if (word != NULL) {
+		input_append(sh, " ");
+		input_append(sh, word);
+		input_append(sh, " ");
+		return;
+	}
+
 	switch (ev->key) {
 		case QDOS_KEY_0: input_append(sh, "0"); break;
 		case QDOS_KEY_1: input_append(sh, "1"); break;
@@ -398,6 +457,7 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_DUP: input_append(sh, "dup"); break;
 		case QDOS_KEY_DROP: input_append(sh, "drop"); break;
 		case QDOS_KEY_SWAP: input_append(sh, "swap"); break;
+		case QDOS_KEY_NEG: input_append(sh, " neg "); break;
 
 		case QDOS_KEY_CHAR:
 			if (ev->ch) {
@@ -443,7 +503,7 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 static void edit_open(qdos_shell* sh, const char* name, const char* source);
 
-#define LIST_ROWS (ROW_BOTTOM_RULE - ROW_CONTENT_FIRST)
+#define LIST_ROWS (ROW_CONTENT_LAST - ROW_CONTENT_FIRST + 1)
 
 static size_t list_count(const qdos_shell* sh) {
 	return sh->list_all ? sh->list.count : sh->app_count;
@@ -463,12 +523,21 @@ static void list_load(qdos_shell* sh) {
 	sh->list_top = 0;
 }
 
-static void list_open(qdos_shell* sh) {
-	sh->list_all = false;
+static void list_open_scoped(qdos_shell* sh, bool all) {
+	sh->list_all = all;
 	list_load(sh);
 	sh->list_from = sh->mode;
 	sh->mode = QDOS_MODE_LIST;
 	set_message(sh, "", false);
+}
+
+static void list_open(qdos_shell* sh) {
+	list_open_scoped(sh, false);
+}
+
+/* Every word, the way a TI-83 reaches the ones with no key of their own */
+static void catalog_open(qdos_shell* sh) {
+	list_open_scoped(sh, true);
 }
 
 static void list_scroll_into_view(qdos_shell* sh) {
@@ -509,6 +578,20 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 			list_load(sh);
 			break;
 
+		// Typing a letter jumps to it, which is how a catalog of 100 is usable
+		case QDOS_KEY_CHAR: {
+			const char want = (ev->ch >= 'A' && ev->ch <= 'Z') ? (char)(ev->ch + 32) : ev->ch;
+			for (size_t i = 0; i < list_count(sh); i++) {
+				if (list_name(sh, i)[0] == want) {
+					sh->list_sel = i;
+					sh->list_top = i; // the match at the top, with its neighbours under it
+					list_scroll_into_view(sh);
+					break;
+				}
+			}
+			break;
+		}
+
 		case QDOS_KEY_ENTER:
 			// Picking types the name, leaving the user to run or edit it
 			sh->mode = QDOS_MODE_LINE;
@@ -542,7 +625,7 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 }
 
-#define EDIT_ROWS (ROW_BOTTOM_RULE - ROW_CONTENT_FIRST)
+#define EDIT_ROWS (ROW_CONTENT_LAST - ROW_CONTENT_FIRST + 1)
 
 static void edit_scroll_into_view(qdos_shell* sh) {
 	size_t line, col;
@@ -593,6 +676,16 @@ static void check_program(qdos_shell* sh) {
 }
 
 static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
+	const char* word = function_word(ev->key);
+	if (word != NULL) {
+		qdos_editor_insert(&sh->ed, ' ');
+		for (const char* c = word; *c; c++)
+			qdos_editor_insert(&sh->ed, *c);
+		qdos_editor_insert(&sh->ed, ' ');
+		edit_scroll_into_view(sh);
+		return;
+	}
+
 	switch (ev->key) {
 		case QDOS_KEY_UP: qdos_editor_move(&sh->ed, 0, -1); break;
 		case QDOS_KEY_DOWN: qdos_editor_move(&sh->ed, 0, 1); break;
@@ -601,6 +694,12 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 		case QDOS_KEY_ENTER: qdos_editor_insert(&sh->ed, '\n'); break;
 		case QDOS_KEY_TAB: qdos_editor_insert(&sh->ed, '\t'); break;
+
+		case QDOS_KEY_NEG:
+			for (const char* c = " neg "; *c; c++)
+				qdos_editor_insert(&sh->ed, *c);
+			break;
+
 		case QDOS_KEY_BACKSPACE: qdos_editor_backspace(&sh->ed); break;
 
 		case QDOS_KEY_CHAR:
@@ -668,7 +767,23 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		return;
 	}
 
-	if (sh->mode == QDOS_MODE_EDIT) {
+	if (ev->key == QDOS_KEY_CATALOG && sh->mode != QDOS_MODE_LIST) {
+		catalog_open(sh);
+		return;
+	}
+
+	if (ev->key == QDOS_KEY_ABOUT && sh->mode != QDOS_MODE_ABOUT) {
+		sh->about_from = sh->mode;
+		sh->mode = QDOS_MODE_ABOUT;
+		set_message(sh, "", false);
+		return;
+	}
+
+	if (sh->mode == QDOS_MODE_ABOUT) {
+		// Any way out will do
+		if (ev->key == QDOS_KEY_CLEAR || ev->key == QDOS_KEY_ENTER || ev->key == QDOS_KEY_ABOUT)
+			sh->mode = sh->about_from;
+	} else if (sh->mode == QDOS_MODE_EDIT) {
 		handle_edit_key(sh, ev);
 	} else if (sh->mode == QDOS_MODE_LIST) {
 		handle_list_key(sh, ev);
@@ -687,7 +802,7 @@ static void render_edit(qdos_shell* sh, qdos_console* con) {
 	snprintf(header, sizeof(header), "%zu:%zu", line + 1, col + 1);
 	qdos_console_puts(con, 0, ROW_HEADER, sh->ed.name);
 	qdos_console_puts_right(con, ROW_HEADER, header);
-	qdos_console_rule(con, ROW_TOP_RULE);
+	qdos_console_rule(con, ROW_HEADER);
 
 	// One horizontal offset for the whole pane, so columns stay aligned
 	const size_t width = QDOS_COLS - 1;
@@ -709,7 +824,26 @@ static void render_edit(qdos_shell* sh, qdos_console* con) {
 			qdos_console_invert(con, (int)(col - left), row, 1);
 	}
 
-	qdos_console_rule(con, ROW_BOTTOM_RULE);
+	qdos_console_rule(con, ROW_CONTENT_LAST);
+}
+
+static void render_about(qdos_console* con) {
+	qdos_console_puts(con, 0, ROW_HEADER, "ABOUT");
+	qdos_console_rule(con, ROW_HEADER);
+
+	char line[QDOS_COLS + 1];
+	int row = ROW_CONTENT_FIRST;
+
+	snprintf(line, sizeof(line), "QDOS %s", QDOS_VERSION);
+	qdos_console_puts(con, 0, row++, line);
+
+	snprintf(line, sizeof(line), "BUILD %s", QDOS_COMMIT);
+	qdos_console_puts(con, 0, row++, line);
+
+	snprintf(line, sizeof(line), "PANEL %dX%d 1-BIT", QDOS_SCREEN_W, QDOS_SCREEN_H);
+	qdos_console_puts(con, 0, row++, line);
+
+	qdos_console_rule(con, ROW_CONTENT_LAST);
 }
 
 static void render_list(qdos_shell* sh, qdos_console* con) {
@@ -717,9 +851,9 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 
 	char header[QDOS_COLS + 1];
 	snprintf(header, sizeof(header), "%zu/%zu", total ? sh->list_sel + 1 : 0, total);
-	qdos_console_puts(con, 0, ROW_HEADER, sh->list_all ? "WORDS" : "APPS");
+	qdos_console_puts(con, 0, ROW_HEADER, sh->list_all ? "CATALOG" : "APPS");
 	qdos_console_puts_right(con, ROW_HEADER, header);
-	qdos_console_rule(con, ROW_TOP_RULE);
+	qdos_console_rule(con, ROW_HEADER);
 
 	for (size_t i = 0; i < LIST_ROWS; i++) {
 		const size_t item = sh->list_top + i;
@@ -730,7 +864,7 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 		qdos_console_puts(con, 1, row, list_name(sh, item));
 		if (!sh->list_all) {
 			const qdos_program_entry* e = &sh->apps[item];
-			qdos_console_puts_right(con, row, e->user ? (e->system ? "YOURS*" : "YOURS") : "SYS");
+			qdos_console_puts_right(con, row, e->user ? (e->system ? "USER*" : "USER") : "SYS");
 		}
 		if (item == sh->list_sel)
 			qdos_console_invert(con, 0, row, QDOS_COLS);
@@ -739,7 +873,7 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 	if (total == 0)
 		qdos_console_puts(con, 1, ROW_CONTENT_FIRST, "NONE INSTALLED");
 
-	qdos_console_rule(con, ROW_BOTTOM_RULE);
+	qdos_console_rule(con, ROW_CONTENT_LAST);
 
 }
 
@@ -767,6 +901,13 @@ static void render(qdos_shell* sh) {
 		return;
 	}
 
+	if (sh->mode == QDOS_MODE_ABOUT) {
+		render_about(con);
+		render_soft(sh, con);
+		sh->hal->present(sh->hal, con->fb);
+		return;
+	}
+
 	const size_t depth = qd_interp_depth(sh->interp);
 
 	// Top of stack nearest the input line.
@@ -776,7 +917,7 @@ static void render(qdos_shell* sh) {
 		if (!qd_interp_peek(sh->interp, i, &value))
 			continue;
 
-		const int row = ROW_BOTTOM_RULE - 1 - (int)i;
+		const int row = ROW_CONTENT_LAST - (int)i;
 
 		char label[16];
 		snprintf(label, sizeof(label), "%zu:", i + 1);
@@ -787,7 +928,7 @@ static void render(qdos_shell* sh) {
 	if (depth > (size_t)STACK_ROWS)
 		qdos_console_puts(con, 0, ROW_STACK_FIRST, "...");
 
-	qdos_console_rule(con, ROW_BOTTOM_RULE);
+	qdos_console_rule(con, ROW_CONTENT_LAST);
 
 	if (sh->message[0]) {
 		qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
@@ -1020,6 +1161,7 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "forget", "(name:str -- )", native_forget, sh);
 	qd_interp_register(interp, "edit", "(name:str -- )", native_edit, sh);
 	qd_interp_register(interp, "cls", "( -- )", native_cls, sh);
+	qdos_register_math(interp);
 }
 
 qdos_shell* qdos_shell_create(qdos_hal* hal) {
@@ -1047,7 +1189,7 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 
 	char message[80];
 	if (programs > 0 || sys > 0) {
-		snprintf(message, sizeof(message), "READY - %d SYS %d YOURS",
+		snprintf(message, sizeof(message), "READY - %d SYS %d USER",
 				 sys > 0 ? sys : 0, programs > 0 ? programs : 0);
 		set_message(sh, message, false);
 	} else if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
