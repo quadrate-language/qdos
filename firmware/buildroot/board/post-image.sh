@@ -26,15 +26,22 @@ echo "Image layout: kernel ${KERNEL}, device tree ${DTB}"
 rm -rf "${GENIMAGE_TMP}"
 mkdir -p "${BINARIES_DIR}/data"
 
-# The upload drop zone on the FAT boot partition, so a fresh card already has
-# somewhere to put a .qd file.
+# Seeds the inbox partition, so a fresh card explains itself when a PC first
+# opens it -- whether over USB or in a card reader.
 mkdir -p "${BINARIES_DIR}/qdos-inbox"
 cat > "${BINARIES_DIR}/qdos-inbox/README.TXT" <<'EOF'
-Put Quadrate programs here as .qd files. QDOS declares them at every boot.
+Put Quadrate programs here as .qd files.
 
 	fn sq(x:i64 -- r:i64) { dup * }
 
 One word per file, named after the word: sq.qd
+
+QDOS declares them at the next boot. To do it without one, turn USB off again
+under SETTINGS and it reads the card there and then.
+
+Files here are never written to by the calculator. Editing an uploaded program
+on the machine keeps a separate copy, which wins while it exists; the APPS list
+marks it USER*. Delete the .qd file here to be rid of an upload for good.
 EOF
 
 rm -rf "${GENIMAGE_TMP}"

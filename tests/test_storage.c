@@ -79,18 +79,27 @@ static qdos_store_result mem_list(qdos_hal* hal, qdos_store_scope scope, qdos_st
 	return QDOS_STORE_OK;
 }
 
-/** Put a program in the system store, which nothing is allowed to write */
-static void seed_system(const char* name, const char* source) {
+/** Put a program in a read-only scope, which nothing is allowed to write */
+static void seed_scope(qdos_store_scope scope, const char* name, const char* source) {
 	for (int i = 0; i < SLOTS; i++) {
 		if (g_slots[i].used)
 			continue;
 		snprintf(g_slots[i].name, sizeof(g_slots[i].name), "%s.qd", name);
 		memcpy(g_slots[i].data, source, strlen(source));
 		g_slots[i].len = strlen(source);
-		g_slots[i].scope = QDOS_SCOPE_SYSTEM;
+		g_slots[i].scope = scope;
 		g_slots[i].used = true;
 		return;
 	}
+}
+
+static void seed_system(const char* name, const char* source) {
+	seed_scope(QDOS_SCOPE_SYSTEM, name, source);
+}
+
+/** As if a PC had dropped the file on the card */
+static void seed_inbox(const char* name, const char* source) {
+	seed_scope(QDOS_SCOPE_INBOX, name, source);
 }
 
 static qdos_hal make_hal(void) {
@@ -409,6 +418,150 @@ static void test_erase_cannot_touch_system(void) {
 	CHECK(qdos_program_is_system(&hal, "keep"));
 }
 
+/* ---------------------------------------------------------------------- */
+/* The inbox                                                              */
+/*                                                                        */
+/* Programs uploaded from a PC. Read-only like the shipped ones, so an     */
+/* upload can be overridden but never overwrites what was written here.    */
+/* ---------------------------------------------------------------------- */
+
+static void test_the_inbox_is_its_own_scope(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_inbox("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	char buf[QDOS_PROGRAM_MAX];
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_INBOX, "hyp", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "hyp", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_SYSTEM, "hyp", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
+
+	CHECK(qdos_program_is_inbox(&hal, "hyp"));
+	CHECK(!qdos_program_is_user(&hal, "hyp"));
+	CHECK(!qdos_program_is_system(&hal, "hyp"));
+
+	// Read-only, so the shell refuses to drop it
+	CHECK(qdos_program_is_readonly(&hal, "hyp"));
+}
+
+/**
+ * The bug this scope exists to fix: an upload used to be copied into the user
+ * store at every boot, so editing it on the calculator lasted until power-off.
+ */
+static void test_an_upload_never_overwrites_the_users_own(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_inbox("thing", "fn thing( -- r:i64) { 1 }");
+
+	// The user edits it on the calculator
+	CHECK(qdos_program_save(&hal, "thing", "fn thing( -- r:i64) { 2 }") == QDOS_STORE_OK);
+
+	// Both copies are still there, each in its own scope
+	char buf[QDOS_PROGRAM_MAX];
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_INBOX, "thing", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(strstr(buf, "1") != NULL);
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "thing", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(strstr(buf, "2") != NULL);
+
+	// And the user's is the one that answers, however often this is repeated
+	qd_interp* interp = qd_interp_create(256);
+	for (int boot = 0; boot < 3; boot++) {
+		CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_INBOX, interp) == 1);
+		CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_USER, interp) == 1);
+
+		qd_interp_value value;
+		CHECK(qd_interp_eval(interp, "thing"));
+		CHECK(qd_interp_peek(interp, 0, &value) && value.i == 2);
+		qd_interp_eval(interp, "clear");
+	}
+	qd_interp_destroy(interp);
+}
+
+/** Erasing an override falls back to the card, not past it to the firmware. */
+static void test_the_card_sits_between_firmware_and_user(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_system("thing", "fn thing( -- r:i64) { 1 }");
+	seed_inbox("thing", "fn thing( -- r:i64) { 2 }");
+	CHECK(qdos_program_save(&hal, "thing", "fn thing( -- r:i64) { 3 }") == QDOS_STORE_OK);
+
+	qd_interp* interp = qd_interp_create(256);
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++)
+		CHECK(qdos_programs_restore(&hal, (qdos_store_scope)scope, interp) == 1);
+
+	qd_interp_value value;
+	CHECK(qd_interp_eval(interp, "thing"));
+	CHECK(qd_interp_peek(interp, 0, &value) && value.i == 3); // the user's own
+	qd_interp_destroy(interp);
+}
+
+/** Every origin is reported, so the list can say where each one came from. */
+static void test_gather_marks_all_three_origins(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_system("shipped", "fn shipped( -- r:i64) { 1 }");
+	seed_inbox("uploaded", "fn uploaded( -- r:i64) { 2 }");
+	seed_inbox("both", "fn both( -- r:i64) { 3 }");
+	CHECK(qdos_program_save(&hal, "both", "fn both( -- r:i64) { 4 }") == QDOS_STORE_OK);
+	CHECK(qdos_program_save(&hal, "mine", "fn mine( -- r:i64) { 5 }") == QDOS_STORE_OK);
+
+	qdos_program_entry entries[8];
+	const size_t count = qdos_programs_gather(&hal, entries, 8);
+	CHECK(count == 4);
+
+	// Sorted, so the order is known: both, mine, shipped, uploaded
+	CHECK_STR(entries[0].name, "both");
+	CHECK(entries[0].inbox && entries[0].user && !entries[0].system);
+
+	CHECK_STR(entries[1].name, "mine");
+	CHECK(entries[1].user && !entries[1].inbox && !entries[1].system);
+
+	CHECK_STR(entries[2].name, "shipped");
+	CHECK(entries[2].system && !entries[2].inbox && !entries[2].user);
+
+	CHECK_STR(entries[3].name, "uploaded");
+	CHECK(entries[3].inbox && !entries[3].user && !entries[3].system);
+}
+
+/**
+ * Reloading the inbox mid-session must not cost the stack. At boot there is
+ * nothing on it, but the USB setting reloads with the user's work in hand.
+ */
+static void test_restoring_keeps_what_is_on_the_stack(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_inbox("noisy", "fn noisy( -- r:i64) { 7 }");
+
+	qd_interp* interp = qd_interp_create(256);
+	CHECK(qd_interp_eval(interp, "1 2 +"));
+	CHECK(qd_interp_depth(interp) == 1);
+
+	CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_INBOX, interp) == 1);
+
+	qd_interp_value value;
+	CHECK(qd_interp_depth(interp) == 1);
+	CHECK(qd_interp_peek(interp, 0, &value) && value.i == 3);
+
+	qd_interp_destroy(interp);
+}
+
+/** A file that runs rather than declares still leaves nothing behind. */
+static void test_restoring_drops_what_a_program_pushed(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_inbox("litter", "1 2 3");
+
+	qd_interp* interp = qd_interp_create(256);
+	CHECK(qd_interp_eval(interp, "9"));
+
+	qdos_programs_restore(&hal, QDOS_SCOPE_INBOX, interp);
+
+	qd_interp_value value;
+	CHECK(qd_interp_depth(interp) == 1); // the 9, and none of the litter
+	CHECK(qd_interp_peek(interp, 0, &value) && value.i == 9);
+
+	qd_interp_destroy(interp);
+}
+
 int main(void) {
 	test_encode_decode_roundtrip();
 	test_encoding_is_explicit();
@@ -427,5 +580,11 @@ int main(void) {
 	test_system_and_user_are_separate();
 	test_user_shadows_system();
 	test_erase_cannot_touch_system();
+	test_the_inbox_is_its_own_scope();
+	test_an_upload_never_overwrites_the_users_own();
+	test_the_card_sits_between_firmware_and_user();
+	test_gather_marks_all_three_origins();
+	test_restoring_keeps_what_is_on_the_stack();
+	test_restoring_drops_what_a_program_pushed();
 	return check_report("storage");
 }

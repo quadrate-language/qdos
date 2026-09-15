@@ -27,12 +27,12 @@ cat > "${TARGET_DIR}/etc/inittab" <<'EOF'
 ::sysinit:/bin/mkdir -p /var/lib/qdos
 ::sysinit:/bin/mount -t ext4 /dev/mmcblk0p3 /var/lib/qdos
 
-# Programs uploaded from a PC. The boot partition is FAT, so any machine can
-# mount the card and drop a .qd file on it; the data partition is ext4 and most
-# cannot. Importing moves them into the writable store, where they behave like
-# words declared on the calculator itself.
-::sysinit:/bin/mount -t vfat -o ro /dev/mmcblk0p1 /boot
-::sysinit:/usr/bin/qdos-import
+# Programs uploaded from a PC, on their own FAT partition so any machine can
+# write it and the USB gadget can hand the whole thing over. Mounted read-only
+# and read in place: QDOS never copies out of here, so editing an upload on the
+# calculator cannot be undone by the next boot.
+::sysinit:/bin/mkdir -p /mnt/inbox
+::sysinit:/bin/mount -t vfat -o ro /dev/mmcblk0p4 /mnt/inbox
 
 # The calculator itself, restarted if it ever exits.
 #
@@ -51,18 +51,50 @@ EOF
 # partition keeps the rootfs read-only, so pulling the power cannot corrupt it.
 mkdir -p "${TARGET_DIR}/var/lib/qdos"
 
-cat > "${TARGET_DIR}/usr/bin/qdos-import" <<'EOF'
+# Hands the inbox partition to a PC and takes it back. QDOS runs this from the
+# USB setting; the messy half lives here so it can be read and fixed on the
+# machine without rebuilding the firmware.
+#
+# The partition is unmounted while the host has it. Two operating systems
+# writing one filesystem corrupts it, and the host must be the only writer.
+cat > "${TARGET_DIR}/usr/bin/qdos-usb" <<'EOF'
 #!/bin/sh
-# Copy uploaded programs off the boot partition into the writable store.
-for f in /boot/qdos/*.qd; do
-	[ -f "$f" ] || continue
-	cp "$f" /var/lib/qdos/ 2>/dev/null || true
-done
-sync
-EOF
-chmod 0755 "${TARGET_DIR}/usr/bin/qdos-import"
+set -eu
 
-mkdir -p "${TARGET_DIR}/boot"
+DEV=/dev/mmcblk0p4
+MNT=/mnt/inbox
+
+case "${1:-}" in
+share)
+	# Flush and let go before the host touches a single block
+	sync
+	umount "$MNT" 2>/dev/null || true
+
+	if ! modprobe g_mass_storage "file=$DEV" removable=1 stall=0 iSerialNumber=qdos; then
+		# Put it back: failing to share is a nuisance, but leaving the
+		# calculator without its inbox is a fault
+		mount -t vfat -o ro "$DEV" "$MNT" 2>/dev/null || true
+		exit 1
+	fi
+	;;
+take)
+	modprobe -r g_mass_storage 2>/dev/null || true
+
+	# Never fail here. The gadget is already gone, so refusing would leave
+	# QDOS thinking the card is still shared when it is not. A host that
+	# unplugged early may have left the filesystem dirty; an inbox that will
+	# not mount reads as empty, which the shell already copes with.
+	mount -t vfat -o ro "$DEV" "$MNT" 2>/dev/null || true
+	;;
+*)
+	echo "usage: qdos-usb share|take" >&2
+	exit 2
+	;;
+esac
+EOF
+chmod 0755 "${TARGET_DIR}/usr/bin/qdos-usb"
+
+mkdir -p "${TARGET_DIR}/mnt/inbox"
 
 # Programs shipped with the firmware. These live on the read-only rootfs, so a
 # user can override one but never lose it, and an unclean power-off cannot
@@ -83,7 +115,7 @@ proc            /proc           proc    defaults        0 0
 sysfs           /sys            sysfs   defaults        0 0
 tmpfs           /tmp            tmpfs   defaults        0 0
 /dev/mmcblk0p3  /var/lib/qdos   ext4    defaults,noatime 0 0
-/dev/mmcblk0p1  /boot           vfat    ro,noatime      0 0
+/dev/mmcblk0p4  /mnt/inbox      vfat    ro,noatime      0 0
 EOF
 
 # Device-tree overlays we maintain ourselves, compiled into the firmware's

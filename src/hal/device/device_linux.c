@@ -24,6 +24,7 @@
 #include <sys/mman.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -39,6 +40,7 @@ typedef struct {
 	bool running;
 	const char* store_dir;
 	const char* system_dir;
+	const char* inbox_dir;
 	int tty_fd;		 ///< The VT whose text output is suspended while we draw
 	bool first_paint;
 } device_state;
@@ -48,11 +50,26 @@ static const char* env_or(const char* name, const char* fallback) {
 	return (value && *value) ? value : fallback;
 }
 
+/**
+ * The messy part of sharing the inbox -- unmounting it, binding the gadget,
+ * putting it back -- lives in a script, where it can be read and fixed on the
+ * machine itself rather than needing a rebuilt firmware.
+ */
+static const char* usb_helper(void) {
+	return env_or("QDOS_USB_HELPER", "/usr/bin/qdos-usb");
+}
+
 static int device_init(qdos_hal* hal) {
 	device_state* st = (device_state*)hal->impl;
 
 	st->store_dir = env_or("QDOS_STORE", "/var/lib/qdos");
 	st->system_dir = env_or("QDOS_SYSTEM_STORE", "/usr/share/qdos/programs");
+	st->inbox_dir = env_or("QDOS_INBOX", "/mnt/inbox");
+
+	// Only offer USB where the helper is installed, so a machine without one
+	// does not show a setting that cannot do anything
+	if (access(usb_helper(), X_OK) != 0)
+		hal->usb_export = NULL;
 
 	const char* fb_path = env_or("QDOS_FB", "/dev/fb0");
 	st->fb_fd = open(fb_path, O_RDWR);
@@ -175,7 +192,11 @@ static void device_idle(qdos_hal* hal) {
 }
 
 static const char* dir_for(device_state* st, qdos_store_scope scope) {
-	return (scope == QDOS_SCOPE_SYSTEM) ? st->system_dir : st->store_dir;
+	switch (scope) {
+		case QDOS_SCOPE_SYSTEM: return st->system_dir;
+		case QDOS_SCOPE_INBOX: return st->inbox_dir;
+		default: return st->store_dir;
+	}
 }
 
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
@@ -250,6 +271,26 @@ static qdos_store_result device_store_list(
 	return QDOS_STORE_OK;
 }
 
+/** Hand the inbox partition to a host, or take it back. */
+static int device_usb_export(qdos_hal* hal, bool on) {
+	(void)hal;
+
+	const pid_t pid = fork();
+	if (pid < 0)
+		return -1;
+
+	if (pid == 0) {
+		execl(usb_helper(), usb_helper(), on ? "share" : "take", (char*)NULL);
+		_exit(127); // only reached if the helper is gone since init checked
+	}
+
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0)
+		return -1;
+
+	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
 static device_state g_device;
 
 void qdos_device_hal(qdos_hal* hal) {
@@ -267,5 +308,6 @@ void qdos_device_hal(qdos_hal* hal) {
 	hal->store_read = device_store_read;
 	hal->store_write = device_store_write;
 	hal->store_list = device_store_list;
+	hal->usb_export = device_usb_export; // init() clears it if there is no helper
 	hal->impl = &g_device;
 }

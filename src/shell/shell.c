@@ -41,9 +41,16 @@
 
 /* Numbered rows already say how deep the stack is, so it starts at the top */
 #define ROW_STACK_FIRST 0
-#define ROW_MESSAGE (QDOS_ROWS - 3)
-#define ROW_CONTENT_LAST (ROW_MESSAGE - 1)
+#define ROW_CONTENT_LAST (QDOS_ROWS - 3)
 #define ROW_INPUT (QDOS_ROWS - 2)
+
+/*
+ * A message borrows the input line rather than keeping a row of its own. The
+ * panel has ten rows and a message is on screen for one keypress in twenty, so
+ * a row reserved for it is a row wasted nineteen times over. The next key takes
+ * the line back -- see handle_key().
+ */
+#define ROW_MESSAGE ROW_INPUT
 
 /* Last row, so the labels sit against the edge the function keys are under */
 #define ROW_SOFT (QDOS_ROWS - 1)
@@ -76,6 +83,7 @@ typedef enum {
 typedef enum {
 	SETTING_ANGLE = 0,
 	SETTING_DECIMALS,
+	SETTING_USB, ///< Last, so leaving it out is only a smaller count
 	SETTING__COUNT
 } qdos_setting;
 
@@ -116,6 +124,7 @@ struct qdos_shell {
 	bool undo_ready;
 	bool delete_armed;  ///< One press of backspace has already asked
 	bool powering_off;  ///< Set by the power key, acted on by the run loop
+	bool usb_exported;  ///< The inbox is currently a PC's to write to
 
 	qdos_editor ed;
 	size_t ed_top; ///< First visible line
@@ -490,7 +499,10 @@ static void enter_line_mode(qdos_shell* sh) {
 	entry_commit(sh);
 	sh->mode = QDOS_MODE_LINE;
 	input_clear(sh);
-	set_message(sh, "LINE MODE - ESC TO LEAVE", false);
+
+	// No announcement: it would sit on the input line and hide the ':' prompt,
+	// which is what says the mode changed. The soft row already labels ESC.
+	set_message(sh, "", false);
 }
 
 static void leave_line_mode(qdos_shell* sh) {
@@ -686,6 +698,17 @@ static const char* list_name(const qdos_shell* sh, size_t i) {
 	return sh->list_all ? sh->list.name[i] : sh->apps[i].name;
 }
 
+/** @brief Read a program from wherever it lives, nearest scope first */
+static bool load_program_anywhere(qdos_shell* sh, const char* name, char* out, size_t cap) {
+	static const qdos_store_scope ORDER[] = {QDOS_SCOPE_USER, QDOS_SCOPE_INBOX, QDOS_SCOPE_SYSTEM};
+
+	for (size_t i = 0; i < sizeof(ORDER) / sizeof(*ORDER); i++) {
+		if (qdos_program_load(sh->hal, ORDER[i], name, out, cap) == QDOS_STORE_OK)
+			return true;
+	}
+	return false;
+}
+
 static void list_load(qdos_shell* sh) {
 	if (sh->list_all)
 		qdos_wordlist_gather(sh->interp, &sh->list);
@@ -783,10 +806,7 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 			const char* name = list_name(sh, sh->list_sel);
 			char source[QDOS_PROGRAM_MAX];
-			const bool found =
-					qdos_program_load(sh->hal, QDOS_SCOPE_USER, name, source, sizeof(source)) == QDOS_STORE_OK ||
-					qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK;
-			if (found)
+			if (load_program_anywhere(sh, name, source, sizeof(source)))
 				edit_open(sh, name, source);
 			break;
 		}
@@ -797,7 +817,9 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 			const char* name = list_name(sh, sh->list_sel);
 			if (!qdos_program_is_user(sh->hal, name)) {
-				set_message(sh, "THAT ONE IS SHIPPED", false);
+				set_message(sh, qdos_program_is_inbox(sh->hal, name) ? "TAKE IT OFF THE CARD"
+																	 : "THAT ONE IS SHIPPED",
+						false);
 				break;
 			}
 
@@ -866,9 +888,11 @@ static void check_program(qdos_shell* sh) {
 		return;
 	}
 
+	// The same vocabulary the real interpreter has, or a program that calls
+	// another would fail to compile here and nowhere else
 	register_natives(sh, scratch);
-	qdos_programs_restore(sh->hal, QDOS_SCOPE_SYSTEM, scratch);
-	qdos_programs_restore(sh->hal, QDOS_SCOPE_USER, scratch);
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++)
+		qdos_programs_restore(sh->hal, (qdos_store_scope)scope, scratch);
 
 	char message[80];
 	const bool ok = qdos_guarded_eval(scratch, sh->ed.text);
@@ -958,6 +982,12 @@ static bool expand_soft(qdos_shell* sh, const qdos_key_event* in, qdos_key_event
 }
 
 static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
+	// A message is holding the input line, so this press takes it back. Set
+	// first, so whatever this key has to say replaces it rather than being
+	// wiped by it.
+	sh->message[0] = '\0';
+	sh->message_is_error = false;
+
 	qdos_key_event expanded;
 	if (expand_soft(sh, ev, &expanded)) {
 		handle_mode_key(sh, &expanded);
@@ -965,6 +995,37 @@ static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 
 	handle_mode_key(sh, ev);
+}
+
+/** USB is only offered where the backend can actually hand the inbox over */
+static size_t setting_count(const qdos_shell* sh) {
+	return sh->hal->usb_export ? SETTING__COUNT : SETTING__COUNT - 1;
+}
+
+/**
+ * @brief Hand the inbox to a PC, or take it back and read what landed
+ *
+ * Taking it back is the moment an upload becomes a word, so the programs are
+ * declared again there rather than on the next boot.
+ */
+static void toggle_usb(qdos_shell* sh) {
+	const bool want = !sh->usb_exported;
+
+	if (sh->hal->usb_export(sh->hal, want) != 0) {
+		set_message(sh, "USB WOULD NOT SWITCH", true);
+		return;
+	}
+	sh->usb_exported = want;
+
+	if (want) {
+		set_message(sh, "PLUG INTO A PC", false);
+		return;
+	}
+
+	const int found = qdos_programs_restore(sh->hal, QDOS_SCOPE_INBOX, sh->interp);
+	char message[QDOS_COLS + 1];
+	snprintf(message, sizeof(message), "%d FROM THE CARD", found > 0 ? found : 0);
+	set_message(sh, message, false);
 }
 
 static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
@@ -975,7 +1036,7 @@ static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 			break;
 
 		case QDOS_KEY_DOWN:
-			if (sh->setting_sel + 1 < SETTING__COUNT)
+			if (sh->setting_sel + 1 < setting_count(sh))
 				sh->setting_sel++;
 			break;
 
@@ -983,6 +1044,8 @@ static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_RIGHT:
 			if (sh->setting_sel == SETTING_ANGLE) {
 				qdos_math_set_degrees(!qdos_math_degrees());
+			} else if (sh->setting_sel == SETTING_USB) {
+				toggle_usb(sh);
 			} else {
 				sh->decimals = (sh->decimals >= DECIMALS_MAX) ? DECIMALS_AUTO : sh->decimals + 1;
 			}
@@ -991,6 +1054,8 @@ static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_LEFT:
 			if (sh->setting_sel == SETTING_ANGLE) {
 				qdos_math_set_degrees(!qdos_math_degrees());
+			} else if (sh->setting_sel == SETTING_USB) {
+				toggle_usb(sh);
 			} else {
 				sh->decimals = (sh->decimals <= DECIMALS_AUTO) ? DECIMALS_MAX : sh->decimals - 1;
 			}
@@ -1163,10 +1228,10 @@ static void render_settings(qdos_shell* sh, qdos_console* con) {
 	char value[16];
 	decimals_text(sh, value, sizeof(value));
 
-	static const char* const NAMES[SETTING__COUNT] = {"ANGLE", "DECIMALS"};
-	const char* values[SETTING__COUNT] = {angle_text(), value};
+	static const char* const NAMES[SETTING__COUNT] = {"ANGLE", "DECIMALS", "USB"};
+	const char* values[SETTING__COUNT] = {angle_text(), value, sh->usb_exported ? "SHARED" : "OFF"};
 
-	for (size_t i = 0; i < SETTING__COUNT; i++) {
+	for (size_t i = 0; i < setting_count(sh); i++) {
 		const int row = ROW_CONTENT_FIRST + (int)i;
 		qdos_console_puts(con, 1, row, NAMES[i]);
 		qdos_console_puts_right(con, row, values[i]);
@@ -1215,8 +1280,12 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 		const int row = ROW_CONTENT_FIRST + (int)i;
 		qdos_console_puts(con, 1, row, list_name(sh, item));
 		if (!sh->list_all) {
+			// Where it came from, and so where to go to be rid of it. A star
+			// means this one is an override with a read-only copy underneath.
 			const qdos_program_entry* e = &sh->apps[item];
-			qdos_console_puts_right(con, row, e->user ? (e->system ? "USER*" : "USER") : "SYS");
+			const char* origin = e->user ? ((e->system || e->inbox) ? "USER*" : "USER")
+										 : (e->inbox ? "CARD" : "SYS");
+			qdos_console_puts_right(con, row, origin);
 		}
 		if (item == sh->list_sel)
 			qdos_console_invert(con, 0, row, QDOS_COLS);
@@ -1229,6 +1298,16 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 
 }
 
+/** @brief Whatever the shell last had to say, under the content */
+static void render_message(qdos_shell* sh, qdos_console* con) {
+	if (!sh->message[0])
+		return;
+
+	qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
+	if (sh->message_is_error)
+		qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
+}
+
 /** @brief Repaint the whole display */
 static void render(qdos_shell* sh) {
 	qdos_console* con = &sh->con;
@@ -1236,31 +1315,25 @@ static void render(qdos_shell* sh) {
 
 	if (sh->mode == QDOS_MODE_EDIT) {
 		render_edit(sh, con);
-		if (sh->message[0]) {
-			qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
-			if (sh->message_is_error)
-				qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
-		}
+		render_message(sh, con);
 		render_soft(sh, con);
 		sh->hal->present(sh->hal, con->fb);
 		return;
 	}
 
 	if (sh->mode == QDOS_MODE_LIST) {
-		render_list(sh, con);
 		// The delete prompt lives here, so the list has to show messages too
-		if (sh->message[0]) {
-			qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
-			if (sh->message_is_error)
-				qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
-		}
+		render_list(sh, con);
+		render_message(sh, con);
 		render_soft(sh, con);
 		sh->hal->present(sh->hal, con->fb);
 		return;
 	}
 
 	if (sh->mode == QDOS_MODE_SETTINGS) {
+		// Sharing the card reports from here, so this page needs one as well
 		render_settings(sh, con);
+		render_message(sh, con);
 		render_soft(sh, con);
 		sh->hal->present(sh->hal, con->fb);
 		return;
@@ -1304,11 +1377,14 @@ static void render(qdos_shell* sh) {
 		qdos_console_puts(con, 0, ROW_STACK_FIRST, "...");
 
 	qdos_console_rule(con, ROW_CONTENT_LAST);
+	render_soft(sh, con);
 
+	// The message and the input line are the same row, so only one is on it.
+	// What was typed is still there underneath, and the next key brings it back.
 	if (sh->message[0]) {
-		qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
-		if (sh->message_is_error)
-			qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
+		render_message(sh, con);
+		sh->hal->present(sh->hal, con->fb);
+		return;
 	}
 
 	const bool line_mode = (sh->mode == QDOS_MODE_LINE);
@@ -1324,8 +1400,6 @@ static void render(qdos_shell* sh) {
 			len = sh->input_len - (size_t)(newline + 1 - sh->input);
 		}
 	}
-
-	render_soft(sh, con);
 
 	qdos_console_puts(con, 0, ROW_INPUT, prompt);
 
@@ -1472,9 +1546,10 @@ static int native_forget(qd_context* ctx, void* userdata) {
 
 	char message[80];
 
-	// A shipped program cannot be removed, only overridden
-	if (qdos_program_is_system(sh->hal, name) && !qdos_program_is_user(sh->hal, name)) {
-		snprintf(message, sizeof(message), "'%.12s' IS BUILT IN", name);
+	// A read-only program cannot be removed, only overridden
+	if (qdos_program_is_readonly(sh->hal, name) && !qdos_program_is_user(sh->hal, name)) {
+		const bool card = qdos_program_is_inbox(sh->hal, name);
+		snprintf(message, sizeof(message), "'%.10s' IS %s", name, card ? "ON THE CARD" : "BUILT IN");
 		qd_set_error_msg(ctx, message);
 		return 1;
 	}
@@ -1487,9 +1562,11 @@ static int native_forget(qd_context* ctx, void* userdata) {
 
 	qdos_program_erase(sh->hal, name);
 
-	// Forgetting an override brings the shipped version back
+	// Forgetting an override brings back whatever it was covering, card before
+	// firmware, so the same copy wins as at startup
 	char source[QDOS_PROGRAM_MAX];
-	if (qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK)
+	if (qdos_program_load(sh->hal, QDOS_SCOPE_INBOX, name, source, sizeof(source)) == QDOS_STORE_OK
+			|| qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK)
 		qdos_guarded_eval(sh->interp, source);
 
 	return 0;
@@ -1511,9 +1588,7 @@ static int native_edit(qd_context* ctx, void* userdata) {
 	}
 
 	char source[QDOS_PROGRAM_MAX];
-	const bool found =
-			qdos_program_load(sh->hal, QDOS_SCOPE_USER, name, source, sizeof(source)) == QDOS_STORE_OK ||
-			qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK;
+	const bool found = load_program_anywhere(sh, name, source, sizeof(source));
 
 	// An unknown name starts a new program rather than being an error
 	edit_open(sh, name, found ? source : NULL);
@@ -1558,21 +1633,18 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	register_natives(sh, sh->interp);
 	qdos_console_init(&sh->con);
 
-	// System first, so a user program of the same name shadows it
-	const int sys = qdos_programs_restore(hal, QDOS_SCOPE_SYSTEM, sh->interp);
-	const int programs = qdos_programs_restore(hal, QDOS_SCOPE_USER, sh->interp);
-	const qdos_store_result restored = qdos_storage_restore_session(hal, sh->interp);
+	// In scope order, so each one shadows the one before it
+	qdos_programs_restore(hal, QDOS_SCOPE_SYSTEM, sh->interp);
+	qdos_programs_restore(hal, QDOS_SCOPE_INBOX, sh->interp);
+	qdos_programs_restore(hal, QDOS_SCOPE_USER, sh->interp);
 
-	char message[80];
-	if (programs > 0 || sys > 0) {
-		snprintf(message, sizeof(message), "READY - %d SYS %d USER",
-				 sys > 0 ? sys : 0, programs > 0 ? programs : 0);
-		set_message(sh, message, false);
-	} else if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
+	// A calculator that is ready says so by being on screen, so a clean boot
+	// leaves the message line empty. Only a restored stack is worth a word,
+	// because the numbers above the prompt would otherwise be unexplained.
+	const qdos_store_result restored = qdos_storage_restore_session(hal, sh->interp);
+	if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0)
 		set_message(sh, "SESSION RESTORED", false);
-	} else {
-		set_message(sh, "READY", false);
-	}
+
 	return sh;
 }
 

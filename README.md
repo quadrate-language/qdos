@@ -52,17 +52,22 @@ open:
 Braces inside a string are text, not structure, and an unmatched closer submits
 so the parser can report it.
 
-Programs come from two places. `/usr/share/qdos/programs` ships with the
-firmware on the read-only rootfs; `/var/lib/qdos` is yours. In the simulator
-those are `programs/system` in this tree and `qdos-store` beside it, both
-overridable with `QDOS_SYSTEM_STORE` and `QDOS_STORE`. The simulator does not
-seed your store, so to try the shipped user app there:
-`cp programs/user/*.qd qdos-store/`. System programs load
-first, so a program of yours with the same name shadows one of theirs. The HAL
-enforces this by shape rather than by a check: `store_read` and `store_list`
-take a scope, and `store_write` does not, so the system store has no path to it.
+Programs come from three places, each a scope of its own:
 
-`"name" edit` opens the program in an editor over the stack area -- six lines
+| Scope | On the device | In the simulator | Override |
+|---|---|---|---|
+| system | `/usr/share/qdos/programs` | `programs/system` | `QDOS_SYSTEM_STORE` |
+| inbox | `/mnt/inbox` | `qdos-inbox` | `QDOS_INBOX` |
+| user | `/var/lib/qdos` | `qdos-store` | `QDOS_STORE` |
+
+They load in that order, so a program of yours shadows an uploaded one, which
+shadows one shipped in the firmware. Only the last is writable, and the HAL
+enforces that by shape rather than by a check: `store_read` and `store_list`
+take a scope, and `store_write` does not, so nothing else has a path to them.
+The simulator does not seed your store, so to try the shipped user app there:
+`cp programs/user/*.qd qdos-store/`.
+
+`"name" edit` opens the program in an editor over the stack area -- seven lines
 at a time of the real source, comments and layout intact, scrolling as the
 cursor leaves the pane. Arrows move, `ent` splits a line, and the soft
 keys do the rest.
@@ -134,17 +139,42 @@ still there after a power cycle:
 
 `"sq" forget` removes it from storage as well as from the session.
 
-Programs can also be uploaded without typing them. Mount the card's first
-partition — FAT, so any machine can write to it — and drop a `.qd` file in the
-`qdos/` directory:
+### Installing programs
+
+Programs can also be uploaded rather than typed. The card's fourth partition is
+the inbox: FAT, labelled `QDOS-INBOX`, so any machine can write to it. Drop a
+`.qd` file at its root, one word per file, named after the word:
 
 ```
-/boot/qdos/sq.qd     fn sq(x:i64 -- r:i64) { dup * }
+sq.qd     fn sq(x:i64 -- r:i64) { dup * }
 ```
 
-QDOS copies it into the writable store at boot, after which it behaves like a
-word declared on the calculator itself. A file that does not parse is skipped
-rather than fatal: one bad upload should not cost the user their calculator.
+Two ways to reach it:
+
+- **Over USB.** Set `USB` to `SHARED` under SETTINGS and plug the data port into
+  a PC; the inbox appears as a USB drive. Setting it back to `OFF` unmounts it
+  from the host and declares whatever arrived, without a reboot. Chosen over a
+  network service because it costs nothing while unplugged, and because the
+  machine is on wall power at exactly the moment the feature is used.
+- **In a card reader.** Pull the card and mount the inbox partition directly.
+
+QDOS reads the inbox in place and never writes to it, so it is a scope of its
+own rather than a copy. That means an uploaded program can be overridden by
+editing it on the calculator — the APPS list marks the result `USER*` — and the
+override survives every later boot. Deleting an upload for good means deleting
+the file from the card, which is where it came from.
+
+A file that does not parse is skipped rather than fatal: one bad upload should
+not cost the user their calculator.
+
+The APPS list says where each program came from:
+
+| Mark | Where it lives |
+|---|---|
+| `SYS` | Shipped in the firmware, on the read-only rootfs |
+| `CARD` | Uploaded, on the inbox partition |
+| `USER` | Written on the calculator |
+| `USER*` | Written here, covering a `SYS` or `CARD` copy underneath |
 
 On the device the evdev mapping covers a full keyboard, so line mode is usable
 with a USB keyboard before the machine has its own keys. Set `QDOS_KEYMAP` to
@@ -245,8 +275,10 @@ sudo dd if=~/.cache/qdos-firmware/build/images/sdcard.img of=/dev/sdX bs=4M conv
 See [firmware/README.md](./firmware/README.md) for what the image contains and
 which path to use when.
 
-`QDOS_FB`, `QDOS_INPUT` and `QDOS_STORE` override the device paths, so the binary
-can be pointed at whatever the board enumerates without rebuilding.
+`QDOS_FB`, `QDOS_INPUT`, `QDOS_STORE` and `QDOS_INBOX` override the device paths,
+so the binary can be pointed at whatever the board enumerates without rebuilding.
+`QDOS_USB_HELPER` names the script behind the USB setting; where it is missing
+the setting is not offered at all.
 
 An SPI panel driven by `fbtft` (ST7789, ILI9341) presents a genuine `/dev/fb0`,
 which is what this backend wants. A GPIO matrix behind the `matrix-keypad` device
@@ -269,7 +301,7 @@ value slot sto      store in a numbered register (0-99), any type
 slot rcl            recall it
 slot clr            empty it
 "name" forget       remove a Quadrate-defined word
-cls                 clear the message line
+cls                 take a message down without pressing a key
 ```
 
 Registers persist through the HAL, and the stack itself is saved on power-off
@@ -308,9 +340,18 @@ The kernel's boot logo is the same glyphs: `tools/genlogo.py` reads
 a framebuffer driver cannot drift from what the shell paints after. Regenerate
 both when the font changes.
 
-Everything is drawn at that one size, which leaves seven stack entries visible
+Everything is drawn at that one size, which leaves eight stack entries visible
 above the input line. A 64-bit integer is 19 digits and fits across 25 columns
 beside its index label.
+
+The eighth is there because a message has no row of its own. Errors and what a
+program printed take over the input line while they are up, inverted if they are
+errors, and the next keypress hands the line back with what you were typing
+still on it. A row held permanently for something on screen one keypress in
+twenty is a row wasted the other nineteen, and on a ten-row panel that is the
+difference between seven stack entries and eight. It buys a row everywhere, not
+just in the calculator: the apps list and the editor show seven lines rather
+than six. `cls` takes a message down without pressing anything.
 
 A rule is a single pixel along the bottom edge of a row, and the lowest ink in
 the font is two pixels above that, so a rule underlines a row of content rather
@@ -322,7 +363,7 @@ the pane in the list and the editor.
 The calculator does not caption itself. A title row costs a stack entry to say
 what the machine in your hand already is, and `1:` `2:` `3:` down the left edge
 count the depth that a `DEPTH n` readout used to spell out, so the stack starts
-at the top row and a seventh entry shows as `...` rather than scrolling away
+at the top row and a ninth entry shows as `...` rather than scrolling away
 unannounced. The apps menu and the editor keep their headers, which carry
 something the pane below cannot: `APPS` or `WORDS` with the position in the
 list, and the program name with `line:col`.
@@ -428,7 +469,7 @@ of the trigonometry, because `sin 30` is asked for far more often than
 
 `print` and `nl` are built into the runtime and write to stdout, which on the
 device goes nowhere at all. Evaluation runs with stdout on a pipe, so what a
-program prints lands in the message line and in the debug log. It cannot be
+program prints lands on the input line and in the debug log. It cannot be
 done by registering a word: the runtime resolves these names itself and a
 native of the same name is never called.
 

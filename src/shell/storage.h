@@ -77,8 +77,9 @@ int qdos_programs_restore(qdos_hal* hal, qdos_store_scope scope, qd_interp* inte
 
 typedef struct {
 	char name[QDOS_PROGRAM_NAME_MAX];
-	bool system;
-	bool user;
+	bool system; ///< Shipped in the firmware
+	bool inbox;	 ///< Uploaded from a PC
+	bool user;	 ///< Written here
 } qdos_program_entry;
 
 /**
@@ -87,10 +88,24 @@ typedef struct {
  */
 size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap);
 
+bool qdos_program_in_scope(qdos_hal* hal, qdos_store_scope scope, const char* name);
+
 /** @brief Whether a program of this name is shipped with the firmware */
 bool qdos_program_is_system(qdos_hal* hal, const char* name);
 
 bool qdos_program_is_user(qdos_hal* hal, const char* name);
+
+/** @brief Whether a program of this name was uploaded from a PC */
+bool qdos_program_is_inbox(qdos_hal* hal, const char* name);
+
+/**
+ * @brief Whether this name comes from a scope that cannot be written
+ *
+ * Shipped and uploaded programs are both read-only here: they can be overridden
+ * by saving one of the same name, but not dropped. An upload is dropped by
+ * taking the file off the card it came from.
+ */
+bool qdos_program_is_readonly(qdos_hal* hal, const char* name);
 
 qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp);
 

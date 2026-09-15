@@ -54,8 +54,9 @@
 
 # --- Wireless: keep only the chip the board has -------------------------------
 # The Zero W and Zero 2 W both use a Broadcom part, so brcmfmac stays and every
-# other vendor goes. Programs are uploaded over the SD card today; keeping this
-# one driver leaves the door open to doing it over the network later.
+# other vendor goes. Programs are uploaded over USB or the card itself, neither
+# of which needs this; keeping the one driver leaves the door open to adding a
+# network path later, and it costs nothing while no firmware is installed for it.
 # CONFIG_WLAN_VENDOR_ADMTEK is not set
 # CONFIG_WLAN_VENDOR_ATH is not set
 # CONFIG_WLAN_VENDOR_ATMEL is not set

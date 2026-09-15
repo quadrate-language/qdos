@@ -105,10 +105,19 @@ typedef enum {
 
 typedef struct qdos_hal qdos_hal;
 
-/** @brief Which store. Only the user one is writable. */
+/**
+ * @brief Which store. Only the user one is writable.
+ *
+ * Listed in the order a program of the same name shadows one before it, so a
+ * word written on the calculator wins over an uploaded one, which wins over
+ * one shipped in the firmware. Nothing is ever lost: the two read-only scopes
+ * are still there under an override, and erasing it brings them back.
+ */
 typedef enum {
 	QDOS_SCOPE_SYSTEM = 0, ///< Shipped with the firmware, on the read-only rootfs
-	QDOS_SCOPE_USER = 1
+	QDOS_SCOPE_INBOX = 1,  ///< Uploaded from a PC, read-only like the firmware's own
+	QDOS_SCOPE_USER = 2,   ///< Written on the calculator
+	QDOS_SCOPE__COUNT
 } qdos_store_scope;
 
 /** @brief Receives one stored entry name; false stops the walk */
@@ -139,6 +148,17 @@ struct qdos_hal {
 	/** @brief Unordered, and may be NULL */
 	qdos_store_result (*store_list)(
 			qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user);
+
+	/**
+	 * @brief Hand the inbox to a host over USB, or take it back
+	 *
+	 * While it is handed over the host owns those blocks, so the inbox scope
+	 * reads as empty until it comes back. NULL where the machine has no USB
+	 * gadget, and then the shell does not offer it.
+	 *
+	 * @return 0 on success
+	 */
+	int (*usb_export)(qdos_hal* hal, bool on);
 
 	void* impl; ///< Backend private state
 };

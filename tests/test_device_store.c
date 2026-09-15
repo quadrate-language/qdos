@@ -24,6 +24,12 @@
 static char g_base[64];
 static char g_user[128];
 static char g_system[128];
+static char g_inbox[128];
+
+/* Stands in for /usr/bin/qdos-usb. Kept outside the scope directories so
+ * clearing those between tests does not take it with them. */
+static char g_helper[192];
+static char g_helper_log[192];
 
 static bool make_dirs(void) {
 	snprintf(g_base, sizeof(g_base), "/tmp/qdos-store-XXXXXX");
@@ -34,7 +40,36 @@ static bool make_dirs(void) {
 
 	snprintf(g_user, sizeof(g_user), "%s/user", g_base);
 	snprintf(g_system, sizeof(g_system), "%s/system", g_base);
+	snprintf(g_inbox, sizeof(g_inbox), "%s/inbox", g_base);
+	snprintf(g_helper, sizeof(g_helper), "%s/qdos-usb", g_base);
+	snprintf(g_helper_log, sizeof(g_helper_log), "%s/usb.log", g_base);
 	return true;
+}
+
+/** Install a stand-in helper that records its argument and exits with @p code */
+static void write_helper(int code) {
+	FILE* f = fopen(g_helper, "w");
+	CHECK(f != NULL);
+	if (!f)
+		return;
+
+	fprintf(f, "#!/bin/sh\necho \"$1\" >> %s\nexit %d\n", g_helper_log, code);
+	fclose(f);
+	CHECK(chmod(g_helper, 0755) == 0);
+	unlink(g_helper_log);
+}
+
+/** What the helper was last asked to do, or "" if it was never run */
+static void helper_log(char* out, size_t cap) {
+	out[0] = '\0';
+
+	FILE* f = fopen(g_helper_log, "r");
+	if (!f)
+		return;
+
+	const size_t got = fread(out, 1, cap - 1, f);
+	out[got] = '\0';
+	fclose(f);
 }
 
 static void remove_tree(const char* dir) {
@@ -55,14 +90,16 @@ static void remove_tree(const char* dir) {
 	rmdir(dir);
 }
 
-/** Empty both scopes, so no test inherits what another one stored */
+/** Empty every scope, so no test inherits what another one stored */
 static void reset_dirs(void) {
 	remove_tree(g_user);
 	remove_tree(g_system);
+	remove_tree(g_inbox);
 
-	// Only the system one is made here: the user store is the backend's to
-	// create, since a machine out of the box has never been written to
+	// The user store is the backend's to create, since a machine out of the
+	// box has never been written to. The other two are mounted, not made.
 	CHECK(mkdir(g_system, 0755) == 0);
+	CHECK(mkdir(g_inbox, 0755) == 0);
 }
 
 /**
@@ -77,6 +114,8 @@ static void device_hal(qdos_hal* hal) {
 
 	setenv("QDOS_STORE", g_user, 1);
 	setenv("QDOS_SYSTEM_STORE", g_system, 1);
+	setenv("QDOS_INBOX", g_inbox, 1);
+	setenv("QDOS_USB_HELPER", g_helper, 1);
 	setenv("QDOS_FB", "/nonexistent/qdos-test-fb", 1);
 
 	qdos_device_hal(hal);
@@ -199,12 +238,13 @@ static void test_a_name_cannot_leave_the_store(void) {
 	hal.shutdown(&hal);
 }
 
-/** The two scopes are two directories, and a read says which one it means. */
+/** Each scope is its own directory, and a read says which one it means. */
 static void test_the_scopes_are_separate(void) {
 	qdos_hal hal;
 	device_hal(&hal);
 
 	seed(g_system, "shipped.qd", "SYSTEM");
+	seed(g_inbox, "uploaded.qd", "INBOX");
 
 	char buf[64];
 	size_t len = 0;
@@ -212,8 +252,15 @@ static void test_the_scopes_are_separate(void) {
 	CHECK(len == 6);
 	CHECK(memcmp(buf, "SYSTEM", 6) == 0);
 
-	// The same name is absent from the other scope
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_INBOX, "uploaded.qd", buf, sizeof(buf), &len) == QDOS_STORE_OK);
+	CHECK(len == 5);
+	CHECK(memcmp(buf, "INBOX", 5) == 0);
+
+	// Each name is absent from the scopes it does not belong to
 	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "shipped.qd", buf, sizeof(buf), &len) == QDOS_STORE_NOT_FOUND);
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_INBOX, "shipped.qd", buf, sizeof(buf), &len) == QDOS_STORE_NOT_FOUND);
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_SYSTEM, "uploaded.qd", buf, sizeof(buf), &len) == QDOS_STORE_NOT_FOUND);
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "uploaded.qd", buf, sizeof(buf), &len) == QDOS_STORE_NOT_FOUND);
 
 	hal.shutdown(&hal);
 }
@@ -243,6 +290,32 @@ static void test_a_write_cannot_touch_the_system_store(void) {
 	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "both.qd", buf, sizeof(buf), &len) == QDOS_STORE_OK);
 	CHECK(len == 4);
 	CHECK(memcmp(buf, "USER", 4) == 0);
+
+	hal.shutdown(&hal);
+}
+
+/**
+ * Nor the inbox. The card is a PC's to write, and editing an uploaded program
+ * on the calculator must leave the file that was uploaded alone.
+ */
+static void test_a_write_cannot_touch_the_inbox(void) {
+	qdos_hal hal;
+	device_hal(&hal);
+
+	seed(g_inbox, "both.qd", "CARD");
+
+	CHECK(hal.store_write(&hal, "both.qd", "EDITED", 6) == QDOS_STORE_OK);
+
+	char buf[64];
+	size_t len = 0;
+
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_INBOX, "both.qd", buf, sizeof(buf), &len) == QDOS_STORE_OK);
+	CHECK(len == 4);
+	CHECK(memcmp(buf, "CARD", 4) == 0);
+
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "both.qd", buf, sizeof(buf), &len) == QDOS_STORE_OK);
+	CHECK(len == 6);
+	CHECK(memcmp(buf, "EDITED", 6) == 0);
 
 	hal.shutdown(&hal);
 }
@@ -299,6 +372,12 @@ static void test_list_walks_a_scope(void) {
 	CHECK(!saw(&system, ".hidden"));
 	CHECK(!saw(&system, ".")); // nor the directory itself
 
+	seed(g_inbox, "four.qd", "4");
+	visitor inbox = {0};
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_INBOX, collect, &inbox) == QDOS_STORE_OK);
+	CHECK(inbox.count == 1);
+	CHECK(saw(&inbox, "four.qd"));
+
 	// A visitor that has seen enough stops the walk
 	visitor early = {.stop_after = 1};
 	CHECK(hal.store_list(&hal, QDOS_SCOPE_USER, collect, &early) == QDOS_STORE_OK);
@@ -327,6 +406,106 @@ static void test_list_of_a_missing_directory(void) {
 	hal.shutdown(&hal);
 }
 
+/**
+ * While the card is shared over USB it is unmounted, so the inbox is simply
+ * not there. The shell reads it whenever the APPS list is opened, so an absent
+ * scope has to read as empty rather than as a failure.
+ */
+static void test_a_shared_inbox_reads_as_empty(void) {
+	qdos_hal hal;
+	device_hal(&hal);
+	seed(g_inbox, "gone.qd", "1");
+
+	// As the helper leaves it: the mount point is there, the contents are not
+	remove_tree(g_inbox);
+
+	char buf[64];
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_INBOX, "gone.qd", buf, sizeof(buf), NULL) == QDOS_STORE_NOT_FOUND);
+
+	visitor v = {0};
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_INBOX, collect, &v) == QDOS_STORE_NOT_FOUND);
+	CHECK(v.count == 0);
+
+	// The other scopes are unaffected, so the calculator still works
+	CHECK(hal.store_write(&hal, "still.qd", "1", 1) == QDOS_STORE_OK);
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "still.qd", buf, sizeof(buf), NULL) == QDOS_STORE_OK);
+
+	hal.shutdown(&hal);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Handing the inbox to a PC                                              */
+/*                                                                        */
+/* The backend does not touch the gadget itself: it runs a script, so the  */
+/* mounting and binding can be fixed on the machine. What is tested here   */
+/* is that the script is run, with the right word, and that what it        */
+/* reports comes back to the caller.                                      */
+/* ---------------------------------------------------------------------- */
+
+static void test_usb_runs_the_helper(void) {
+	write_helper(0);
+
+	qdos_hal hal;
+	device_hal(&hal);
+	CHECK(hal.usb_export != NULL);
+	if (!hal.usb_export)
+		return;
+
+	char log[128];
+	CHECK(hal.usb_export(&hal, true) == 0);
+	helper_log(log, sizeof(log));
+	CHECK_STR(log, "share\n");
+
+	CHECK(hal.usb_export(&hal, false) == 0);
+	helper_log(log, sizeof(log));
+	CHECK_STR(log, "share\ntake\n");
+
+	hal.shutdown(&hal);
+}
+
+/** A helper that fails says so, rather than the shell believing it worked. */
+static void test_a_failing_helper_is_reported(void) {
+	write_helper(1);
+
+	qdos_hal hal;
+	device_hal(&hal);
+	CHECK(hal.usb_export != NULL);
+	if (!hal.usb_export)
+		return;
+
+	CHECK(hal.usb_export(&hal, true) == -1);
+
+	char log[128];
+	helper_log(log, sizeof(log));
+	CHECK_STR(log, "share\n"); // it really ran; it just did not succeed
+
+	hal.shutdown(&hal);
+}
+
+/** No helper, no setting: the shell is told there is no gadget here. */
+static void test_usb_is_not_offered_without_a_helper(void) {
+	unlink(g_helper);
+
+	qdos_hal hal;
+	device_hal(&hal);
+	CHECK(hal.usb_export == NULL);
+
+	hal.shutdown(&hal);
+}
+
+/** Nor when the file is there but cannot be run. */
+static void test_usb_is_not_offered_for_a_helper_that_cannot_run(void) {
+	write_helper(0);
+	CHECK(chmod(g_helper, 0644) == 0);
+
+	qdos_hal hal;
+	device_hal(&hal);
+	CHECK(hal.usb_export == NULL);
+
+	hal.shutdown(&hal);
+	unlink(g_helper);
+}
+
 int main(void) {
 	if (!make_dirs())
 		return 1;
@@ -339,8 +518,14 @@ int main(void) {
 	test_a_name_cannot_leave_the_store();
 	test_the_scopes_are_separate();
 	test_a_write_cannot_touch_the_system_store();
+	test_a_write_cannot_touch_the_inbox();
 	test_list_walks_a_scope();
 	test_list_of_a_missing_directory();
+	test_a_shared_inbox_reads_as_empty();
+	test_usb_runs_the_helper();
+	test_a_failing_helper_is_reported();
+	test_usb_is_not_offered_without_a_helper();
+	test_usb_is_not_offered_for_a_helper_that_cannot_run();
 
 	remove_tree(g_base);
 	return check_report("device_store");

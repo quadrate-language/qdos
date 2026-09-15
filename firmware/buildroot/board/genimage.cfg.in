@@ -1,11 +1,12 @@
 # Template. post-image.sh fills in @DTB@ and @KERNEL@ from the active
 # defconfig, so one layout serves both the Zero W and the Zero 2 W.
 #
-# Two partitions: the firmware's FAT boot partition, and a read-only rootfs.
+# Four partitions, which is all an MBR holds: the firmware's FAT boot
+# partition, a read-only rootfs, the writable data partition, and the inbox.
 #
 # The rootfs is mounted ro so an unclean power-off -- which is how a calculator
-# is always switched off -- cannot corrupt it. Anything QDOS writes goes to a
-# separate data partition; see post-build.sh.
+# is always switched off -- cannot corrupt it. Anything QDOS writes goes to the
+# data partition; see post-build.sh.
 
 image boot.vfat {
 	vfat {
@@ -20,10 +21,6 @@ image boot.vfat {
 		}
 		file overlays {
 			image = "rpi-firmware/overlays"
-		}
-		# Where programs uploaded from a PC land; see post-build.sh
-		file qdos {
-			image = "qdos-inbox"
 		}
 	}
 	# bcm2711_defconfig builds a bigger kernel than bcmrpi3 did; 32M left
@@ -40,6 +37,20 @@ image data.ext4 {
 	# empty. Without this genimage would fill it from the whole root path.
 	mountpoint = "/var/lib/qdos"
 	size = 16M
+}
+
+# Where programs uploaded from a PC live. Its own partition for two reasons:
+# FAT, so any computer can write it from a card reader, and separate, so the
+# USB gadget can hand the whole thing over without exposing the boot files or
+# anything the user wrote on the calculator.
+image inbox.vfat {
+	vfat {
+		label = "QDOS-INBOX"
+		# Named one by one rather than as a directory: genimage copies each by
+		# its basename, so these land at the root of the drive the PC sees.
+		files = { "qdos-inbox/README.TXT" }
+	}
+	size = 32M
 }
 
 image sdcard.img {
@@ -60,5 +71,12 @@ image sdcard.img {
 	partition data {
 		partition-type = 0x83
 		image = "data.ext4"
+	}
+
+	# 0xC is FAT32 with LBA, which is what a PC expects to find when the
+	# gadget hands this partition over
+	partition inbox {
+		partition-type = 0xC
+		image = "inbox.vfat"
 	}
 }

@@ -15,3 +15,19 @@ CONFIG_INPUT_MATRIXKMAP=m
 CONFIG_GPIO_MCP23S08=m
 CONFIG_I2C_BCM2835=m
 CONFIG_I2C_CHARDEV=m
+
+# --- USB gadget: how programs get onto the machine ---------------------------
+# The data port is OTG, so the calculator can be the device rather than the
+# host. Plugged into a PC it offers the inbox partition as a USB drive; the
+# PC drops .qd files on it and the shell declares them when it is handed back.
+#
+# Dual role rather than peripheral: the same port still takes a USB keyboard,
+# which bring-up depends on until the keypad exists.
+#
+# A mass storage gadget costs nothing while it is unplugged, which is the point
+# of choosing it over a network service on a machine running off a battery.
+CONFIG_USB_GADGET=y
+CONFIG_USB_DWC2=y
+CONFIG_USB_DWC2_DUAL_ROLE=y
+CONFIG_USB_F_MASS_STORAGE=m
+CONFIG_USB_MASS_STORAGE=m

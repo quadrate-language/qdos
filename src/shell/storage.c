@@ -271,8 +271,17 @@ typedef struct {
 	qdos_program_entry* out;
 	size_t cap;
 	size_t count;
-	bool system;
+	qdos_store_scope scope;
 } gather_walk;
+
+/** Mark an entry as found in this scope */
+static void mark_origin(qdos_program_entry* e, qdos_store_scope scope) {
+	switch (scope) {
+		case QDOS_SCOPE_SYSTEM: e->system = true; break;
+		case QDOS_SCOPE_INBOX: e->inbox = true; break;
+		default: e->user = true; break;
+	}
+}
 
 static bool gather_one(const char* entry, void* userdata) {
 	gather_walk* w = (gather_walk*)userdata;
@@ -292,16 +301,12 @@ static bool gather_one(const char* entry, void* userdata) {
 	// Erasing writes an empty entry, there being no delete in the HAL, so a
 	// dropped program is still listed unless its contents are looked at
 	char source[QDOS_PROGRAM_MAX];
-	const qdos_store_scope scope = w->system ? QDOS_SCOPE_SYSTEM : QDOS_SCOPE_USER;
-	if (qdos_program_load(w->hal, scope, name, source, sizeof(source)) != QDOS_STORE_OK)
+	if (qdos_program_load(w->hal, w->scope, name, source, sizeof(source)) != QDOS_STORE_OK)
 		return true;
 
 	for (size_t i = 0; i < w->count; i++) {
 		if (strcmp(w->out[i].name, name) == 0) {
-			if (w->system)
-				w->out[i].system = true;
-			else
-				w->out[i].user = true;
+			mark_origin(&w->out[i], w->scope);
 			return true;
 		}
 	}
@@ -309,9 +314,10 @@ static bool gather_one(const char* entry, void* userdata) {
 	if (w->count >= w->cap)
 		return false;
 
-	snprintf(w->out[w->count].name, QDOS_PROGRAM_NAME_MAX, "%s", name);
-	w->out[w->count].system = w->system;
-	w->out[w->count].user = !w->system;
+	qdos_program_entry* e = &w->out[w->count];
+	memset(e, 0, sizeof(*e));
+	snprintf(e->name, QDOS_PROGRAM_NAME_MAX, "%s", name);
+	mark_origin(e, w->scope);
 	w->count++;
 	return true;
 }
@@ -324,35 +330,57 @@ size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap) 
 	if (!hal->store_list || cap == 0)
 		return 0;
 
-	gather_walk walk = {.hal = hal, .out = out, .cap = cap, .count = 0, .system = true};
-	hal->store_list(hal, QDOS_SCOPE_SYSTEM, gather_one, &walk);
-	walk.system = false;
-	hal->store_list(hal, QDOS_SCOPE_USER, gather_one, &walk);
+	gather_walk walk = {.hal = hal, .out = out, .cap = cap, .count = 0, .scope = QDOS_SCOPE_SYSTEM};
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
+		walk.scope = (qdos_store_scope)scope;
+		hal->store_list(hal, walk.scope, gather_one, &walk);
+	}
 
 	qsort(out, walk.count, sizeof(*out), entry_by_name);
 	return walk.count;
 }
 
-bool qdos_program_is_system(qdos_hal* hal, const char* name) {
+bool qdos_program_in_scope(qdos_hal* hal, qdos_store_scope scope, const char* name) {
 	char source[QDOS_PROGRAM_MAX];
-	return qdos_program_load(hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK;
+	return qdos_program_load(hal, scope, name, source, sizeof(source)) == QDOS_STORE_OK;
+}
+
+bool qdos_program_is_system(qdos_hal* hal, const char* name) {
+	return qdos_program_in_scope(hal, QDOS_SCOPE_SYSTEM, name);
 }
 
 bool qdos_program_is_user(qdos_hal* hal, const char* name) {
-	char source[QDOS_PROGRAM_MAX];
-	return qdos_program_load(hal, QDOS_SCOPE_USER, name, source, sizeof(source)) == QDOS_STORE_OK;
+	return qdos_program_in_scope(hal, QDOS_SCOPE_USER, name);
+}
+
+bool qdos_program_is_inbox(qdos_hal* hal, const char* name) {
+	return qdos_program_in_scope(hal, QDOS_SCOPE_INBOX, name);
+}
+
+bool qdos_program_is_readonly(qdos_hal* hal, const char* name) {
+	return qdos_program_in_scope(hal, QDOS_SCOPE_SYSTEM, name)
+			|| qdos_program_in_scope(hal, QDOS_SCOPE_INBOX, name);
 }
 
 int qdos_programs_restore(qdos_hal* hal, qdos_store_scope scope, qd_interp* interp) {
 	if (!hal->store_list)
 		return -1;
 
+	// A stored file that runs rather than declares would otherwise leave its
+	// values on the stack, and do it again on every boot. Trim back to what
+	// was there before rather than clearing: reloading the inbox part-way
+	// through a session must not cost the user their stack.
+	const size_t before = qd_interp_depth(interp);
+
 	restore_walk walk = {.hal = hal, .scope = scope, .interp = interp, .declared = 0};
 	hal->store_list(hal, scope, restore_one, &walk);
 
-	// A stored file that runs rather than declares would otherwise leave its
-	// values under the restored session, and do it again on every boot.
-	qd_interp_eval(interp, "clear");
+	qd_context* ctx = qd_interp_context(interp);
+	while (qd_interp_depth(interp) > before) {
+		qd_stack_element_t discard;
+		if (qd_stack_pop(ctx->st, &discard) != QD_STACK_OK)
+			break;
+	}
 	return walk.declared;
 }
 

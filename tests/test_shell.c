@@ -93,8 +93,20 @@ static struct {
 	bool used;
 } g_store[STORE_SLOTS];
 
+/*
+ * A machine with a USB gadget, which only some backends have. Off by default,
+ * so the settings page has the two rows every other test expects.
+ */
+static bool g_usb_supported;
+static bool g_usb_shared;
+static bool g_usb_fails; ///< A gadget that refuses to switch
+static int g_usb_calls;
+
 static void store_reset(void) {
 	memset(g_store, 0, sizeof(g_store));
+	g_usb_supported = false;
+	g_usb_shared = false;
+	g_usb_calls = 0;
 }
 
 static qdos_store_result stub_read(
@@ -148,18 +160,37 @@ static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, qdos_s
 	return QDOS_STORE_OK;
 }
 
-/** Put a program in the read-only system store */
-static void seed_system(const char* name, const char* source) {
+/** Put a program in one of the read-only stores */
+static void seed_scope(qdos_store_scope scope, const char* name, const char* source) {
 	for (int i = 0; i < STORE_SLOTS; i++) {
 		if (g_store[i].used)
 			continue;
 		snprintf(g_store[i].name, sizeof(g_store[i].name), "%s.qd", name);
 		memcpy(g_store[i].data, source, strlen(source));
 		g_store[i].len = strlen(source);
-		g_store[i].scope = QDOS_SCOPE_SYSTEM;
+		g_store[i].scope = scope;
 		g_store[i].used = true;
 		return;
 	}
+}
+
+static void seed_system(const char* name, const char* source) {
+	seed_scope(QDOS_SCOPE_SYSTEM, name, source);
+}
+
+/** As if a PC had dropped the file on the card */
+static void seed_inbox(const char* name, const char* source) {
+	seed_scope(QDOS_SCOPE_INBOX, name, source);
+}
+
+static int stub_usb_export(qdos_hal* hal, bool on) {
+	(void)hal;
+	g_usb_calls++;
+	if (g_usb_fails)
+		return -1;
+
+	g_usb_shared = on;
+	return 0;
 }
 
 static void stub_hal(qdos_hal* hal, stub_state* st) {
@@ -173,6 +204,7 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->store_read = stub_read;
 	hal->store_write = stub_write;
 	hal->store_list = stub_list;
+	hal->usb_export = g_usb_supported ? stub_usb_export : NULL;
 	hal->impl = st;
 }
 
@@ -180,10 +212,11 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 #define SOFT_WIDTH_T (QDOS_COLS / 5)
 #define ROW_HEADER_T 0
 #define ROW_CONTENT_FIRST_T 1
-#define ROW_CONTENT_LAST_T (QDOS_ROWS - 4)
+#define ROW_CONTENT_LAST_T (QDOS_ROWS - 3)
 #define ROW_TOP_VALUE ROW_CONTENT_LAST_T
-#define ROW_MESSAGE_LINE (QDOS_ROWS - 3)
+/* A message takes the input line rather than a row of its own */
 #define ROW_INPUT_LINE (QDOS_ROWS - 2)
+#define ROW_MESSAGE_LINE ROW_INPUT_LINE
 
 /** Press one key. */
 static void key(qdos_key_event* script, size_t* n, qdos_key k) {
@@ -734,8 +767,10 @@ static void test_unmatched_closer_still_submits(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(row[0] != '\0'); // an error, rather than a line that cannot be sent
-	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
-	CHECK(row[0] == ':');
+
+	// The error is on the input line, so the prompt is not: still line mode
+	// underneath, which the next test checks by typing on through it
+	CHECK(row[0] != ':');
 }
 
 /** A word can be declared and then forgotten. */
@@ -1746,8 +1781,403 @@ static void test_cls_clears_the_message(void) {
 	read_row(printed, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(strstr(row, "HELLO") != NULL);
 
+	// With the message down, the line the message was covering is back
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "HELLO") == NULL);
+	CHECK(row[0] == ':');
+}
+
+/**
+ * A message has no row of its own: it takes the input line while it is up, and
+ * the next key takes the line back. That is what buys the stack its eighth row.
+ */
+static void test_a_message_borrows_the_input_line(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "1 0 divide"); // refused
+	const size_t erred_at = n;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, '7'};
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t errored[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, erred_at, fb, errored);
+
+	// The error sits where the prompt was, and is inverted because it is one
+	char row[QDOS_COLS + 1];
+	read_row(errored, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "ZERO DIVISOR") != NULL);
+	CHECK(row[0] != ':');
+	CHECK(cell_is(errored, 0, ROW_INPUT_LINE, row[0], true));
+
+	// One key later the line is the user's again, with that key on it
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "ZERO DIVISOR") == NULL);
+	CHECK(row[0] == ':');
+	CHECK(strchr(row, '7') != NULL);
+}
+
+/** The row the message used to keep for itself is the stack's now. */
+static void test_the_stack_reaches_the_reclaimed_row(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "1 2 3 4 5 6 7 8"); // one more than the old layout held
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// All eight are on screen, the deepest at the very top row
+	char row[QDOS_COLS + 1];
+	read_row(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "8:") != NULL);
+	CHECK(strstr(row, "...") == NULL);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL);
+}
+
+/** Deeper than that still says so rather than quietly dropping the rest. */
+static void test_a_deeper_stack_still_marks_itself(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "1 2 3 4 5 6 7 8 9");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "...") != NULL);
+}
+
+/**
+ * A clean boot says nothing. The calculator being on screen is the whole
+ * announcement, and a line saying so is one the user has to clear.
+ */
+static void test_a_clean_boot_has_nothing_to_say(void) {
+	store_reset();
+
+	// No keys at all: the shell paints once before it reads any, so this is
+	// the screen as the machine comes up
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(NULL, 0, fb);
+
+	// Nothing announced, so the input line is the input line
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == '>');
+	CHECK(row[1] == '\0'); // the prompt and the cursor, and no words
+}
+
+/** A stack that came back is worth a word, or the numbers are unexplained. */
+static void test_a_restored_session_is_announced(void) {
+	store_reset();
+
+	qdos_key_event first[32];
+	size_t n = 0;
+	digits(first, &n, "42");
+	key(first, &n, QDOS_KEY_ENTER);
+	key(first, &n, QDOS_KEY_POWER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(first, n, fb);
+
+	// Up again, with the saved stack behind it
+	run_script(NULL, 0, fb);
+
+	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "SESSION RESTORED") != NULL);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Uploaded programs                                                      */
+/*                                                                        */
+/* A .qd file dropped on the card is a word at the next boot, shipped-like */
+/* rather than user-like: it can be overridden but not written over.       */
+/* ---------------------------------------------------------------------- */
+
+/** What lands on the card is a word, without anything being pressed. */
+static void test_an_uploaded_program_is_a_word(void) {
+	store_reset();
+	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { 3 * }");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "triple");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "21") != NULL);
+}
+
+/**
+ * The bug the inbox scope exists to fix. An upload used to be copied into the
+ * user store at boot, so editing it on the calculator lasted until power-off.
+ */
+static void test_an_edit_outlives_the_upload_it_replaced(void) {
+	store_reset();
+	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { 3 * }");
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "fn triple(x:i64 -- r:i64) { 30 * }"); // the user's own
+	type_more(script, &n, "2 triple");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "60") != NULL);
+
+	// The card's copy is untouched under it, and the edit survives a power
+	// cycle rather than being overwritten on the way back up
+	qdos_key_event again[64];
+	size_t m = 0;
+	digits(again, &m, "2");
+	key(again, &m, QDOS_KEY_ENTER);
+	type_line(again, &m, "triple");
+
+	run_script(again, m, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "60") != NULL);
+	CHECK(strstr(row, "6 ") == NULL);
+}
+
+/** The list says where each program came from, so it says where to remove it. */
+static void test_the_list_marks_an_uploaded_program(void) {
+	store_reset();
+	seed_inbox("fromcard", "fn fromcard( -- r:i64) { 1 }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "fromcard") != NULL);
+	CHECK(strstr(row, "CARD") != NULL);
+}
+
+/** An override is starred, the same as one covering a shipped program. */
+static void test_the_list_stars_an_override_of_the_card(void) {
+	store_reset();
+	seed_inbox("both", "fn both( -- r:i64) { 1 }");
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "fn both( -- r:i64) { 2 }");
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "both") != NULL);
+	CHECK(strstr(row, "USER*") != NULL);
+}
+
+/** Forgetting an uploaded program says where it actually lives. */
+static void test_forget_refuses_an_uploaded_program(void) {
+	store_reset();
+	seed_inbox("fromcard", "fn fromcard( -- r:i64) { 1 }");
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"fromcard\" forget");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "ON THE CARD") != NULL);
+}
+
+/** And dropping it from the list says the same thing. */
+static void test_dropping_an_uploaded_program_is_refused(void) {
+	store_reset();
+	seed_inbox("fromcard", "fn fromcard( -- r:i64) { 1 }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "TAKE IT OFF THE CARD") != NULL);
+}
+
+/** Forgetting an override of an upload brings the card's copy back. */
+static void test_forget_reverts_to_the_card(void) {
+	store_reset();
+	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { 3 * }");
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "fn triple(x:i64 -- r:i64) { 30 * }");
+	type_more(script, &n, "\"triple\" forget");
+	type_more(script, &n, "2 triple");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "6") != NULL);
+	CHECK(strstr(row, "60") == NULL);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Sharing the card over USB                                              */
+/* ---------------------------------------------------------------------- */
+
+/** Move the selection to the USB row, which sits below the other two. */
+static void open_usb_setting(qdos_key_event* script, size_t* n) {
+	key(script, n, QDOS_KEY_SETTINGS);
+	key(script, n, QDOS_KEY_DOWN);
+	key(script, n, QDOS_KEY_DOWN);
+}
+
+/** A machine with no gadget does not offer the row at all. */
+static void test_usb_is_hidden_without_a_gadget(void) {
+	store_reset(); // leaves g_usb_supported false
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	open_usb_setting(script, &n);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
 	CHECK(row[0] == '\0');
+	CHECK(g_usb_calls == 0);
+
+	// The selection stopped on DECIMALS, so Enter changed that instead
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "AUTO") == NULL);
+}
+
+/** Where there is a gadget, the row is there and says which way round it is. */
+static void test_usb_shares_the_card_and_takes_it_back(void) {
+	store_reset();
+	g_usb_supported = true;
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	open_usb_setting(script, &n);
+	key(script, &n, QDOS_KEY_ENTER); // hand it over
+	const size_t shared_at = n;
+	key(script, &n, QDOS_KEY_ENTER); // and take it back
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t shared[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, shared_at, fb, shared);
+
+	char row[QDOS_COLS + 1];
+	read_row(shared, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	CHECK(strstr(row, "USB") != NULL);
+	CHECK(strstr(row, "SHARED") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	CHECK(strstr(row, "OFF") != NULL);
+
+	// Both ways round really reached the backend, and it ended up back with us
+	CHECK(g_usb_calls == 2);
+	CHECK(!g_usb_shared);
+}
+
+/** Taking the card back is when an upload becomes a word. */
+static void test_taking_the_card_back_declares_what_landed(void) {
+	store_reset();
+	g_usb_supported = true;
+	seed_inbox("fromcard", "fn fromcard( -- r:i64) { 1 }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	open_usb_setting(script, &n);
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "1 FROM THE CARD") != NULL);
+}
+
+/** Reloading the card must not cost the user the stack they were working on. */
+static void test_taking_the_card_back_keeps_the_stack(void) {
+	store_reset();
+	g_usb_supported = true;
+	seed_inbox("noisy", "1 2 3"); // a file that runs rather than declares
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "40");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ADD);
+	open_usb_setting(script, &n);
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_CLEAR); // back to the calculator to read the stack
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+}
+
+/** A gadget that will not switch says so rather than lying about the state. */
+static void test_a_failed_usb_switch_is_reported(void) {
+	store_reset();
+	g_usb_supported = true;
+	g_usb_fails = true;
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	open_usb_setting(script, &n);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "WOULD NOT SWITCH") != NULL);
+
+	// And the row still reads OFF, because nothing was handed over
+	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	CHECK(strstr(row, "OFF") != NULL);
 }
 
 /** Print more lines than the debug page can hold at once. */
@@ -2418,6 +2848,23 @@ int main(void) {
 	test_space_separates_numbers();
 	test_print_reaches_the_panel();
 	test_print_survives_a_nested_evaluation();
+	test_a_message_borrows_the_input_line();
+	test_the_stack_reaches_the_reclaimed_row();
+	test_a_deeper_stack_still_marks_itself();
+	test_a_clean_boot_has_nothing_to_say();
+	test_a_restored_session_is_announced();
+	test_an_uploaded_program_is_a_word();
+	test_an_edit_outlives_the_upload_it_replaced();
+	test_the_list_marks_an_uploaded_program();
+	test_the_list_stars_an_override_of_the_card();
+	test_forget_refuses_an_uploaded_program();
+	test_dropping_an_uploaded_program_is_refused();
+	test_forget_reverts_to_the_card();
+	test_usb_is_hidden_without_a_gadget();
+	test_usb_shares_the_card_and_takes_it_back();
+	test_taking_the_card_back_declares_what_landed();
+	test_taking_the_card_back_keeps_the_stack();
+	test_a_failed_usb_switch_is_reported();
 	test_keypad_types_into_the_line();
 	test_keypad_words_reach_the_line();
 	test_a_typed_function_word_evaluates();

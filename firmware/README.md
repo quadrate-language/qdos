@@ -148,17 +148,30 @@ inside the tree, that copy would include itself.
 ### What the image contains
 
 ```
-partition 1  32M  FAT   bootcode.bin, start.elf, fixup.dat, config.txt, cmdline.txt, Image, dtb, overlays
+partition 1  64M  FAT   bootcode.bin, start.elf, fixup.dat, config.txt, cmdline.txt, Image, dtb, overlays
 partition 2  80M  ext4  read-only rootfs: busybox, kmod, qdos
 partition 3  16M  ext4  /var/lib/qdos — registers and the saved session
+partition 4  32M  FAT   /mnt/inbox — programs uploaded from a PC
 ```
 
-The image is about 129 MB. `qdos` sits at `/usr/bin/qdos`, respawned by init on
-tty1.
+Four is the limit an MBR allows, and all four are spoken for. The image is about
+193 MB. `qdos` sits at `/usr/bin/qdos`, respawned by init on tty1.
 
 The rootfs is mounted **read-only** and everything QDOS writes goes to the third
 partition. A calculator is always switched off by pulling the power, so the
 filesystem holding the system must never be mid-write when that happens.
+
+The inbox is its own FAT partition rather than a directory on the boot one, for
+two reasons. FAT so any computer can write it from a card reader, and separate so
+the USB gadget can hand the whole partition to a host without exposing the boot
+files or anything written on the calculator. It is mounted **read-only** and read
+in place: QDOS never copies out of it, so editing an uploaded program on the
+machine cannot be undone by the next boot.
+
+`/usr/bin/qdos-usb share|take` is what does the handing over — it unmounts the
+partition, binds `g_mass_storage` to it, and puts it back afterwards. QDOS runs
+it from the `USB` row on the settings page. Two operating systems writing one
+filesystem corrupts it, so the host is the only writer while it is shared.
 
 The kernel console is on **serial only**. QDOS draws straight into `/dev/fb0`,
 and the framebuffer console draws there too — with `console=tty1` the two fight
@@ -185,7 +198,7 @@ buildroot/
   board/config.txt                  boot configuration, incl. panel overlays
   board/cmdline.txt                 kernel command line
   board/genimage.cfg                partition layout
-  board/post-build.sh               inittab, fstab, data partition mount
+  board/post-build.sh               inittab, fstab, partition mounts, qdos-usb
   board/post-image.sh               assembles sdcard.img
 ```
 

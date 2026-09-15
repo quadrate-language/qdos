@@ -50,6 +50,9 @@ static const uint8_t PANEL_PAPER[3] = {0xC9, 0xCE, 0xC6};
 /* The shipped programs as they sit in the source tree; the device installs
  * them to /usr/share/qdos/programs. */
 #define SIM_SYSTEM_DIR "programs/system"
+/* Stands in for the card a PC drops .qd files onto. There is no USB gadget
+ * here, so the simulator reads it but never offers to share it. */
+#define SIM_INBOX_DIR "qdos-inbox"
 
 typedef struct {
 	SDL_Window* window;
@@ -319,8 +322,11 @@ static const char* env_or(const char* name, const char* fallback) {
 }
 
 static const char* dir_for(qdos_store_scope scope) {
-	return (scope == QDOS_SCOPE_SYSTEM) ? env_or("QDOS_SYSTEM_STORE", SIM_SYSTEM_DIR)
-									    : env_or("QDOS_STORE", SIM_STORE_DIR);
+	switch (scope) {
+		case QDOS_SCOPE_SYSTEM: return env_or("QDOS_SYSTEM_STORE", SIM_SYSTEM_DIR);
+		case QDOS_SCOPE_INBOX: return env_or("QDOS_INBOX", SIM_INBOX_DIR);
+		default: return env_or("QDOS_STORE", SIM_STORE_DIR);
+	}
 }
 
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
