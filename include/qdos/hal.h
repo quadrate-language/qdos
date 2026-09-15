@@ -66,35 +66,26 @@ typedef struct qdos_hal qdos_hal;
 typedef bool (*qdos_store_visit)(const char* name, void* user);
 
 struct qdos_hal {
-	/** @brief Bring up the hardware; 0 on success */
 	int (*init)(qdos_hal* hal);
 
-	/** @brief Release the hardware. Safe to call after a failed init(). */
+	/** @brief Safe after a failed init() */
 	void (*shutdown)(qdos_hal* hal);
 
-	/**
-	 * @brief Push a framebuffer to the display
-	 * @param fb One grayscale byte per pixel, QDOS_SCREEN_W * QDOS_SCREEN_H of
-	 *           them, so the same buffer serves a mono panel and an RGB one.
-	 */
+	/** @brief One grayscale byte per pixel, so mono and RGB share a buffer */
 	void (*present)(qdos_hal* hal, const uint8_t* fb);
 
-	/** @brief Next key press, if one is waiting */
 	bool (*poll_key)(qdos_hal* hal, qdos_key_event* out);
 
-	/** @brief Whether the machine should keep running */
 	bool (*running)(qdos_hal* hal);
 
 	/** @brief Yield until roughly the next display refresh */
 	void (*idle)(qdos_hal* hal);
 
-	/** @brief Read a stored entry */
 	qdos_store_result (*store_read)(qdos_hal* hal, const char* name, void* buf, size_t cap, size_t* len);
 
-	/** @brief Write a stored entry, replacing any previous value */
 	qdos_store_result (*store_write)(qdos_hal* hal, const char* name, const void* buf, size_t len);
 
-	/** @brief Visit every stored entry name. Unordered, and may be NULL. */
+	/** @brief Unordered, and may be NULL */
 	qdos_store_result (*store_list)(qdos_hal* hal, qdos_store_visit visit, void* user);
 
 	void* impl; ///< Backend private state

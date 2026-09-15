@@ -237,6 +237,24 @@ Everything is drawn at that one size, which leaves five stack entries visible
 above the input line. A 64-bit integer is 19 digits and fits across 25 columns
 beside its index label.
 
+The panel is one bit per pixel -- Sharp's datasheet calls it "internal 1bit
+memory within the panel", and the kernel reduces the grayscale buffer to it
+with a plain cut at 128 -- so there is no antialiasing to be had, and the font
+is fitted to the pixel grid instead. At 173 DPI that is not the compromise it
+sounds like: a pixel is 0.147mm against the ~0.175mm an eye resolves at arm's
+length.
+
+The simulator applies the same cut and the same reflective colours, so what it
+shows is what the hardware shows, and a test asserts no pixel QDOS draws lands
+near the threshold. It opens 1:1 by default, which on a typical monitor is
+still about 1.6x life size; `QDOS_SIM_SCALE` enlarges it for inspecting pixels.
+
+Below the panel it draws a 5x8 keypad you can click, for trying a layout before
+wiring one. The table in `src/hal/sim/keypad_ui.c` is the whole layout, so
+rearranging it is a one-file edit. A button either sends a logical key or types
+text; only the logical keys and `:` reach calculator mode, which is the same
+constraint a physical keypad with forty buttons would have.
+
 Not yet: `for`, named locals (both `for i` and named parameters need a variable
 scope), and routing `print` output to the display instead of stdout.
 

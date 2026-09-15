@@ -784,6 +784,30 @@ static void test_tab_on_no_match(void) {
 	CHECK(strstr(row, "no match") != NULL);
 }
 
+/**
+ * Every pixel must sit clearly on one side of the panel's 1-bit cut at 128.
+ * A mid-grey would render differently on the Sharp LCD than in the simulator.
+ */
+static void test_pixels_are_unambiguous(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * }");
+	type_more(script, &n, "7 sq");
+	type_more(script, &n, "1 0 /"); // an error, so the inverted path is drawn too
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	int ambiguous = 0;
+	for (size_t i = 0; i < sizeof(fb); i++) {
+		if (fb[i] >= 64 && fb[i] < 192)
+			ambiguous++;
+	}
+	CHECK(ambiguous == 0);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -813,5 +837,6 @@ int main(void) {
 	test_tab_completes_a_word();
 	test_tab_lists_ambiguous();
 	test_tab_on_no_match();
+	test_pixels_are_unambiguous();
 	return check_report("shell");
 }

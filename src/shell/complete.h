@@ -26,12 +26,10 @@ typedef struct {
 /**
  * @brief Length of the word being typed at the end of a line
  *
- * Only letters, digits and underscore count, so nothing completes after an
- * operator or a number.
+ * Word characters only, so nothing completes after an operator or a number.
  */
 size_t qdos_complete_prefix_len(const char* input, size_t len);
 
-/** @brief Match a prefix against builtins, natives and declared words */
 void qdos_complete(const qd_interp* interp, const char* prefix, qdos_completion* out);
 
 #ifdef __cplusplus

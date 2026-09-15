@@ -14,13 +14,12 @@ extern "C" {
 
 typedef struct qdos_shell qdos_shell;
 
-/** @brief Create a shell bound to a backend; NULL if out of memory */
 qdos_shell* qdos_shell_create(qdos_hal* hal);
 
-/** @brief Destroy a shell. NULL is ignored. */
+/** @brief NULL is ignored */
 void qdos_shell_destroy(qdos_shell* sh);
 
-/** @brief Run until the backend reports it should stop */
+/** @brief Runs until the backend says stop */
 void qdos_shell_run(qdos_shell* sh);
 
 #ifdef __cplusplus

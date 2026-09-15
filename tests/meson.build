@@ -34,3 +34,9 @@ test_complete = executable('test_complete', 'test_complete.c',
 		dependencies: [qdos_core_dep],
 		link_language: 'cpp')
 test('complete', test_complete)
+
+test_padui = executable('test_padui', 'test_padui.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('padui', test_padui)

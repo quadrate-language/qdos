@@ -7,6 +7,9 @@
 
 #include <SDL3/SDL.h>
 
+#include "keypad_ui.h"
+
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,12 +17,33 @@
 #include <sys/stat.h>
 
 /**
+ * @brief The panel is 1bpp and the kernel cuts at 128 (drm_fb_gray8_to_mono_line)
+ *
+ * Doing the same here means the simulator shows what the hardware will, and a
+ * stray mid-grey surfaces now rather than once it is on glass.
+ */
+#define PANEL_THRESHOLD 128
+
+/* Reflective silver, not white: the panel has no backlight. */
+static const uint8_t PANEL_INK[3] = {0x1A, 0x1C, 0x1A};
+static const uint8_t PANEL_PAPER[3] = {0xC9, 0xCE, 0xC6};
+
+/* --- On-screen keypad ----------------------------------------------------- */
+
+#define WINDOW_W QDOS_SCREEN_W
+#define WINDOW_H (QDOS_SCREEN_H + QDOS_PAD_H)
+
+/**
  * @brief Integer scale from panel pixels to window pixels
  *
- * Kept whole: the font is drawn pixel by pixel, and a fractional scale would
- * render some of its 2px stems 3px wide and others 2px.
+ * 1 is closest to the hardware: the panel is 173 DPI against a monitor's ~110,
+ * so even unscaled the window is about 1.6x life size. Whole numbers only --
+ * a fraction would render some of the font's 2px stems 3px wide.
+ *
+ * Raise it with QDOS_SIM_SCALE to inspect individual pixels.
  */
-#define SIM_SCALE 2
+#define SIM_SCALE_DEFAULT 1
+#define SIM_SCALE_MAX 8
 
 /** Directory holding simulated persistent storage. */
 #define SIM_STORE_DIR "qdos-store"
@@ -29,9 +53,11 @@ typedef struct {
 	SDL_Renderer* renderer;
 	SDL_Texture* texture;
 	bool running;
+	int scale;
+	const char* pending; ///< Rest of a text button still to be delivered
 
 	/** Staging buffer: the HAL speaks 8-bit gray, the texture wants RGB. */
-	uint8_t rgb[QDOS_SCREEN_W * QDOS_SCREEN_H * 3];
+	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
 } sim_state;
 
 static int sim_init(qdos_hal* hal) {
@@ -42,7 +68,15 @@ static int sim_init(qdos_hal* hal) {
 		return 1;
 	}
 
-	st->window = SDL_CreateWindow("QDOS", QDOS_SCREEN_W * SIM_SCALE, QDOS_SCREEN_H * SIM_SCALE, 0);
+	st->scale = SIM_SCALE_DEFAULT;
+	const char* scale_env = getenv("QDOS_SIM_SCALE");
+	if (scale_env != NULL) {
+		const int wanted = atoi(scale_env);
+		if (wanted >= 1 && wanted <= SIM_SCALE_MAX)
+			st->scale = wanted;
+	}
+
+	st->window = SDL_CreateWindow("QDOS", WINDOW_W * st->scale, WINDOW_H * st->scale, 0);
 	if (!st->window) {
 		fprintf(stderr, "qdos: SDL_CreateWindow failed: %s\n", SDL_GetError());
 		return 1;
@@ -55,7 +89,7 @@ static int sim_init(qdos_hal* hal) {
 	}
 
 	st->texture = SDL_CreateTexture(st->renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
-			QDOS_SCREEN_W, QDOS_SCREEN_H);
+			WINDOW_W, WINDOW_H);
 	if (!st->texture) {
 		fprintf(stderr, "qdos: SDL_CreateTexture failed: %s\n", SDL_GetError());
 		return 1;
@@ -92,12 +126,16 @@ static void sim_present(qdos_hal* hal, const uint8_t* fb) {
 	sim_state* st = (sim_state*)hal->impl;
 
 	for (size_t i = 0; i < QDOS_SCREEN_W * QDOS_SCREEN_H; i++) {
-		st->rgb[i * 3 + 0] = fb[i];
-		st->rgb[i * 3 + 1] = fb[i];
-		st->rgb[i * 3 + 2] = fb[i];
+		const bool lit = fb[i] < PANEL_THRESHOLD;
+		const uint8_t* c = lit ? PANEL_INK : PANEL_PAPER;
+		st->rgb[i * 3 + 0] = c[0];
+		st->rgb[i * 3 + 1] = c[1];
+		st->rgb[i * 3 + 2] = c[2];
 	}
 
-	SDL_UpdateTexture(st->texture, NULL, st->rgb, QDOS_SCREEN_W * 3);
+	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_SCREEN_H);
+
+	SDL_UpdateTexture(st->texture, NULL, st->rgb, WINDOW_W * 3);
 	SDL_RenderClear(st->renderer);
 	SDL_RenderTexture(st->renderer, st->texture, NULL, NULL);
 	SDL_RenderPresent(st->renderer);
@@ -128,9 +166,32 @@ static void map_char(char ch, qdos_key_event* out) {
 static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 	sim_state* st = (sim_state*)hal->impl;
 
+	// A text button delivers one character per poll, like typing it
+	if (st->pending != NULL && *st->pending != '\0') {
+		out->key = QDOS_KEY_CHAR;
+		out->ch = *st->pending++;
+		return true;
+	}
+
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
+			case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+				const qdos_pad_button* b = qdos_pad_at(
+						(int)event.button.x / st->scale, (int)event.button.y / st->scale);
+				if (b == NULL)
+					break;
+				if (b->key != QDOS_KEY_NONE) {
+					out->key = b->key;
+					out->ch = 0;
+					return true;
+				}
+				st->pending = b->text;
+				out->key = QDOS_KEY_CHAR;
+				out->ch = *st->pending++;
+				return true;
+			}
+
 			case SDL_EVENT_QUIT:
 				st->running = false;
 				return false;
