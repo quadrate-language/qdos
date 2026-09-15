@@ -47,6 +47,9 @@ static const uint8_t PANEL_PAPER[3] = {0xC9, 0xCE, 0xC6};
 
 /** Directory holding simulated persistent storage. */
 #define SIM_STORE_DIR "qdos-store"
+/* The shipped programs as they sit in the source tree; the device installs
+ * them to /usr/share/qdos/programs. */
+#define SIM_SYSTEM_DIR "programs/system"
 
 typedef struct {
 	SDL_Window* window;
@@ -55,6 +58,7 @@ typedef struct {
 	bool running;
 	int scale;
 	const char* pending; ///< Rest of a text button still to be delivered
+	bool shifted;
 
 	/** Staging buffer: the HAL speaks 8-bit gray, the texture wants RGB. */
 	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
@@ -122,6 +126,16 @@ static void sim_shutdown(qdos_hal* hal) {
 	SDL_Quit();
 }
 
+/** @brief Redraw the keypad over the last panel image and show it */
+static void push_frame(sim_state* st) {
+	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_SCREEN_H, st->shifted);
+
+	SDL_UpdateTexture(st->texture, NULL, st->rgb, WINDOW_W * 3);
+	SDL_RenderClear(st->renderer);
+	SDL_RenderTexture(st->renderer, st->texture, NULL, NULL);
+	SDL_RenderPresent(st->renderer);
+}
+
 static void sim_present(qdos_hal* hal, const uint8_t* fb) {
 	sim_state* st = (sim_state*)hal->impl;
 
@@ -133,12 +147,7 @@ static void sim_present(qdos_hal* hal, const uint8_t* fb) {
 		st->rgb[i * 3 + 2] = c[2];
 	}
 
-	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_SCREEN_H);
-
-	SDL_UpdateTexture(st->texture, NULL, st->rgb, WINDOW_W * 3);
-	SDL_RenderClear(st->renderer);
-	SDL_RenderTexture(st->renderer, st->texture, NULL, NULL);
-	SDL_RenderPresent(st->renderer);
+	push_frame(st);
 }
 
 /** @brief Map a typed character to a logical key */
@@ -181,12 +190,28 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 						(int)event.button.x / st->scale, (int)event.button.y / st->scale);
 				if (b == NULL)
 					break;
-				if (b->key != QDOS_KEY_NONE) {
-					out->key = b->key;
+
+				if (qdos_pad_is_shift(b)) {
+					st->shifted = !st->shifted;
+					push_frame(st);
+					break;
+				}
+
+				const qdos_pad_action* a = qdos_pad_action_for(b, st->shifted);
+				const bool was_shifted = st->shifted;
+				st->shifted = false;
+				if (a == NULL) {
+					if (was_shifted)
+						push_frame(st);
+					break;
+				}
+
+				if (a->key != QDOS_KEY_NONE) {
+					out->key = a->key;
 					out->ch = 0;
 					return true;
 				}
-				st->pending = b->text;
+				st->pending = a->text;
 				out->key = QDOS_KEY_CHAR;
 				out->ch = *st->pending++;
 				return true;
@@ -216,6 +241,30 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 						return true;
 					case SDLK_TAB:
 						out->key = QDOS_KEY_TAB;
+						out->ch = 0;
+						return true;
+					case SDLK_UP:
+						out->key = QDOS_KEY_UP;
+						out->ch = 0;
+						return true;
+					case SDLK_DOWN:
+						out->key = QDOS_KEY_DOWN;
+						out->ch = 0;
+						return true;
+					case SDLK_LEFT:
+						out->key = QDOS_KEY_LEFT;
+						out->ch = 0;
+						return true;
+					case SDLK_RIGHT:
+						out->key = QDOS_KEY_RIGHT;
+						out->ch = 0;
+						return true;
+					case SDLK_F1:
+					case SDLK_F2:
+					case SDLK_F3:
+					case SDLK_F4:
+					case SDLK_F5:
+						out->key = (qdos_key)(QDOS_KEY_SOFT1 + (event.key.key - SDLK_F1));
 						out->ch = 0;
 						return true;
 					case SDLK_ESCAPE:
@@ -251,20 +300,31 @@ static void sim_idle(qdos_hal* hal) {
  * @brief Build the on-disk path for a stored entry
  * @return true if the name is safe and the path fits
  */
-static bool store_path(const char* name, char* buf, size_t cap) {
+static const char* env_or(const char* name, const char* fallback) {
+	const char* v = getenv(name);
+	return (v != NULL && *v != '\0') ? v : fallback;
+}
+
+static const char* dir_for(qdos_store_scope scope) {
+	return (scope == QDOS_SCOPE_SYSTEM) ? env_or("QDOS_SYSTEM_STORE", SIM_SYSTEM_DIR)
+									    : env_or("QDOS_STORE", SIM_STORE_DIR);
+}
+
+static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
 	// Reject anything that could escape the store directory
 	if (!name || !*name || strchr(name, '/') || strchr(name, '\\') || strcmp(name, "..") == 0)
 		return false;
 
-	const int written = snprintf(buf, cap, "%s/%s", SIM_STORE_DIR, name);
+	const int written = snprintf(buf, cap, "%s/%s", dir, name);
 	return written > 0 && (size_t)written < cap;
 }
 
-static qdos_store_result sim_store_read(qdos_hal* hal, const char* name, void* buf, size_t cap, size_t* len) {
+static qdos_store_result sim_store_read(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
 	(void)hal;
 
 	char path[512];
-	if (!store_path(name, path, sizeof(path)))
+	if (!store_path(dir_for(scope), name, path, sizeof(path)))
 		return QDOS_STORE_IO_ERROR;
 
 	FILE* f = fopen(path, "rb");
@@ -288,10 +348,10 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 	(void)hal;
 
 	char path[512];
-	if (!store_path(name, path, sizeof(path)))
+	if (!store_path(dir_for(QDOS_SCOPE_USER), name, path, sizeof(path)))
 		return QDOS_STORE_IO_ERROR;
 
-	mkdir(SIM_STORE_DIR, 0755); // may already exist, which is fine
+	mkdir(dir_for(QDOS_SCOPE_USER), 0755); // may already exist, which is fine
 
 	FILE* f = fopen(path, "wb");
 	if (!f)
@@ -302,10 +362,11 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
-static qdos_store_result sim_store_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+static qdos_store_result sim_store_list(
+		qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
 	(void)hal;
 
-	DIR* dir = opendir(SIM_STORE_DIR);
+	DIR* dir = opendir(dir_for(scope));
 	if (!dir)
 		return QDOS_STORE_NOT_FOUND;
 

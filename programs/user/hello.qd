@@ -1,0 +1,5 @@
+// Leaves its greeting on the stack, where the panel shows it. print goes to
+// stdout, which nothing reads on the device.
+fn hello( -- r:str) {
+	"Hello, world!"
+}

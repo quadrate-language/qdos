@@ -19,6 +19,7 @@
 
 static struct {
 	char name[32];
+	qdos_store_scope scope;
 	uint8_t data[SLOT_BYTES];
 	size_t len;
 	bool used;
@@ -28,10 +29,10 @@ static void store_reset(void) {
 	memset(g_slots, 0, sizeof(g_slots));
 }
 
-static qdos_store_result mem_read(qdos_hal* hal, const char* name, void* buf, size_t cap, size_t* len) {
+static qdos_store_result mem_read(qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
 	(void)hal;
 	for (int i = 0; i < SLOTS; i++) {
-		if (g_slots[i].used && strcmp(g_slots[i].name, name) == 0) {
+		if (g_slots[i].used && g_slots[i].scope == scope && strcmp(g_slots[i].name, name) == 0) {
 			if (g_slots[i].len > cap)
 				return QDOS_STORE_TOO_BIG;
 			memcpy(buf, g_slots[i].data, g_slots[i].len);
@@ -50,7 +51,8 @@ static qdos_store_result mem_write(qdos_hal* hal, const char* name, const void* 
 
 	int slot = -1;
 	for (int i = 0; i < SLOTS; i++) {
-		if (g_slots[i].used && strcmp(g_slots[i].name, name) == 0) {
+		// Writes only ever land in the user store
+		if (g_slots[i].used && g_slots[i].scope == QDOS_SCOPE_USER && strcmp(g_slots[i].name, name) == 0) {
 			slot = i;
 			break;
 		}
@@ -63,17 +65,32 @@ static qdos_store_result mem_write(qdos_hal* hal, const char* name, const void* 
 	snprintf(g_slots[slot].name, sizeof(g_slots[slot].name), "%s", name);
 	memcpy(g_slots[slot].data, buf, len);
 	g_slots[slot].len = len;
+	g_slots[slot].scope = QDOS_SCOPE_USER;
 	g_slots[slot].used = true;
 	return QDOS_STORE_OK;
 }
 
-static qdos_store_result mem_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+static qdos_store_result mem_list(qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
 	(void)hal;
 	for (int i = 0; i < SLOTS; i++) {
-		if (g_slots[i].used && !visit(g_slots[i].name, user))
+		if (g_slots[i].used && g_slots[i].scope == scope && !visit(g_slots[i].name, user))
 			break;
 	}
 	return QDOS_STORE_OK;
+}
+
+/** Put a program in the system store, which nothing is allowed to write */
+static void seed_system(const char* name, const char* source) {
+	for (int i = 0; i < SLOTS; i++) {
+		if (g_slots[i].used)
+			continue;
+		snprintf(g_slots[i].name, sizeof(g_slots[i].name), "%s.qd", name);
+		memcpy(g_slots[i].data, source, strlen(source));
+		g_slots[i].len = strlen(source);
+		g_slots[i].scope = QDOS_SCOPE_SYSTEM;
+		g_slots[i].used = true;
+		return;
+	}
 }
 
 static qdos_hal make_hal(void) {
@@ -285,13 +302,13 @@ static void test_program_save_load_erase(void) {
 	CHECK(qdos_program_save(&hal, "double", source) == QDOS_STORE_OK);
 
 	char buf[QDOS_PROGRAM_MAX];
-	CHECK(qdos_program_load(&hal, "double", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "double", buf, sizeof(buf)) == QDOS_STORE_OK);
 	CHECK(strcmp(buf, source) == 0);
 
-	CHECK(qdos_program_load(&hal, "missing", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "missing", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
 
 	CHECK(qdos_program_erase(&hal, "double") == QDOS_STORE_OK);
-	CHECK(qdos_program_load(&hal, "double", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "double", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
 }
 
 static void test_programs_survive_a_restart(void) {
@@ -308,7 +325,7 @@ static void test_programs_survive_a_restart(void) {
 	// Power cycle: a fresh interpreter knows nothing until the store is replayed
 	qd_interp* after = qd_interp_create(256);
 	CHECK(!qd_interp_eval(after, "21 double"));
-	CHECK(qdos_programs_restore(&hal, after) == 1);
+	CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_USER, after) == 1);
 	CHECK(qd_interp_eval(after, "21 double"));
 
 	qd_interp_value value;
@@ -328,7 +345,7 @@ static void test_restore_skips_junk(void) {
 
 	qd_interp* interp = qd_interp_create(256);
 	// One bad upload must not cost the user the rest of their programs
-	CHECK(qdos_programs_restore(&hal, interp) == 1);
+	CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_USER, interp) == 1);
 	CHECK(qd_interp_eval(interp, "good"));
 	qd_interp_destroy(interp);
 }
@@ -339,8 +356,57 @@ static void test_restore_without_enumeration(void) {
 	hal.store_list = NULL;
 
 	qd_interp* interp = qd_interp_create(256);
-	CHECK(qdos_programs_restore(&hal, interp) == -1);
+	CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_USER, interp) == -1);
 	qd_interp_destroy(interp);
+}
+
+static void test_system_and_user_are_separate(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	char buf[QDOS_PROGRAM_MAX];
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_SYSTEM, "hyp", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "hyp", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
+
+	CHECK(qdos_program_is_system(&hal, "hyp"));
+	CHECK(!qdos_program_is_user(&hal, "hyp"));
+
+	// Saving writes the user store, never the system one
+	CHECK(qdos_program_save(&hal, "hyp", "fn hyp( -- r:i64) { 9 }") == QDOS_STORE_OK);
+	CHECK(qdos_program_is_user(&hal, "hyp"));
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_SYSTEM, "hyp", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(strstr(buf, "5") != NULL);
+}
+
+static void test_user_shadows_system(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_system("thing", "fn thing( -- r:i64) { 1 }");
+	CHECK(qdos_program_save(&hal, "thing", "fn thing( -- r:i64) { 2 }") == QDOS_STORE_OK);
+
+	qd_interp* interp = qd_interp_create(256);
+	CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_SYSTEM, interp) == 1);
+	CHECK(qdos_programs_restore(&hal, QDOS_SCOPE_USER, interp) == 1);
+
+	qd_interp_value value;
+	CHECK(qd_interp_eval(interp, "thing"));
+	CHECK(qd_interp_peek(interp, 0, &value) && value.i == 2);
+
+	qd_interp_destroy(interp);
+}
+
+static void test_erase_cannot_touch_system(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_system("keep", "fn keep( -- r:i64) { 1 }");
+
+	CHECK(qdos_program_erase(&hal, "keep") == QDOS_STORE_OK);
+
+	// The erase went to the user store; the shipped one is untouched
+	char buf[QDOS_PROGRAM_MAX];
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_SYSTEM, "keep", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(qdos_program_is_system(&hal, "keep"));
 }
 
 int main(void) {
@@ -358,5 +424,8 @@ int main(void) {
 	test_programs_survive_a_restart();
 	test_restore_skips_junk();
 	test_restore_without_enumeration();
+	test_system_and_user_are_separate();
+	test_user_shadows_system();
+	test_erase_cannot_touch_system();
 	return check_report("storage");
 }

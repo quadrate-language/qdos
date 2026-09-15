@@ -9,6 +9,8 @@
 
 #include "../ui/console.h"
 #include "complete.h"
+#include "editor.h"
+#include "wordlist.h"
 #include "storage.h"
 
 #include <stdio.h>
@@ -25,12 +27,22 @@
 #define STACK_SIZE 4096
 
 /* Screen layout, in rows. */
+/* The list and the editor caption themselves; the calculator does not need to */
 #define ROW_HEADER 0
 #define ROW_TOP_RULE 1
-#define ROW_STACK_FIRST 2
-#define ROW_BOTTOM_RULE (QDOS_ROWS - 3)
-#define ROW_MESSAGE (QDOS_ROWS - 2)
-#define ROW_INPUT (QDOS_ROWS - 1)
+#define ROW_CONTENT_FIRST 2
+
+/* Numbered rows already say how deep the stack is, so it starts at the top */
+#define ROW_STACK_FIRST 0
+#define ROW_BOTTOM_RULE (QDOS_ROWS - 4)
+#define ROW_MESSAGE (QDOS_ROWS - 3)
+#define ROW_INPUT (QDOS_ROWS - 2)
+
+/* Last row, so the labels sit against the edge the function keys are under */
+#define ROW_SOFT (QDOS_ROWS - 1)
+
+#define SOFT_KEYS 5
+#define SOFT_WIDTH (QDOS_COLS / SOFT_KEYS)
 
 #define STACK_ROWS (ROW_BOTTOM_RULE - ROW_STACK_FIRST)
 
@@ -43,7 +55,9 @@
 /** @brief What the keypad is doing */
 typedef enum {
 	QDOS_MODE_CALC, ///< Digits build a number; an operator applies immediately
-	QDOS_MODE_LINE	///< Whole lines of Quadrate, evaluated on Enter
+	QDOS_MODE_LINE,	///< Whole lines of Quadrate, evaluated on Enter
+	QDOS_MODE_LIST,	///< Browsing the vocabulary
+	QDOS_MODE_EDIT	///< Editing a program in the stack area
 } qdos_mode;
 
 struct qdos_shell {
@@ -57,7 +71,19 @@ struct qdos_shell {
 	size_t entry_len;
 
 	char input[INPUT_MAX]; ///< Line being typed in QDOS_MODE_LINE
+
+	qdos_wordlist list;
+	qdos_program_entry apps[QDOS_WORDLIST_MAX];
+	size_t app_count;
+	bool list_all; ///< Every word, rather than just the installed programs
+	size_t list_sel;
+	size_t list_top;
+	qdos_mode list_from; ///< Mode to return to
+
+	qdos_editor ed;
+	size_t ed_top; ///< First visible line
 	size_t input_len;
+	size_t input_cursor;
 
 	char message[QDOS_COLS + 1]; ///< Error or status under the stack
 	bool message_is_error;
@@ -68,18 +94,29 @@ static void input_append(qdos_shell* sh, const char* text) {
 	const size_t len = strlen(text);
 	if (sh->input_len + len >= INPUT_MAX)
 		return;
-	memcpy(sh->input + sh->input_len, text, len);
+
+	memmove(sh->input + sh->input_cursor + len, sh->input + sh->input_cursor,
+			sh->input_len - sh->input_cursor);
+	memcpy(sh->input + sh->input_cursor, text, len);
 	sh->input_len += len;
+	sh->input_cursor += len;
 	sh->input[sh->input_len] = '\0';
 }
 
 static void input_backspace(qdos_shell* sh) {
-	if (sh->input_len > 0)
-		sh->input[--sh->input_len] = '\0';
+	if (sh->input_cursor == 0)
+		return;
+
+	memmove(sh->input + sh->input_cursor - 1, sh->input + sh->input_cursor,
+			sh->input_len - sh->input_cursor);
+	sh->input_cursor--;
+	sh->input_len--;
+	sh->input[sh->input_len] = '\0';
 }
 
 static void input_clear(qdos_shell* sh) {
 	sh->input_len = 0;
+	sh->input_cursor = 0;
 	sh->input[0] = '\0';
 }
 
@@ -130,11 +167,40 @@ static void persist_declaration(qdos_shell* sh) {
 
 	char message[80];
 	if (qdos_program_save(sh->hal, name, sh->input) == QDOS_STORE_OK) {
-		snprintf(message, sizeof(message), "saved '%.20s'", name);
+		snprintf(message, sizeof(message), "SAVED '%.20s'", name);
 		set_message(sh, message, false);
 	} else {
-		snprintf(message, sizeof(message), "'%.12s' declared, not saved", name);
+		snprintf(message, sizeof(message), "'%.12s' DECLARED, NOT SAVED", name);
 		set_message(sh, message, true);
+	}
+}
+
+/** A soft key's label, and the key it stands for in this mode */
+typedef struct {
+	const char* label;
+	qdos_key key;
+} soft_key;
+
+static const soft_key SOFT[4][SOFT_KEYS] = {
+	[QDOS_MODE_CALC] = {{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"", QDOS_KEY_NONE},
+			{"", QDOS_KEY_NONE}, {"OFF", QDOS_KEY_POWER}},
+	[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
+			{"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}},
+	// down then up, so the pair sits like vim's j and k
+	[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {"DOWN", QDOS_KEY_DOWN}, {"UP", QDOS_KEY_UP},
+			{"PICK", QDOS_KEY_ENTER}, {"EDIT", QDOS_KEY_OPEN}},
+	[QDOS_MODE_EDIT] = {{"DROP", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
+			{"", QDOS_KEY_NONE}, {"SAVE", QDOS_KEY_SAVE}},
+};
+
+static void render_soft(qdos_shell* sh, qdos_console* con) {
+	for (int i = 0; i < SOFT_KEYS; i++) {
+		const char* label = SOFT[sh->mode][i].label;
+		if (label[0] == '\0')
+			continue;
+
+		const int width = (int)strlen(label);
+		qdos_console_puts(con, i * SOFT_WIDTH + (SOFT_WIDTH - width) / 2, ROW_SOFT, label);
 	}
 }
 
@@ -143,11 +209,17 @@ static void submit(qdos_shell* sh) {
 	if (sh->input_len == 0)
 		return;
 
+	// A word may take over the screen, and then the line and the message it
+	// left are its business, not ours
+	const qdos_mode before = sh->mode;
+
 	if (qd_interp_eval(sh->interp, sh->input)) {
-		persist_declaration(sh);
+		if (sh->mode == before)
+			persist_declaration(sh);
 	} else {
 		set_message(sh, qd_interp_error(sh->interp), true);
 	}
+
 	input_clear(sh);
 }
 
@@ -166,7 +238,7 @@ static void complete_word(qdos_shell* sh) {
 	qdos_complete(sh->interp, prefix, &done);
 
 	if (done.matches == 0) {
-		set_message(sh, "no match", false);
+		set_message(sh, "NO MATCH", false);
 		return;
 	}
 
@@ -233,7 +305,7 @@ static void enter_line_mode(qdos_shell* sh) {
 	entry_commit(sh);
 	sh->mode = QDOS_MODE_LINE;
 	input_clear(sh);
-	set_message(sh, "line mode - Esc to leave", false);
+	set_message(sh, "LINE MODE - ESC TO LEAVE", false);
 }
 
 static void leave_line_mode(qdos_shell* sh) {
@@ -287,7 +359,7 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 				entry_clear(sh);
 			} else {
 				qd_interp_eval(sh->interp, "clear");
-				set_message(sh, "stack cleared", false);
+				set_message(sh, "STACK CLEARED", false);
 			}
 			break;
 
@@ -295,7 +367,7 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 			if (ev->ch == ':') {
 				enter_line_mode(sh);
 			} else if (ev->ch != ' ') {
-				set_message(sh, "press : to type a line", false);
+				set_message(sh, "PRESS : TO TYPE A LINE", false);
 			}
 			break;
 
@@ -350,6 +422,16 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 			complete_word(sh);
 			break;
 
+		case QDOS_KEY_LEFT:
+			if (sh->input_cursor > 0)
+				sh->input_cursor--;
+			break;
+
+		case QDOS_KEY_RIGHT:
+			if (sh->input_cursor < sh->input_len)
+				sh->input_cursor++;
+			break;
+
 		case QDOS_KEY_CLEAR:
 			leave_line_mode(sh);
 			break;
@@ -359,12 +441,306 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 }
 
+static void edit_open(qdos_shell* sh, const char* name, const char* source);
+
+#define LIST_ROWS (ROW_BOTTOM_RULE - ROW_CONTENT_FIRST)
+
+static size_t list_count(const qdos_shell* sh) {
+	return sh->list_all ? sh->list.count : sh->app_count;
+}
+
+static const char* list_name(const qdos_shell* sh, size_t i) {
+	return sh->list_all ? sh->list.name[i] : sh->apps[i].name;
+}
+
+static void list_load(qdos_shell* sh) {
+	if (sh->list_all)
+		qdos_wordlist_gather(sh->interp, &sh->list);
+	else
+		sh->app_count = qdos_programs_gather(sh->hal, sh->apps, QDOS_WORDLIST_MAX);
+
+	sh->list_sel = 0;
+	sh->list_top = 0;
+}
+
+static void list_open(qdos_shell* sh) {
+	sh->list_all = false;
+	list_load(sh);
+	sh->list_from = sh->mode;
+	sh->mode = QDOS_MODE_LIST;
+	set_message(sh, "", false);
+}
+
+static void list_scroll_into_view(qdos_shell* sh) {
+	if (sh->list_sel < sh->list_top)
+		sh->list_top = sh->list_sel;
+	else if (sh->list_sel >= sh->list_top + LIST_ROWS)
+		sh->list_top = sh->list_sel - (LIST_ROWS - 1);
+}
+
+static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
+	switch (ev->key) {
+		case QDOS_KEY_UP:
+			if (sh->list_sel > 0)
+				sh->list_sel--;
+			list_scroll_into_view(sh);
+			break;
+
+		case QDOS_KEY_DOWN:
+			if (sh->list_sel + 1 < list_count(sh))
+				sh->list_sel++;
+			list_scroll_into_view(sh);
+			break;
+
+		case QDOS_KEY_LEFT:
+			sh->list_sel = (sh->list_sel > LIST_ROWS) ? sh->list_sel - LIST_ROWS : 0;
+			list_scroll_into_view(sh);
+			break;
+
+		case QDOS_KEY_RIGHT:
+			sh->list_sel += LIST_ROWS;
+			if (sh->list_sel >= list_count(sh))
+				sh->list_sel = list_count(sh) ? list_count(sh) - 1 : 0;
+			list_scroll_into_view(sh);
+			break;
+
+		case QDOS_KEY_TAB:
+			sh->list_all = !sh->list_all;
+			list_load(sh);
+			break;
+
+		case QDOS_KEY_ENTER:
+			// Picking types the name, leaving the user to run or edit it
+			sh->mode = QDOS_MODE_LINE;
+			if (list_count(sh) > 0) {
+				input_append(sh, list_name(sh, sh->list_sel));
+				input_append(sh, " ");
+			}
+			break;
+
+		case QDOS_KEY_OPEN: {
+			if (list_count(sh) == 0 || sh->list_all)
+				break;
+
+			const char* name = list_name(sh, sh->list_sel);
+			char source[QDOS_PROGRAM_MAX];
+			const bool found =
+					qdos_program_load(sh->hal, QDOS_SCOPE_USER, name, source, sizeof(source)) == QDOS_STORE_OK ||
+					qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK;
+			if (found)
+				edit_open(sh, name, source);
+			break;
+		}
+
+		case QDOS_KEY_LIST:
+		case QDOS_KEY_CLEAR:
+			sh->mode = sh->list_from;
+			break;
+
+		default:
+			break;
+	}
+}
+
+#define EDIT_ROWS (ROW_BOTTOM_RULE - ROW_CONTENT_FIRST)
+
+static void edit_scroll_into_view(qdos_shell* sh) {
+	size_t line, col;
+	qdos_editor_where(&sh->ed, &line, &col);
+
+	if (line < sh->ed_top)
+		sh->ed_top = line;
+	else if (line >= sh->ed_top + EDIT_ROWS)
+		sh->ed_top = line - (EDIT_ROWS - 1);
+}
+
+static void edit_open(qdos_shell* sh, const char* name, const char* source) {
+	qdos_editor_open(&sh->ed, name, source);
+	sh->ed_top = 0;
+	sh->mode = QDOS_MODE_EDIT;
+	edit_scroll_into_view(sh);
+	set_message(sh, "", false);
+}
+
+static void register_natives(qdos_shell* sh, qd_interp* interp);
+
+/**
+ * @brief Compile the editor text without letting it reach the session
+ *
+ * A scratch interpreter, because eval also runs whatever is at top level and
+ * declares what parses -- neither belongs in the session until a save.
+ */
+static void check_program(qdos_shell* sh) {
+	qd_interp* scratch = qd_interp_create(STACK_SIZE);
+	if (!scratch) {
+		set_message(sh, "CANNOT CHECK", true);
+		return;
+	}
+
+	register_natives(sh, scratch);
+	qdos_programs_restore(sh->hal, QDOS_SCOPE_SYSTEM, scratch);
+	qdos_programs_restore(sh->hal, QDOS_SCOPE_USER, scratch);
+
+	char message[80];
+	const bool ok = qd_interp_eval(scratch, sh->ed.text);
+	if (ok)
+		snprintf(message, sizeof(message), "'%.12s' COMPILES", sh->ed.name);
+	else
+		snprintf(message, sizeof(message), "%s", qd_interp_error(scratch));
+
+	qd_interp_destroy(scratch);
+	set_message(sh, message, !ok);
+}
+
+static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
+	switch (ev->key) {
+		case QDOS_KEY_UP: qdos_editor_move(&sh->ed, 0, -1); break;
+		case QDOS_KEY_DOWN: qdos_editor_move(&sh->ed, 0, 1); break;
+		case QDOS_KEY_LEFT: qdos_editor_move(&sh->ed, -1, 0); break;
+		case QDOS_KEY_RIGHT: qdos_editor_move(&sh->ed, 1, 0); break;
+
+		case QDOS_KEY_ENTER: qdos_editor_insert(&sh->ed, '\n'); break;
+		case QDOS_KEY_TAB: qdos_editor_insert(&sh->ed, '\t'); break;
+		case QDOS_KEY_BACKSPACE: qdos_editor_backspace(&sh->ed); break;
+
+		case QDOS_KEY_CHAR:
+			if (ev->ch)
+				qdos_editor_insert(&sh->ed, ev->ch);
+			break;
+
+		case QDOS_KEY_CHECK: check_program(sh); break;
+
+		case QDOS_KEY_SAVE: {
+			char message[80];
+			if (!qd_interp_eval(sh->interp, sh->ed.text)) {
+				// Stay in the editor: the text is still the only copy
+				set_message(sh, qd_interp_error(sh->interp), true);
+				break;
+			}
+			qdos_program_save(sh->hal, sh->ed.name, sh->ed.text);
+			snprintf(message, sizeof(message), "SAVED '%.12s'", sh->ed.name);
+			sh->mode = QDOS_MODE_CALC;
+			set_message(sh, message, false);
+			break;
+		}
+
+		case QDOS_KEY_CLEAR:
+			sh->mode = QDOS_MODE_CALC;
+			set_message(sh, "NOT SAVED", false);
+			break;
+
+		default:
+			break;
+	}
+
+	edit_scroll_into_view(sh);
+}
+
+static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev);
+
+/** @brief Translate a soft key press into the key it stands for */
+static bool expand_soft(qdos_shell* sh, const qdos_key_event* in, qdos_key_event* out) {
+	if (in->key < QDOS_KEY_SOFT1 || in->key > QDOS_KEY_SOFT5)
+		return false;
+
+	const soft_key* sk = &SOFT[sh->mode][in->key - QDOS_KEY_SOFT1];
+	if (sk->key == QDOS_KEY_NONE)
+		return false;
+
+	out->key = sk->key;
+	out->ch = 0;
+	return true;
+}
+
 static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
-	if (sh->mode == QDOS_MODE_LINE) {
+	qdos_key_event expanded;
+	if (expand_soft(sh, ev, &expanded)) {
+		handle_mode_key(sh, &expanded);
+		return;
+	}
+
+	handle_mode_key(sh, ev);
+}
+
+static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
+	if (ev->key == QDOS_KEY_LIST && sh->mode != QDOS_MODE_LIST) {
+		list_open(sh);
+		return;
+	}
+
+	if (sh->mode == QDOS_MODE_EDIT) {
+		handle_edit_key(sh, ev);
+	} else if (sh->mode == QDOS_MODE_LIST) {
+		handle_list_key(sh, ev);
+	} else if (sh->mode == QDOS_MODE_LINE) {
 		handle_line_key(sh, ev);
 	} else {
 		handle_calc_key(sh, ev);
 	}
+}
+
+static void render_edit(qdos_shell* sh, qdos_console* con) {
+	size_t line, col;
+	qdos_editor_where(&sh->ed, &line, &col);
+
+	char header[QDOS_COLS + 1];
+	snprintf(header, sizeof(header), "%zu:%zu", line + 1, col + 1);
+	qdos_console_puts(con, 0, ROW_HEADER, sh->ed.name);
+	qdos_console_puts_right(con, ROW_HEADER, header);
+	qdos_console_rule(con, ROW_TOP_RULE);
+
+	// One horizontal offset for the whole pane, so columns stay aligned
+	const size_t width = QDOS_COLS - 1;
+	const size_t left = (col >= width) ? col - width + 1 : 0;
+
+	for (size_t i = 0; i < EDIT_ROWS; i++) {
+		size_t len = 0;
+		const char* text = qdos_editor_line(&sh->ed, sh->ed_top + i, &len);
+		if (text == NULL)
+			break;
+
+		const int row = ROW_CONTENT_FIRST + (int)i;
+		for (size_t c = 0; left + c < len && c < width; c++) {
+			const char ch = text[left + c];
+			qdos_console_putc(con, (int)c, row, ch == '\t' ? ' ' : ch);
+		}
+
+		if (sh->ed_top + i == line)
+			qdos_console_invert(con, (int)(col - left), row, 1);
+	}
+
+	qdos_console_rule(con, ROW_BOTTOM_RULE);
+}
+
+static void render_list(qdos_shell* sh, qdos_console* con) {
+	const size_t total = list_count(sh);
+
+	char header[QDOS_COLS + 1];
+	snprintf(header, sizeof(header), "%zu/%zu", total ? sh->list_sel + 1 : 0, total);
+	qdos_console_puts(con, 0, ROW_HEADER, sh->list_all ? "WORDS" : "APPS");
+	qdos_console_puts_right(con, ROW_HEADER, header);
+	qdos_console_rule(con, ROW_TOP_RULE);
+
+	for (size_t i = 0; i < LIST_ROWS; i++) {
+		const size_t item = sh->list_top + i;
+		if (item >= total)
+			break;
+
+		const int row = ROW_CONTENT_FIRST + (int)i;
+		qdos_console_puts(con, 1, row, list_name(sh, item));
+		if (!sh->list_all) {
+			const qdos_program_entry* e = &sh->apps[item];
+			qdos_console_puts_right(con, row, e->user ? (e->system ? "YOURS*" : "YOURS") : "SYS");
+		}
+		if (item == sh->list_sel)
+			qdos_console_invert(con, 0, row, QDOS_COLS);
+	}
+
+	if (total == 0)
+		qdos_console_puts(con, 1, ROW_CONTENT_FIRST, "NONE INSTALLED");
+
+	qdos_console_rule(con, ROW_BOTTOM_RULE);
+
 }
 
 /** @brief Repaint the whole display */
@@ -372,16 +748,26 @@ static void render(qdos_shell* sh) {
 	qdos_console* con = &sh->con;
 	qdos_console_clear(con);
 
-	char header[QDOS_COLS + 1];
+	if (sh->mode == QDOS_MODE_EDIT) {
+		render_edit(sh, con);
+		if (sh->message[0]) {
+			qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
+			if (sh->message_is_error)
+				qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
+		}
+		render_soft(sh, con);
+		sh->hal->present(sh->hal, con->fb);
+		return;
+	}
+
+	if (sh->mode == QDOS_MODE_LIST) {
+		render_list(sh, con);
+		render_soft(sh, con);
+		sh->hal->present(sh->hal, con->fb);
+		return;
+	}
+
 	const size_t depth = qd_interp_depth(sh->interp);
-	snprintf(header, sizeof(header), "QDOS");
-	qdos_console_puts(con, 0, ROW_HEADER, header);
-
-	char depth_text[24];
-	snprintf(depth_text, sizeof(depth_text), "depth %zu", depth);
-	qdos_console_puts_right(con, ROW_HEADER, depth_text);
-
-	qdos_console_rule(con, ROW_TOP_RULE);
 
 	// Top of stack nearest the input line.
 	const size_t visible = (depth < STACK_ROWS) ? depth : (size_t)STACK_ROWS;
@@ -423,15 +809,20 @@ static void render(qdos_shell* sh) {
 		}
 	}
 
+	render_soft(sh, con);
+
 	qdos_console_puts(con, 0, ROW_INPUT, prompt);
 
 	const int room = QDOS_COLS - PROMPT_LEN - 1; // reserve a cell for the cursor
-	const char* shown = text;
-	if ((int)len > room)
-		shown = text + (len - (size_t)room);
 
-	const int drawn = qdos_console_puts(con, PROMPT_LEN, ROW_INPUT, shown);
-	qdos_console_invert(con, PROMPT_LEN + drawn, ROW_INPUT, 1);
+	// Scroll so the cursor stays on screen, rather than always showing the tail
+	size_t caret = line_mode ? sh->input_cursor - (size_t)(text - sh->input) : len;
+	if (caret > len)
+		caret = len;
+	const size_t start = (caret > (size_t)room) ? caret - (size_t)room : 0;
+
+	qdos_console_puts(con, PROMPT_LEN, ROW_INPUT, text + start);
+	qdos_console_invert(con, PROMPT_LEN + (int)(caret - start), ROW_INPUT, 1);
 
 	sh->hal->present(sh->hal, con->fb);
 }
@@ -473,7 +864,7 @@ static int push_value(qd_context* ctx, const qdos_value* value) {
 		case QDOS_VALUE_STRING: return qd_push_s(ctx, value->s);
 		case QDOS_VALUE_EMPTY: break;
 	}
-	qd_set_error_msg(ctx, "register is empty");
+	qd_set_error_msg(ctx, "REGISTER IS EMPTY");
 	return 1;
 }
 
@@ -481,12 +872,12 @@ static int push_value(qd_context* ctx, const qdos_value* value) {
 static bool pop_register_key(qd_context* ctx, const char* word, char* key, size_t cap) {
 	int64_t slot = 0;
 	if (qd_pop_i(ctx, &slot) != 0) {
-		qd_set_error_msg(ctx, "register must be a number");
+		qd_set_error_msg(ctx, "REGISTER MUST BE A NUMBER");
 		return false;
 	}
 	if (!qdos_register_key(slot, key, cap)) {
 		char message[64];
-		snprintf(message, sizeof(message), "%s: register 0 to %d", word, QDOS_REGISTER_MAX);
+		snprintf(message, sizeof(message), "%s: REGISTER 0 TO %d", word, QDOS_REGISTER_MAX);
 		qd_set_error_msg(ctx, message);
 		return false;
 	}
@@ -504,12 +895,12 @@ static int native_sto(qd_context* ctx, void* userdata) {
 
 	qdos_value value;
 	if (!pop_value(ctx, &value)) {
-		qd_set_error_msg(ctx, "sto: nothing to store");
+		qd_set_error_msg(ctx, "sto: NOTHING TO STORE");
 		return 1;
 	}
 
 	if (qdos_storage_save(sh->hal, key, &value) != QDOS_STORE_OK) {
-		qd_set_error_msg(ctx, "sto: storage write failed");
+		qd_set_error_msg(ctx, "sto: STORAGE WRITE FAILED");
 		return 1;
 	}
 	return 0;
@@ -527,11 +918,11 @@ static int native_rcl(qd_context* ctx, void* userdata) {
 	qdos_value value;
 	const qdos_store_result result = qdos_storage_load(sh->hal, key, &value);
 	if (result == QDOS_STORE_NOT_FOUND) {
-		qd_set_error_msg(ctx, "rcl: register is empty");
+		qd_set_error_msg(ctx, "rcl: REGISTER IS EMPTY");
 		return 1;
 	}
 	if (result != QDOS_STORE_OK) {
-		qd_set_error_msg(ctx, "rcl: storage read failed");
+		qd_set_error_msg(ctx, "rcl: STORAGE READ FAILED");
 		return 1;
 	}
 	return push_value(ctx, &value);
@@ -547,7 +938,7 @@ static int native_clr(qd_context* ctx, void* userdata) {
 	}
 
 	if (qdos_storage_erase(sh->hal, key) != QDOS_STORE_OK) {
-		qd_set_error_msg(ctx, "clr: storage write failed");
+		qd_set_error_msg(ctx, "clr: STORAGE WRITE FAILED");
 		return 1;
 	}
 	return 0;
@@ -559,18 +950,57 @@ static int native_forget(qd_context* ctx, void* userdata) {
 
 	char name[QDOS_VALUE_STRING_MAX];
 	if (qd_pop_s(ctx, name, sizeof(name)) != 0) {
-		qd_set_error_msg(ctx, "forget: need a string");
+		qd_set_error_msg(ctx, "forget: NEED A STRING");
+		return 1;
+	}
+
+	char message[80];
+
+	// A shipped program cannot be removed, only overridden
+	if (qdos_program_is_system(sh->hal, name) && !qdos_program_is_user(sh->hal, name)) {
+		snprintf(message, sizeof(message), "'%.12s' IS BUILT IN", name);
+		qd_set_error_msg(ctx, message);
 		return 1;
 	}
 
 	if (!qd_interp_undeclare(sh->interp, name)) {
-		char message[80];
-		snprintf(message, sizeof(message), "'%.12s' is not declared", name);
+		snprintf(message, sizeof(message), "'%.12s' IS NOT DECLARED", name);
 		qd_set_error_msg(ctx, message);
 		return 1;
 	}
 
 	qdos_program_erase(sh->hal, name);
+
+	// Forgetting an override brings the shipped version back
+	char source[QDOS_PROGRAM_MAX];
+	if (qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK)
+		qd_interp_eval(sh->interp, source);
+
+	return 0;
+}
+
+/**
+ * `edit` - (name -- ) load a program's source into the input line
+ *
+ * Flattened to one line with comments dropped: the input is a single line and
+ * Quadrate does not care about the whitespace.
+ */
+static int native_edit(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+
+	char name[QDOS_PROGRAM_NAME_MAX];
+	if (qd_pop_s(ctx, name, sizeof(name)) != 0) {
+		qd_set_error_msg(ctx, "edit: NEED A STRING");
+		return 1;
+	}
+
+	char source[QDOS_PROGRAM_MAX];
+	const bool found =
+			qdos_program_load(sh->hal, QDOS_SCOPE_USER, name, source, sizeof(source)) == QDOS_STORE_OK ||
+			qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK;
+
+	// An unknown name starts a new program rather than being an error
+	edit_open(sh, name, found ? source : NULL);
 	return 0;
 }
 
@@ -583,12 +1013,13 @@ static int native_cls(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
-static void register_natives(qdos_shell* sh) {
-	qd_interp_register(sh->interp, "sto", "(value:i64 slot:i64 -- )", native_sto, sh);
-	qd_interp_register(sh->interp, "rcl", "(slot:i64 -- value:i64)", native_rcl, sh);
-	qd_interp_register(sh->interp, "clr", "(slot:i64 -- )", native_clr, sh);
-	qd_interp_register(sh->interp, "forget", "(name:str -- )", native_forget, sh);
-	qd_interp_register(sh->interp, "cls", "( -- )", native_cls, sh);
+static void register_natives(qdos_shell* sh, qd_interp* interp) {
+	qd_interp_register(interp, "sto", "(value:i64 slot:i64 -- )", native_sto, sh);
+	qd_interp_register(interp, "rcl", "(slot:i64 -- value:i64)", native_rcl, sh);
+	qd_interp_register(interp, "clr", "(slot:i64 -- )", native_clr, sh);
+	qd_interp_register(interp, "forget", "(name:str -- )", native_forget, sh);
+	qd_interp_register(interp, "edit", "(name:str -- )", native_edit, sh);
+	qd_interp_register(interp, "cls", "( -- )", native_cls, sh);
 }
 
 qdos_shell* qdos_shell_create(qdos_hal* hal) {
@@ -606,21 +1037,23 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	}
 
 	sh->hal = hal;
-	register_natives(sh);
+	register_natives(sh, sh->interp);
 	qdos_console_init(&sh->con);
 
-	const int programs = qdos_programs_restore(hal, sh->interp);
+	// System first, so a user program of the same name shadows it
+	const int sys = qdos_programs_restore(hal, QDOS_SCOPE_SYSTEM, sh->interp);
+	const int programs = qdos_programs_restore(hal, QDOS_SCOPE_USER, sh->interp);
 	const qdos_store_result restored = qdos_storage_restore_session(hal, sh->interp);
 
 	char message[80];
-	if (programs > 0) {
-		snprintf(message, sizeof(message), "ready - %d program%s", programs,
-				 programs == 1 ? "" : "s");
+	if (programs > 0 || sys > 0) {
+		snprintf(message, sizeof(message), "READY - %d SYS %d YOURS",
+				 sys > 0 ? sys : 0, programs > 0 ? programs : 0);
 		set_message(sh, message, false);
 	} else if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
-		set_message(sh, "session restored", false);
+		set_message(sh, "SESSION RESTORED", false);
 	} else {
-		set_message(sh, "ready", false);
+		set_message(sh, "READY", false);
 	}
 	return sh;
 }

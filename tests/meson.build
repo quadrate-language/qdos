@@ -40,3 +40,9 @@ test_padui = executable('test_padui', 'test_padui.c',
 		dependencies: [qdos_core_dep],
 		link_language: 'cpp')
 test('padui', test_padui)
+
+test_editor = executable('test_editor', 'test_editor.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('editor', test_editor)

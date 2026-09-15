@@ -133,6 +133,15 @@ bool qdos_keypad_map(uint16_t code, bool shift, bool altgr, qdos_key_event* out)
 		case KEY_ENTER: case KEY_KPENTER: out->key = QDOS_KEY_ENTER; return true;
 		case KEY_BACKSPACE: out->key = QDOS_KEY_BACKSPACE; return true;
 		case KEY_TAB: out->key = QDOS_KEY_TAB; return true;
+		case KEY_UP: out->key = QDOS_KEY_UP; return true;
+		case KEY_DOWN: out->key = QDOS_KEY_DOWN; return true;
+		case KEY_LEFT: out->key = QDOS_KEY_LEFT; return true;
+		case KEY_RIGHT: out->key = QDOS_KEY_RIGHT; return true;
+		case KEY_F1: out->key = QDOS_KEY_SOFT1; return true;
+		case KEY_F2: out->key = QDOS_KEY_SOFT2; return true;
+		case KEY_F3: out->key = QDOS_KEY_SOFT3; return true;
+		case KEY_F4: out->key = QDOS_KEY_SOFT4; return true;
+		case KEY_F5: out->key = QDOS_KEY_SOFT5; return true;
 		case KEY_ESC: out->key = QDOS_KEY_CLEAR; return true;
 		case KEY_POWER: out->key = QDOS_KEY_POWER; return true;
 

@@ -13,6 +13,7 @@
 #include <quadrate/rt/stack.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Bumping the version makes older firmware refuse the record.
@@ -149,7 +150,7 @@ qdos_store_result qdos_storage_load(qdos_hal* hal, const char* key, qdos_value* 
 
 	uint8_t buf[QDOS_VALUE_ENCODED_MAX];
 	size_t len = 0;
-	const qdos_store_result result = hal->store_read(hal, key, buf, sizeof(buf), &len);
+	const qdos_store_result result = hal->store_read(hal, QDOS_SCOPE_USER, key, buf, sizeof(buf), &len);
 	if (result != QDOS_STORE_OK) {
 		return result;
 	}
@@ -207,13 +208,14 @@ qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char*
 	return hal->store_write(hal, key, source, len);
 }
 
-qdos_store_result qdos_program_load(qdos_hal* hal, const char* name, char* buf, size_t cap) {
+qdos_store_result qdos_program_load(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	char key[QDOS_PROGRAM_NAME_MAX];
 	if (!qdos_program_key(name, key, sizeof(key)) || cap == 0)
 		return QDOS_STORE_IO_ERROR;
 
 	size_t len = 0;
-	const qdos_store_result result = hal->store_read(hal, key, buf, cap - 1, &len);
+	const qdos_store_result result = hal->store_read(hal, scope, key, buf, cap - 1, &len);
 	if (result != QDOS_STORE_OK)
 		return result;
 
@@ -232,6 +234,7 @@ qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name) {
 
 typedef struct {
 	qdos_hal* hal;
+	qdos_store_scope scope;
 	qd_interp* interp;
 	int declared;
 } restore_walk;
@@ -251,7 +254,7 @@ static bool restore_one(const char* entry, void* user) {
 	name[stem] = '\0';
 
 	char source[QDOS_PROGRAM_MAX];
-	if (qdos_program_load(walk->hal, name, source, sizeof(source)) != QDOS_STORE_OK)
+	if (qdos_program_load(walk->hal, walk->scope, name, source, sizeof(source)) != QDOS_STORE_OK)
 		return true;
 
 	if (qd_interp_eval(walk->interp, source) && qd_interp_last_declared(walk->interp))
@@ -260,12 +263,81 @@ static bool restore_one(const char* entry, void* user) {
 	return true;
 }
 
-int qdos_programs_restore(qdos_hal* hal, qd_interp* interp) {
+typedef struct {
+	qdos_program_entry* out;
+	size_t cap;
+	size_t count;
+	bool system;
+} gather_walk;
+
+static bool gather_one(const char* entry, void* userdata) {
+	gather_walk* w = (gather_walk*)userdata;
+
+	const size_t len = strlen(entry);
+	if (len <= PROGRAM_SUFFIX_LEN || strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0)
+		return true;
+
+	const size_t stem = len - PROGRAM_SUFFIX_LEN;
+	if (stem >= QDOS_PROGRAM_NAME_MAX)
+		return true;
+
+	char name[QDOS_PROGRAM_NAME_MAX];
+	memcpy(name, entry, stem);
+	name[stem] = '\0';
+
+	for (size_t i = 0; i < w->count; i++) {
+		if (strcmp(w->out[i].name, name) == 0) {
+			if (w->system)
+				w->out[i].system = true;
+			else
+				w->out[i].user = true;
+			return true;
+		}
+	}
+
+	if (w->count >= w->cap)
+		return false;
+
+	snprintf(w->out[w->count].name, QDOS_PROGRAM_NAME_MAX, "%s", name);
+	w->out[w->count].system = w->system;
+	w->out[w->count].user = !w->system;
+	w->count++;
+	return true;
+}
+
+static int entry_by_name(const void* a, const void* b) {
+	return strcmp(((const qdos_program_entry*)a)->name, ((const qdos_program_entry*)b)->name);
+}
+
+size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap) {
+	if (!hal->store_list || cap == 0)
+		return 0;
+
+	gather_walk walk = {.out = out, .cap = cap, .count = 0, .system = true};
+	hal->store_list(hal, QDOS_SCOPE_SYSTEM, gather_one, &walk);
+	walk.system = false;
+	hal->store_list(hal, QDOS_SCOPE_USER, gather_one, &walk);
+
+	qsort(out, walk.count, sizeof(*out), entry_by_name);
+	return walk.count;
+}
+
+bool qdos_program_is_system(qdos_hal* hal, const char* name) {
+	char source[QDOS_PROGRAM_MAX];
+	return qdos_program_load(hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK;
+}
+
+bool qdos_program_is_user(qdos_hal* hal, const char* name) {
+	char source[QDOS_PROGRAM_MAX];
+	return qdos_program_load(hal, QDOS_SCOPE_USER, name, source, sizeof(source)) == QDOS_STORE_OK;
+}
+
+int qdos_programs_restore(qdos_hal* hal, qdos_store_scope scope, qd_interp* interp) {
 	if (!hal->store_list)
 		return -1;
 
-	restore_walk walk = {.hal = hal, .interp = interp, .declared = 0};
-	hal->store_list(hal, restore_one, &walk);
+	restore_walk walk = {.hal = hal, .scope = scope, .interp = interp, .declared = 0};
+	hal->store_list(hal, scope, restore_one, &walk);
 
 	// A stored file that runs rather than declares would otherwise leave its
 	// values under the restored session, and do it again on every boot.

@@ -64,6 +64,17 @@ chmod 0755 "${TARGET_DIR}/usr/bin/qdos-import"
 
 mkdir -p "${TARGET_DIR}/boot"
 
+# Programs shipped with the firmware. These live on the read-only rootfs, so a
+# user can override one but never lose it, and an unclean power-off cannot
+# corrupt them.
+mkdir -p "${TARGET_DIR}/usr/share/qdos/programs"
+install -m 0644 "${BOARD_DIR}/../../../programs/system/"*.qd \
+	"${TARGET_DIR}/usr/share/qdos/programs/"
+
+# One user app out of the box, seeding the writable partition
+install -m 0644 "${BOARD_DIR}/../../../programs/user/"*.qd \
+	"${TARGET_DIR}/var/lib/qdos/"
+
 # fsck on every boot would cost seconds the calculator does not have
 cat > "${TARGET_DIR}/etc/fstab" <<'EOF'
 /dev/root       /               ext4    ro,noatime      0 0

@@ -62,17 +62,35 @@ bool qdos_program_key(const char* name, char* buf, size_t cap);
 qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char* source);
 
 /** @brief NOT_FOUND if absent or erased */
-qdos_store_result qdos_program_load(qdos_hal* hal, const char* name, char* buf, size_t cap);
+qdos_store_result qdos_program_load(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap);
 
 qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name);
 
 /**
- * @brief Declare every stored program into @p interp, at boot
+ * @brief Declare the stored programs of one scope into @p interp
  *
  * A program that fails to parse is skipped rather than fatal: one bad upload
  * must not cost the user their calculator. -1 if the backend cannot enumerate.
  */
-int qdos_programs_restore(qdos_hal* hal, qd_interp* interp);
+int qdos_programs_restore(qdos_hal* hal, qdos_store_scope scope, qd_interp* interp);
+
+typedef struct {
+	char name[QDOS_PROGRAM_NAME_MAX];
+	bool system;
+	bool user;
+} qdos_program_entry;
+
+/**
+ * @brief Every installed program, sorted, each marked with where it came from
+ * @return Number written, which may be less than found if @p cap is small
+ */
+size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap);
+
+/** @brief Whether a program of this name is shipped with the firmware */
+bool qdos_program_is_system(qdos_hal* hal, const char* name);
+
+bool qdos_program_is_user(qdos_hal* hal, const char* name);
 
 qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp);
 

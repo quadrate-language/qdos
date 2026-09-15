@@ -52,6 +52,49 @@ open:
 Braces inside a string are text, not structure, and an unmatched closer submits
 so the parser can report it.
 
+Programs come from two places. `/usr/share/qdos/programs` ships with the
+firmware on the read-only rootfs; `/var/lib/qdos` is yours. In the simulator
+those are `programs/system` in this tree and `qdos-store` beside it, both
+overridable with `QDOS_SYSTEM_STORE` and `QDOS_STORE`. The simulator does not
+seed your store, so to try the shipped user app there:
+`cp programs/user/*.qd qdos-store/`. System programs load
+first, so a program of yours with the same name shadows one of theirs. The HAL
+enforces this by shape rather than by a check: `store_read` and `store_list`
+take a scope, and `store_write` does not, so the system store has no path to it.
+
+`"name" edit` opens the program in an editor over the stack area -- four lines
+at a time of the real source, comments and layout intact, scrolling as the
+cursor leaves the pane. Arrows move, `ent` splits a line, and the soft
+keys do the rest.
+
+`check` (F3) compiles what is on screen and says so, without saving and without
+leaving the editor -- a syntax error is reported the same way a save would
+report it, but you keep the text. It runs in a throwaway interpreter loaded with
+the installed programs, because evaluating a source file both declares what
+parses and runs whatever sits at top level, and neither belongs in the session
+until you save. So a word checked and then dropped is not callable afterwards,
+and the stack is as you left it.
+
+A name with no program behind it starts a new one from a template rather than
+failing, so `edit` is how you write a program as well as change one. Saving is
+refused if the source does not parse, and you stay in the editor, since the
+buffer is the only copy. Editing a shipped program writes your copy, leaving
+theirs intact underneath.
+
+`"name" forget` deletes your copy. If a shipped program of that name exists it
+comes straight back, so forgetting means undoing your override and a shipped
+program can never be lost. Forgetting one you never overrode says `is built in`.
+
+Shipped today: `isqrt` and `hyp` (Pythagoras, in Quadrate, in
+`programs/system/`). `hello` is installed as a user app to start you off.
+
+`lst` (F1) browses the installed programs, marked `sys` or `yours`, and `yours*`
+where one of yours overrides a shipped one. Arrows move, `ent` picks the name
+into the input line, `clr` goes back. `tab` widens to every word the interpreter
+knows -- useful, but the sixty builtins bury three apps, which is why the
+programs get their own view, and why the widening is on `tab` rather than
+spending one of the five function keys.
+
 `Tab` completes the word being typed, against everything the interpreter
 knows -- builtins, the native words below, and anything you have declared:
 
@@ -64,7 +107,21 @@ An ambiguous prefix still types the part every match shares, so `Tab` is never
 a wasted keystroke. It only fires on words: after an operator or a number there
 is nothing to complete.
 
-Backspace edits, F10 powers off.
+Left and right move the cursor, so text is inserted where you are rather than
+only appended. Backspace deletes to the left of it. F10 powers off.
+
+A row of five soft keys is labelled along the bottom edge of the panel, right
+above the function keys themselves, because what they do follows the mode: `f1` is always the way out, whatever
+backing out means there -- `clr` cancels the number you are typing, `esc` leaves
+line mode or the apps menu, `drop` abandons an edit. All four are the same key
+underneath, only the label differs. The rest follow the mode: `apps` from the
+calculator, `comp` in line mode, `down up pick edit` in the apps menu, `check`
+and `save` in the editor. The apps menu is therefore navigable with nothing but the five function
+keys, which matters if the built keypad ends up without arrows. They are F1 to F5 on a keyboard and the top keypad row. Five
+labels across 25 columns is 80 pixels each, the same as a keypad button, so a
+label sits squarely over the key it names. They cost a row of the display, which
+is the price of the machine explaining itself rather than expecting the keys to
+be remembered.
 
 A word declared in line mode is written to storage as it is defined, so it is
 still there after a power cycle:
@@ -116,6 +173,9 @@ on a Swedish keyboard the braces a function needs are on AltGr.
 include/qdos/       Public interfaces (HAL, shell)
 src/shell/          Input line, stack display, evaluation via Quadrate's lib/interp
 src/ui/             Framebuffer text console and 16x24 font
+assets/fonts/       The font the glyphs are rasterised from
+tools/              genfont.py and genlogo.py, which generate the font and
+                    the kernel boot logo from it
 src/hal/sim/        SDL3 backend (develop on the desktop)
 src/hal/device/     Pi backend (framebuffer + evdev)
 cross/              ARM cross-compilation (container, meson cross files, runner)
@@ -228,14 +288,39 @@ switches to typing whole lines of Quadrate, where `Tab` completes words.
 
 The panel is 400x240 -- a Sharp Memory LCD (LS027B7DH01), reflective and
 instant rather than backlit -- and only 2.7 inches, so its active area is
-58.8 x 35.3mm. That is small enough that the font had to be drawn for it rather
-than scaled up: `font16x24.c` is 95 glyphs with a 16 row cap height, 11 row
-x-height, 2px stems and even bearings, giving a 25x10 console where a capital
-is 2.4mm tall.
+58.8 x 35.3mm. That is small enough that the font has to suit the pixel grid rather
+than be scaled up to it: `src/ui/font16x24.c` is 95 glyphs baked in as bitmaps,
+giving a 25x10 console where a capital is 2.4mm tall.
 
-Everything is drawn at that one size, which leaves five stack entries visible
+The glyphs come from "VCR OSD Mono" by Riciery Leal, rasterised by
+`tools/genfont.py` at the largest size whose ink still fits a cell -- 27px, as
+it happens. Thresholding happens at build time, so the firmware links no
+rasteriser and the panel gets bitmaps. Point the generator at another font to
+change it; the metrics are worked out rather than hard coded.
+
+The kernel's boot logo is the same glyphs: `tools/genlogo.py` reads
+`font16x24.c` rather than the TTF, so what the firmware paints before Linux has
+a framebuffer driver cannot drift from what the shell paints after. Regenerate
+both when the font changes.
+
+Everything is drawn at that one size, which leaves six stack entries visible
 above the input line. A 64-bit integer is 19 digits and fits across 25 columns
 beside its index label.
+
+The calculator does not caption itself. A title row costs a stack entry to say
+what the machine in your hand already is, and `1:` `2:` `3:` down the left edge
+count the depth that a `DEPTH n` readout used to spell out, so the stack starts
+at the top row and a seventh entry shows as `...` rather than scrolling away
+unannounced. The apps menu and the editor keep their headers, which carry
+something the pane below cannot: `APPS` or `WORDS` with the position in the
+list, and the program name with `line:col`.
+
+What QDOS says for itself is in capitals -- headers, soft key labels, keycaps,
+status messages, the `SYS` and `YOURS` markers. Anything that is Quadrate stays exactly
+as it is written: program names, the source in the editor, the line you are
+typing, and the word a runtime error is complaining about. The language is
+case-sensitive, so shouting a program name back at you would be a lie about
+what you would have to type.
 
 The panel is one bit per pixel -- Sharp's datasheet calls it "internal 1bit
 memory within the panel", and the kernel reduces the grayscale buffer to it
@@ -249,11 +334,53 @@ shows is what the hardware shows, and a test asserts no pixel QDOS draws lands
 near the threshold. It opens 1:1 by default, which on a typical monitor is
 still about 1.6x life size; `QDOS_SIM_SCALE` enlarges it for inspecting pixels.
 
-Below the panel it draws a 5x8 keypad you can click, for trying a layout before
+Below the panel it draws a clickable 5x10 keypad, for trying a layout before
 wiring one. The table in `src/hal/sim/keypad_ui.c` is the whole layout, so
-rearranging it is a one-file edit. A button either sends a logical key or types
-text; only the logical keys and `:` reach calculator mode, which is the same
-constraint a physical keypad with forty buttons would have.
+rearranging it is a one-file edit. Each button carries two actions: unshifted is
+the calculator, and `shf` switches to the rest of the language. Buttons with
+nothing on the shifted layer dim rather than disappear.
+
+It is arranged like a SwissMicros DM42, because a calculator is operated by
+muscle memory and there is no reason to make ours a different shape. Keycaps are
+capitals, being the machine's own lettering; what a key types is not, so `FN`
+types `fn ` and `I64` types `i64`:
+
+```
+F1   F2   F3   F4   F5      menu keys, directly under the display
+(    )    "    {    }
+<    >    =    %    _       Quadrate's rows, which no calculator has
+SPC  CLR  IF   LOP  BRK
+DUP  DRP  OVR  ROT  LST     where the DM42 keeps sto, rcl and roll down
+ENT  SWP  NEG  TAB  BKS     enter, x<>y, +/-, e, backspace
+UP   7    8    9    /
+DN   4    5    6    *
+SHF  1    2    3    -
+ESC  0    .    :    +
+```
+
+Navigation runs down the left column, the digits sit in a 3x3 block, and the
+operators run down the right in the DM42's order. `ESC` is its EXIT, and `PWR`
+is on the shifted layer of that key exactly as OFF is shift-EXIT there, so the
+machine cannot be switched off by a slip of the thumb. The DM42 has no left and
+right arrows; ours are the shifted layer of `UP` and `DN`, which costs a shift
+press in the editor and is the one place the resemblance is inconvenient. `:`
+takes the R/S slot, being the key that runs something.
+
+The numpad sits at the bottom of the pad with nothing under it, where a thumb
+expects it. That pushes Quadrate's three rows -- brackets, quotes, types, and
+the control-flow words, which are otherwise unreachable on a keypad with no
+letters on it -- up between the menu keys and the calculator, since the menu
+keys have to stay directly under the labels they answer to.
+
+A button either sends a logical key or types text; only the logical keys and `:`
+reach calculator mode, which is the same constraint a physical keypad would have.
+
+`SPC` earns its place because two numbers typed in a row would otherwise merge:
+`7` `8` `+` is the single token `78` followed by an operator with nothing to add
+it to. Operators and words need no separator -- the lexer breaks on the former,
+and every word button types its own surrounding spaces -- so a space is only
+ever needed between literals. ` depth ` gave up the slot, being already on the
+shifted layer of `ROT`.
 
 Not yet: `for`, named locals (both `for i` and named parameters need a variable
 scope), and routing `print` output to the display instead of stdout.

@@ -1,0 +1,4 @@
+// Pythagoras: hypotenuse of a right triangle with legs a and b.
+fn hyp(a:i64 b:i64 -- r:i64) {
+	dup * swap dup * + isqrt
+}

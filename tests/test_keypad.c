@@ -47,9 +47,16 @@ static void test_mapping(void) {
 
 	// Keys the calculator has no use for must be rejected, not mapped to
 	// something arbitrary
-	CHECK(!qdos_keypad_map(KEY_F1, false, false, &ev));
+	CHECK(!qdos_keypad_map(KEY_F9, false, false, &ev));
 	CHECK(!qdos_keypad_map(KEY_LEFTSHIFT, false, false, &ev));
 	CHECK(!qdos_keypad_map(KEY_CAPSLOCK, false, false, &ev));
+
+	CHECK(qdos_keypad_map(KEY_UP, false, false, &ev) && ev.key == QDOS_KEY_UP);
+	CHECK(qdos_keypad_map(KEY_DOWN, false, false, &ev) && ev.key == QDOS_KEY_DOWN);
+	CHECK(qdos_keypad_map(KEY_LEFT, false, false, &ev) && ev.key == QDOS_KEY_LEFT);
+	CHECK(qdos_keypad_map(KEY_RIGHT, false, false, &ev) && ev.key == QDOS_KEY_RIGHT);
+	CHECK(qdos_keypad_map(KEY_F1, false, false, &ev) && ev.key == QDOS_KEY_SOFT1);
+	CHECK(qdos_keypad_map(KEY_F5, false, false, &ev) && ev.key == QDOS_KEY_SOFT5);
 
 
 	// Line mode needs a full keyboard: a keypad has no letters, but the machine

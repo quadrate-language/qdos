@@ -38,6 +38,7 @@ typedef struct {
 	uint32_t fb_pitch; ///< Bytes per scanline
 	bool running;
 	const char* store_dir;
+	const char* system_dir;
 	int tty_fd;		 ///< The VT whose text output is suspended while we draw
 	bool first_paint;
 } device_state;
@@ -51,6 +52,7 @@ static int device_init(qdos_hal* hal) {
 	device_state* st = (device_state*)hal->impl;
 
 	st->store_dir = env_or("QDOS_STORE", "/var/lib/qdos");
+	st->system_dir = env_or("QDOS_SYSTEM_STORE", "/usr/share/qdos/programs");
 
 	const char* fb_path = env_or("QDOS_FB", "/dev/fb0");
 	st->fb_fd = open(fb_path, O_RDWR);
@@ -172,19 +174,24 @@ static void device_idle(qdos_hal* hal) {
 	nanosleep(&frame, NULL);
 }
 
-static bool store_path(device_state* st, const char* name, char* buf, size_t cap) {
+static const char* dir_for(device_state* st, qdos_store_scope scope) {
+	return (scope == QDOS_SCOPE_SYSTEM) ? st->system_dir : st->store_dir;
+}
+
+static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
 	if (!name || !*name || strchr(name, '/') || strchr(name, '\\') || strcmp(name, "..") == 0)
 		return false;
 
-	const int written = snprintf(buf, cap, "%s/%s", st->store_dir, name);
+	const int written = snprintf(buf, cap, "%s/%s", dir, name);
 	return written > 0 && (size_t)written < cap;
 }
 
-static qdos_store_result device_store_read(qdos_hal* hal, const char* name, void* buf, size_t cap, size_t* len) {
+static qdos_store_result device_store_read(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
 	device_state* st = (device_state*)hal->impl;
 
 	char path[512];
-	if (!store_path(st, name, path, sizeof(path)))
+	if (!store_path(dir_for(st, scope), name, path, sizeof(path)))
 		return QDOS_STORE_IO_ERROR;
 
 	FILE* f = fopen(path, "rb");
@@ -206,7 +213,7 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	device_state* st = (device_state*)hal->impl;
 
 	char path[512];
-	if (!store_path(st, name, path, sizeof(path)))
+	if (!store_path(st->store_dir, name, path, sizeof(path)))
 		return QDOS_STORE_IO_ERROR;
 
 	mkdir(st->store_dir, 0755);
@@ -223,10 +230,11 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
-static qdos_store_result device_store_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+static qdos_store_result device_store_list(
+		qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
 	device_state* st = (device_state*)hal->impl;
 
-	DIR* dir = opendir(st->store_dir);
+	DIR* dir = opendir(dir_for(st, scope));
 	if (!dir)
 		return QDOS_STORE_NOT_FOUND;
 

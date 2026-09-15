@@ -58,6 +58,7 @@ static void stub_idle(qdos_hal* hal) {
 
 static struct {
 	char name[32];
+	qdos_store_scope scope;
 	uint8_t data[STORE_BYTES];
 	size_t len;
 	bool used;
@@ -67,10 +68,11 @@ static void store_reset(void) {
 	memset(g_store, 0, sizeof(g_store));
 }
 
-static qdos_store_result stub_read(qdos_hal* h, const char* n, void* b, size_t c, size_t* l) {
+static qdos_store_result stub_read(
+		qdos_hal* h, qdos_store_scope scope, const char* n, void* b, size_t c, size_t* l) {
 	(void)h;
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used && strcmp(g_store[i].name, n) == 0) {
+		if (g_store[i].used && g_store[i].scope == scope && strcmp(g_store[i].name, n) == 0) {
 			if (g_store[i].len > c)
 				return QDOS_STORE_TOO_BIG;
 			memcpy(b, g_store[i].data, g_store[i].len);
@@ -89,7 +91,8 @@ static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, s
 
 	int slot = -1;
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used && strcmp(g_store[i].name, n) == 0) {
+		// Writes only ever land in the user store
+		if (g_store[i].used && g_store[i].scope == QDOS_SCOPE_USER && strcmp(g_store[i].name, n) == 0) {
 			slot = i;
 			break;
 		}
@@ -102,17 +105,32 @@ static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, s
 	snprintf(g_store[slot].name, sizeof(g_store[slot].name), "%s", n);
 	memcpy(g_store[slot].data, b, l);
 	g_store[slot].len = l;
+	g_store[slot].scope = QDOS_SCOPE_USER;
 	g_store[slot].used = true;
 	return QDOS_STORE_OK;
 }
 
-static qdos_store_result stub_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
 	(void)hal;
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used && !visit(g_store[i].name, user))
+		if (g_store[i].used && g_store[i].scope == scope && !visit(g_store[i].name, user))
 			break;
 	}
 	return QDOS_STORE_OK;
+}
+
+/** Put a program in the read-only system store */
+static void seed_system(const char* name, const char* source) {
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used)
+			continue;
+		snprintf(g_store[i].name, sizeof(g_store[i].name), "%s.qd", name);
+		memcpy(g_store[i].data, source, strlen(source));
+		g_store[i].len = strlen(source);
+		g_store[i].scope = QDOS_SCOPE_SYSTEM;
+		g_store[i].used = true;
+		return;
+	}
 }
 
 static void stub_hal(qdos_hal* hal, stub_state* st) {
@@ -130,9 +148,12 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 }
 
 /* Where the shell draws things, mirroring shell.c's layout. */
-#define ROW_BOTTOM_RULE_T (QDOS_ROWS - 3)
+#define SOFT_WIDTH_T (QDOS_COLS / 5)
+#define ROW_HEADER_T 0
+#define ROW_CONTENT_FIRST_T 2
+#define ROW_BOTTOM_RULE_T (QDOS_ROWS - 4)
 #define ROW_TOP_VALUE (ROW_BOTTOM_RULE_T - 1)
-#define ROW_MESSAGE_LINE (QDOS_ROWS - 2)
+#define ROW_MESSAGE_LINE (QDOS_ROWS - 3)
 
 /** Press one key. */
 static void key(qdos_key_event* script, size_t* n, qdos_key k) {
@@ -253,8 +274,7 @@ static void test_operator_evaluates_immediately(void) {
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "42") != NULL);
 
-	read_row(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "depth 1") != NULL);
+	CHECK(row[0] == '1' && row[1] == ':'); // one value, so it is row 1
 }
 
 /** Digits accumulate until something ends the entry. */
@@ -272,8 +292,7 @@ static void test_digits_accumulate(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "123") != NULL); // one number, not three
-	read_row(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "depth 1") != NULL);
+	CHECK(row[0] == '1' && row[1] == ':'); // one value, so it is row 1
 }
 
 /** Decimals work, and an operator commits them. */
@@ -367,7 +386,7 @@ static void test_line_mode_prompt(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == ':'); // not '>'
 }
 
@@ -384,7 +403,7 @@ static void test_escape_leaves_line_mode(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == '>'); // back to the calculator
 }
 
@@ -410,7 +429,7 @@ static void test_line_mode_persists(void) {
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "50") != NULL);
 
-	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == ':'); // still in line mode
 }
 
@@ -463,7 +482,7 @@ static void test_recall_of_empty_register(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strstr(row, "empty") != NULL);
+	CHECK(strstr(row, "EMPTY") != NULL);
 }
 
 /** A register can be emptied. */
@@ -481,7 +500,7 @@ static void test_clear_a_register(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strstr(row, "empty") != NULL);
+	CHECK(strstr(row, "EMPTY") != NULL);
 }
 
 /** Strings round-trip through storage. */
@@ -587,7 +606,7 @@ static void test_continuation_prompt(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == '.' && row[1] == '.'); // not ':'
 }
 
@@ -605,7 +624,7 @@ static void test_balanced_line_evaluates(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "223") != NULL);
-	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == ':'); // not continuing
 }
 
@@ -621,11 +640,11 @@ static void test_braces_in_strings_do_not_open_a_line(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == ':'); // evaluated, not left open
 
-	read_row(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "depth 1") != NULL);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(row[0] == '1' && row[1] == ':'); // one value, so it is row 1
 }
 
 /** An unmatched closer submits, so the parser can report it. */
@@ -642,7 +661,7 @@ static void test_unmatched_closer_still_submits(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(row[0] != '\0'); // an error, rather than a line that cannot be sent
-	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == ':');
 }
 
@@ -678,7 +697,7 @@ static void test_forget_unknown(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strstr(row, "not declared") != NULL);
+	CHECK(strstr(row, "IS NOT DECLARED") != NULL);
 }
 
 /** A declared word is written to the store and comes back after a reboot. */
@@ -694,7 +713,7 @@ static void test_program_survives_power_cycle(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strstr(row, "saved") != NULL);
+	CHECK(strstr(row, "SAVED") != NULL);
 
 	// A fresh shell, as after a reboot: the word is there without redeclaring
 	qdos_key_event second[64];
@@ -781,7 +800,7 @@ static void test_tab_on_no_match(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strstr(row, "no match") != NULL);
+	CHECK(strstr(row, "NO MATCH") != NULL);
 }
 
 /**
@@ -806,6 +825,503 @@ static void test_pixels_are_unambiguous(void) {
 			ambiguous++;
 	}
 	CHECK(ambiguous == 0);
+}
+
+/** The list shows the vocabulary, sorted, and picking types the name. */
+static void test_list_browses_words(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "APPS") != NULL);
+
+	// Nothing installed, so it says so rather than showing an empty pane
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "NONE") != NULL);
+}
+
+/** The installed programs, marked with where each came from. */
+static void test_list_shows_apps_and_origin(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "fn mine( -- r:i64) { 1 }");
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "APPS") != NULL);
+	CHECK(strstr(row, "/2") != NULL);
+
+	// Sorted: hyp then mine
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "hyp") != NULL);
+	CHECK(strstr(row, "SYS") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "mine") != NULL);
+	CHECK(strstr(row, "YOURS") != NULL);
+}
+
+/** Tab widens from the installed programs to the whole vocabulary. */
+static void test_list_toggles_to_all_words(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_TAB);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "WORDS") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(row[0] != '\0');
+}
+
+static void test_list_moves_and_picks(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_TAB); // no programs installed, so widen to all words
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Picking leaves line mode with the name typed
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
+	CHECK(row[0] == ':');
+	CHECK(strlen(row) > 2);
+}
+
+static void test_list_exits(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Back to the calculator, stack intact
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+}
+
+/** A shipped program cannot be forgotten, only overridden. */
+static void test_forget_refuses_system(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "\"hyp\" forget");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "IS BUILT IN") != NULL);
+}
+
+/** Forgetting an override restores the shipped version. */
+static void test_forget_reverts_to_system(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	qdos_key_event script[240];
+	size_t n = 0;
+	type_line(script, &n, "fn hyp( -- r:i64) { 99 }");
+	type_more(script, &n, "\"hyp\" forget");
+	type_more(script, &n, "clear hyp");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "5") != NULL);
+	CHECK(strstr(row, "99") == NULL);
+}
+
+/** edit opens the program in the editor pane, source intact. */
+static void test_edit_opens_editor(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) {\n\t5\n}");
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "\"hyp\" edit");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "hyp") != NULL);
+
+	// The body is laid out over the stack area, a line per row
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "fn hyp") != NULL);
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "5") != NULL);
+}
+
+/** An unknown name starts a new program rather than failing. */
+static void test_edit_starts_new(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "\"fresh\" edit");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "fn fresh") != NULL);
+}
+
+/** Saving evaluates and stores; the program then runs. */
+static void test_edit_saves(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"two\" edit");
+	type_partial(script, &n, "2");
+	key(script, &n, QDOS_KEY_SAVE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "SAVED") != NULL);
+}
+
+/** A body that does not parse keeps you in the editor. */
+static void test_edit_refuses_broken(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"bad\" edit");
+	type_partial(script, &n, "{{{");
+	key(script, &n, QDOS_KEY_SAVE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Still showing the editor header, not the stack
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "bad") != NULL);
+}
+
+/** check compiles and says so, without leaving the editor. */
+static void test_edit_check_reports_ok(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"two\" edit");
+	type_partial(script, &n, "2");
+	key(script, &n, QDOS_KEY_CHECK);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "COMPILES") != NULL);
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "two") != NULL);
+}
+
+/** A body that does not parse is reported as an error, still in the editor. */
+static void test_edit_check_reports_error(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"bad\" edit");
+	type_partial(script, &n, "{{{");
+	key(script, &n, QDOS_KEY_CHECK);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(row[0] != '\0');
+	CHECK(strstr(row, "COMPILES") == NULL);
+	CHECK(cell_is(fb, 0, ROW_MESSAGE_LINE, row[0], true)); // inverted, so flagged
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "bad") != NULL);
+}
+
+/**
+ * A check installs nothing. Saving the same edit would leave the word callable,
+ * so the absent 42 is the difference between the two.
+ */
+static void test_check_leaves_session_alone(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"solo\" edit");
+	type_partial(script, &n, "42");
+	key(script, &n, QDOS_KEY_CHECK);
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "solo");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") == NULL);
+}
+
+/** A space is what keeps two numbers from merging into one. */
+static void test_space_separates_numbers(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	key(script, &n, QDOS_KEY_7);
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ' '};
+	key(script, &n, QDOS_KEY_8);
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "15") != NULL); // 78 + would have been an error
+}
+
+/** clr leaves without writing. */
+static void test_edit_discards(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"gone\" edit");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "NOT SAVED") != NULL);
+}
+
+/** Arrows move the cursor, so text can be inserted rather than only appended. */
+static void test_cursor_inserts(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "13");
+	key(script, &n, QDOS_KEY_LEFT);
+	type_partial(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// "13" with the cursor moved left then "2" typed gives 123
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "123") != NULL);
+}
+
+static void test_backspace_at_cursor(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "1X23");
+	key(script, &n, QDOS_KEY_LEFT);
+	key(script, &n, QDOS_KEY_LEFT);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "123") != NULL);
+}
+
+/** Soft key labels follow the mode. */
+static void test_soft_labels_follow_mode(void) {
+	store_reset();
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	qdos_key_event script[64];
+	size_t n = 0;
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "APPS") != NULL);
+	CHECK(strstr(row, "OFF") != NULL);
+
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	run_script(script, n, fb);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "COMP") != NULL);
+	CHECK(strstr(row, "ESC") != NULL);
+
+	// f1 is the way out of every mode, whatever it is called there
+	CHECK(strstr(row, "ESC") == strchr(row, 'E'));
+	CHECK((size_t)(strstr(row, "ESC") - row) < SOFT_WIDTH_T);
+}
+
+/** A soft key does what its label says for the current mode. */
+static void test_soft_key_opens_apps(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT2);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "APPS") != NULL);
+
+	// and in the list its labels have changed
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "DOWN") != NULL);
+	CHECK(strstr(row, "EDIT") != NULL);
+}
+
+/** open in the list edits the selected program. */
+static void test_soft_open_edits_selection(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT2); // apps
+	key(script, &n, QDOS_KEY_SOFT5); // edit
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "hyp") != NULL);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "SAVE") != NULL);
+}
+
+/** f2 is down and f3 is up, so the pair reads like vim's j and k. */
+static void test_soft_down_then_up(void) {
+	store_reset();
+	seed_system("aaa", "fn aaa( -- r:i64) { 1 }");
+	seed_system("bbb", "fn bbb( -- r:i64) { 2 }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT2); // apps
+	key(script, &n, QDOS_KEY_SOFT2); // down
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "2/2") != NULL);
+
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT2); // apps
+	key(script, &n, QDOS_KEY_SOFT2); // down
+	key(script, &n, QDOS_KEY_SOFT3); // up
+	run_script(script, n, fb);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "1/2") != NULL);
+}
+
+/** Whatever the mode, f1 backs out of it. */
+static void test_f1_is_always_the_way_out(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	qdos_key_event script[32];
+	char row[QDOS_COLS + 1];
+
+	// Out of the apps menu
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT2);
+	key(script, &n, QDOS_KEY_SOFT1);
+	run_script(script, n, fb);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "OFF") != NULL);
+
+	// Out of the editor, without saving
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT2);
+	key(script, &n, QDOS_KEY_SOFT5); // edit
+	key(script, &n, QDOS_KEY_SOFT1);
+	run_script(script, n, fb);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "OFF") != NULL);
+
+	// Out of line mode
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	key(script, &n, QDOS_KEY_SOFT1);
+	run_script(script, n, fb);
+	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
+	CHECK(row[0] == '>');
 }
 
 int main(void) {
@@ -838,5 +1354,28 @@ int main(void) {
 	test_tab_lists_ambiguous();
 	test_tab_on_no_match();
 	test_pixels_are_unambiguous();
+	test_list_browses_words();
+	test_list_shows_apps_and_origin();
+	test_list_toggles_to_all_words();
+	test_list_moves_and_picks();
+	test_list_exits();
+	test_forget_refuses_system();
+	test_forget_reverts_to_system();
+	test_edit_opens_editor();
+	test_edit_starts_new();
+	test_edit_saves();
+	test_edit_refuses_broken();
+	test_edit_discards();
+	test_space_separates_numbers();
+	test_edit_check_reports_ok();
+	test_edit_check_reports_error();
+	test_check_leaves_session_alone();
+	test_soft_labels_follow_mode();
+	test_soft_key_opens_apps();
+	test_soft_open_edits_selection();
+	test_soft_down_then_up();
+	test_f1_is_always_the_way_out();
+	test_cursor_inserts();
+	test_backspace_at_cursor();
 	return check_report("shell");
 }

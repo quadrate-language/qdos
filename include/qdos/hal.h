@@ -40,6 +40,23 @@ typedef enum {
 	QDOS_KEY_CLEAR,
 	QDOS_KEY_POWER,
 
+	/* Navigation */
+	QDOS_KEY_UP,
+	QDOS_KEY_DOWN,
+	QDOS_KEY_LEFT,
+	QDOS_KEY_RIGHT,
+	QDOS_KEY_LIST,
+	QDOS_KEY_SAVE,
+	QDOS_KEY_OPEN,	///< Edit the selection
+	QDOS_KEY_CHECK, ///< Compile what is in the editor without keeping it
+
+	/* Soft keys, labelled on screen because their meaning follows the mode */
+	QDOS_KEY_SOFT1,
+	QDOS_KEY_SOFT2,
+	QDOS_KEY_SOFT3,
+	QDOS_KEY_SOFT4,
+	QDOS_KEY_SOFT5,
+
 	/* Any other printable character, ASCII value in qdos_key_event.ch. How
 	 * the full language reaches a keypad with no letters on it. */
 	QDOS_KEY_CHAR,
@@ -62,6 +79,12 @@ typedef enum {
 
 typedef struct qdos_hal qdos_hal;
 
+/** @brief Which store. Only the user one is writable. */
+typedef enum {
+	QDOS_SCOPE_SYSTEM = 0, ///< Shipped with the firmware, on the read-only rootfs
+	QDOS_SCOPE_USER = 1
+} qdos_store_scope;
+
 /** @brief Receives one stored entry name; false stops the walk */
 typedef bool (*qdos_store_visit)(const char* name, void* user);
 
@@ -81,12 +104,15 @@ struct qdos_hal {
 	/** @brief Yield until roughly the next display refresh */
 	void (*idle)(qdos_hal* hal);
 
-	qdos_store_result (*store_read)(qdos_hal* hal, const char* name, void* buf, size_t cap, size_t* len);
+	qdos_store_result (*store_read)(
+			qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len);
 
+	/** @brief No scope: the system store cannot be written, by construction */
 	qdos_store_result (*store_write)(qdos_hal* hal, const char* name, const void* buf, size_t len);
 
 	/** @brief Unordered, and may be NULL */
-	qdos_store_result (*store_list)(qdos_hal* hal, qdos_store_visit visit, void* user);
+	qdos_store_result (*store_list)(
+			qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user);
 
 	void* impl; ///< Backend private state
 };
