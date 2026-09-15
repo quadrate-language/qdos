@@ -96,6 +96,15 @@ SYMBOLS[0x03] = ("left", [
 
 SYMBOLS[0x09] = ("right", [row[::-1] for row in SYMBOLS[0x03][1]])
 
+# Rows where thresholding lands a pixel wrong. A diagonal's coverage falls
+# either side of the cut depending on where it crosses the grid, so a shape the
+# typeface draws symmetric comes out lopsided. Each row here is its own mirror.
+PATCHES = {
+    ord("8"): {18: "...##########..."},
+    ord("x"): {7: ".###........###.", 10: "....###..###....", 18: "....###..###...."},
+    ord("*"): {9: "...##..##..##..."},
+}
+
 
 def largest_fitting_size(path):
     """The biggest size whose ink still fits a cell, for every character."""
@@ -140,6 +149,8 @@ def render(path, size):
             "".join("#" if px[cx, cy] >= 128 else "." for cx in range(CELL_W))
             for cy in range(CELL_H)
         ]
+        for row, bits in PATCHES.get(code, {}).items():
+            glyphs[code][row] = bits
     return glyphs
 
 

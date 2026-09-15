@@ -187,6 +187,20 @@ static void test_scaled_text(void) {
 	CHECK(1);
 }
 
+/** Glyphs the typeface draws symmetric must survive thresholding that way. */
+static void test_font_symmetry(void) {
+	for (const char* ch = "AHIMOTUVWXYouvwx8*+=-_|\"^"; *ch; ch++) {
+		for (int row = 0; row < QDOS_FONT_H; row++) {
+			const uint16_t bits = qdos_font_row(*ch, row);
+			uint16_t mirror = 0;
+			for (int col = 0; col < QDOS_FONT_W; col++)
+				if (bits & (1u << col))
+					mirror |= (uint16_t)(1u << (QDOS_FONT_W - 1 - col));
+			CHECK(bits == mirror);
+		}
+	}
+}
+
 int main(int argc, char** argv) {
 	if (argc > 1 && strcmp(argv[1], "--dump") == 0) {
 		dump_font();
@@ -202,5 +216,6 @@ int main(int argc, char** argv) {
 	test_rule();
 	test_splash();
 	test_scaled_text();
+	test_font_symmetry();
 	return check_report("console");
 }
