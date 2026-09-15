@@ -28,3 +28,9 @@ test_storage = executable('test_storage', 'test_storage.c',
 		dependencies: [qdos_core_dep],
 		link_language: 'cpp')
 test('storage', test_storage)
+
+test_complete = executable('test_complete', 'test_complete.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('complete', test_complete)

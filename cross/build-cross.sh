@@ -1,24 +1,47 @@
 #!/usr/bin/env bash
 #
-# Cross-compile QDOS and its Quadrate dependencies for the Pi Zero 2 W, then run
-# every test under emulation.
+# Cross-compile QDOS and its Quadrate dependencies for a Raspberry Pi Zero, then
+# run every test under emulation.
+#
+#   QDOS_ARCH=armv6     Zero W   (ARM1176, ARMv6)
+#   QDOS_ARCH=aarch64   Zero 2 W (Cortex-A53, ARMv8)
 #
 # Runs inside the container from cross/Dockerfile. Use cross/run.sh to drive it.
 set -euo pipefail
 
 QUADRATE_SRC=${QUADRATE_SRC:-/work/quadrate}
 QDOS_SRC=${QDOS_SRC:-/work/qdos}
-CROSS_FILE="$QDOS_SRC/cross/aarch64-linux-gnu.ini"
+ARCH=${QDOS_ARCH:-armv6}
 
-BUILD="$QUADRATE_SRC/build/aarch64"
-STAGE="$QUADRATE_SRC/build/aarch64-dist"
+case "$ARCH" in
+armv6)
+	TRIPLE=arm-linux-gnueabihf
+	CROSS_FILE="$QDOS_SRC/cross/armv6-linux-gnueabihf.ini"
+	QEMU=qemu-arm
+	;;
+aarch64)
+	TRIPLE=aarch64-linux-gnu
+	CROSS_FILE="$QDOS_SRC/cross/aarch64-linux-gnu.ini"
+	QEMU=qemu-aarch64
+	;;
+*)
+	echo "Unknown QDOS_ARCH '$ARCH' (expected armv6 or aarch64)" >&2
+	exit 1
+	;;
+esac
 
-echo "=== Cross-compiling Quadrate libraries for aarch64 ==="
+# Where qemu-user finds the target's shared libraries
+export QEMU_LD_PREFIX="/usr/$TRIPLE"
+
+BUILD="$QUADRATE_SRC/build/$ARCH"
+STAGE="$QUADRATE_SRC/build/$ARCH-dist"
+
+echo "=== Cross-compiling Quadrate libraries for $ARCH ($TRIPLE) ==="
 # LLVM is optional in this tree, so llvmgen and lib/qd simply do not get built.
 # Nothing QDOS needs depends on them, and -Dbuild_tools=false drops the command
 # line tools that do require it.
 #
-# werror is off for one specific reason: aarch64 GCC 14 raises a
+# werror is off for one specific reason: cross GCC 14 raises a
 # -Wnull-dereference false positive inside libstdc++'s <streambuf>, reached from
 # the read-whole-file idiom at lib/qc/src/semantic_validator.cc:540. The warning
 # is in a system header, not in Quadrate. Native builds keep werror.
@@ -46,7 +69,7 @@ mkdir -p "$STAGE/lib/quadrate" "$STAGE/include/quadrate"
 # the build tree, so each is repacked with the cross ar before being staged.
 repack() {
 	local dir="$1" src="$2" out="$3"
-	(cd "$dir" && aarch64-linux-gnu-ar rcs "$out" $(aarch64-linux-gnu-ar -t "$src"))
+	(cd "$dir" && "$TRIPLE-ar" rcs "$out" $("$TRIPLE-ar" -t "$src"))
 	cp "$dir/$out" "$STAGE/lib/quadrate/"
 }
 repack "$BUILD/lib/interp"       libinterp.a     libinterp_packed.a
@@ -70,37 +93,37 @@ for f in "$STAGE"/lib/quadrate/*.a; do
 done
 
 echo
-echo "=== Verifying the archives are actually ARM64 ==="
-obj=$(aarch64-linux-gnu-ar -t "$STAGE/lib/quadrate/libinterp.a" | head -1)
-(cd /tmp && aarch64-linux-gnu-ar x "$STAGE/lib/quadrate/libinterp.a" "$obj" && file "$obj")
+echo "=== Verifying the archives are actually $ARCH ==="
+obj=$("$TRIPLE-ar" -t "$STAGE/lib/quadrate/libinterp.a" | head -1)
+(cd /tmp && "$TRIPLE-ar" x "$STAGE/lib/quadrate/libinterp.a" "$obj" && file "$obj")
 
 echo
 echo "=== Cross-compiling QDOS ==="
 # No SDL3 for the target, so only the device backend is built — which is the
 # one that matters for hardware anyway.
-rm -rf "$QDOS_SRC/build/aarch64"
-meson setup "$QDOS_SRC/build/aarch64" "$QDOS_SRC" \
+rm -rf "$QDOS_SRC/build/$ARCH"
+meson setup "$QDOS_SRC/build/$ARCH" "$QDOS_SRC" \
 	--cross-file "$CROSS_FILE" \
 	--buildtype=release \
 	-Dsim=false \
 	-Dstatic=true \
 	-Ddevice=true \
 	-Dquadrate_src="$QUADRATE_SRC" \
-	-Dquadrate_dist=build/aarch64-dist
+	-Dquadrate_dist=build/$ARCH-dist
 
-meson compile -C "$QDOS_SRC/build/aarch64"
+meson compile -C "$QDOS_SRC/build/$ARCH"
 
 echo
 echo "=== Binary check ==="
-file "$QDOS_SRC/build/aarch64/qdos"
+file "$QDOS_SRC/build/$ARCH/qdos"
 
 echo
-echo "=== Running Quadrate's interpreter tests under qemu-aarch64 ==="
-qemu-aarch64 "$BUILD/lib/interp/tests/test_interp" | tail -3
+echo "=== Running Quadrate's interpreter tests under $QEMU ==="
+"$QEMU" "$BUILD/lib/interp/tests/test_interp" | tail -3
 
 echo
-echo "=== Running QDOS's tests under qemu-aarch64 ==="
-meson test -C "$QDOS_SRC/build/aarch64" --print-errorlogs
+echo "=== Running QDOS's tests under $QEMU ==="
+meson test -C "$QDOS_SRC/build/$ARCH" --print-errorlogs
 
 echo
-echo "=== ALL ARM64 CHECKS PASSED ==="
+echo "=== ALL $ARCH CHECKS PASSED ==="

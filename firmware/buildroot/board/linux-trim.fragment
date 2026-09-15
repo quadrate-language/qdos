@@ -1,0 +1,84 @@
+# What a calculator does not need.
+#
+# bcm2711_defconfig and bcmrpi_defconfig are general-purpose Raspberry Pi OS
+# configs. They build ~29MB of modules into an 80MB rootfs, almost none of
+# which this machine can ever load: it has no camera, no tuner, no speaker, no
+# ethernet, and exactly one wireless chip.
+#
+# Measured before trimming (Zero 2 W, 6.16.12):
+#   drivers/media  385 modules  3.9M      net/           370 modules  4.5M
+#   drivers/net    194 modules  4.6M      fs/             83 modules  4.7M
+#   sound/         127 modules  1.3M
+#
+# Kept deliberately: USB (keyboard during bring-up), HID, SPI, I2C, GPIO,
+# FB_BCM2708 and DRM (the panel), ext4, vfat, and the Broadcom wireless the
+# board actually has.
+
+# --- Media: no camera, no tuner, no IR receiver -------------------------------
+# CONFIG_MEDIA_SUPPORT is not set
+
+# --- Sound: the calculator has no speaker ------------------------------------
+# CONFIG_SOUND is not set
+
+# --- Filesystems: rootfs is ext4, boot is vfat, nothing else is mounted -------
+# CONFIG_BCACHEFS_FS is not set
+# CONFIG_XFS_FS is not set
+# CONFIG_BTRFS_FS is not set
+# CONFIG_OCFS2_FS is not set
+# CONFIG_GFS2_FS is not set
+# CONFIG_NILFS2_FS is not set
+# CONFIG_F2FS_FS is not set
+# CONFIG_JFS_FS is not set
+# CONFIG_NTFS3_FS is not set
+# CONFIG_HFS_FS is not set
+# CONFIG_HFSPLUS_FS is not set
+# CONFIG_UDF_FS is not set
+# CONFIG_NFS_FS is not set
+# CONFIG_NFSD is not set
+# CONFIG_CIFS is not set
+# CONFIG_CEPH_FS is not set
+# CONFIG_9P_FS is not set
+
+# --- Networking: no ethernet port, and no firewall on a calculator ------------
+# CONFIG_ETHERNET is not set
+# CONFIG_USB_NET_DRIVERS is not set
+# CONFIG_BT is not set
+# CONFIG_NETFILTER is not set
+# CONFIG_IP_SCTP is not set
+# CONFIG_ATM is not set
+# CONFIG_CAN is not set
+# CONFIG_AX25 is not set
+# CONFIG_6LOWPAN is not set
+# CONFIG_IEEE802154 is not set
+# CONFIG_NET_SCHED is not set
+
+# --- Wireless: keep only the chip the board has -------------------------------
+# The Zero W and Zero 2 W both use a Broadcom part, so brcmfmac stays and every
+# other vendor goes. Programs are uploaded over the SD card today; keeping this
+# one driver leaves the door open to doing it over the network later.
+# CONFIG_WLAN_VENDOR_ADMTEK is not set
+# CONFIG_WLAN_VENDOR_ATH is not set
+# CONFIG_WLAN_VENDOR_ATMEL is not set
+# CONFIG_WLAN_VENDOR_INTEL is not set
+# CONFIG_WLAN_VENDOR_INTERSIL is not set
+# CONFIG_WLAN_VENDOR_MARVELL is not set
+# CONFIG_WLAN_VENDOR_MEDIATEK is not set
+# CONFIG_WLAN_VENDOR_MICROCHIP is not set
+# CONFIG_WLAN_VENDOR_PURELIFI is not set
+# CONFIG_WLAN_VENDOR_QUANTENNA is not set
+# CONFIG_WLAN_VENDOR_RALINK is not set
+# CONFIG_WLAN_VENDOR_REALTEK is not set
+# CONFIG_WLAN_VENDOR_RSI is not set
+# CONFIG_WLAN_VENDOR_SILABS is not set
+# CONFIG_WLAN_VENDOR_ST is not set
+# CONFIG_WLAN_VENDOR_TI is not set
+# CONFIG_WLAN_VENDOR_ZYDAS is not set
+
+# --- Buses and sensors that are not wired to anything -------------------------
+# CONFIG_IIO is not set
+# CONFIG_W1 is not set
+# CONFIG_INFINIBAND is not set
+
+# Infrared remote decoders. Disabled by MEDIA_SUPPORT above, but named here so
+# a stale drivers/media/rc left in target/ is obviously unintended.
+# CONFIG_RC_CORE is not set

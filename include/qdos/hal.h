@@ -14,9 +14,8 @@
 extern "C" {
 #endif
 
-/** @brief Display width in pixels. 8x8 font gives a 40x30 character console. */
-#define QDOS_SCREEN_W 320
-/** @brief Display height in pixels. */
+/** @brief Sharp Memory LCD (LS027B7DH01); 25x10 cells at 16x24 */
+#define QDOS_SCREEN_W 400
 #define QDOS_SCREEN_H 240
 
 /** @brief Logical keys on the calculator keypad */
@@ -37,13 +36,12 @@ typedef enum {
 	/* Editing and control */
 	QDOS_KEY_ENTER,
 	QDOS_KEY_BACKSPACE,
+	QDOS_KEY_TAB,
 	QDOS_KEY_CLEAR,
 	QDOS_KEY_POWER,
 
-	/* Any other printable character. Carries its ASCII value in
-	 * qdos_key_event.ch — this is how the full Quadrate language reaches the
-	 * shell on a keypad that has no letters on it (soft keyboard, or a host
-	 * keyboard in the simulator). */
+	/* Any other printable character, ASCII value in qdos_key_event.ch. How
+	 * the full language reaches a keypad with no letters on it. */
 	QDOS_KEY_CHAR,
 
 	QDOS_KEY__COUNT
@@ -55,7 +53,6 @@ typedef struct {
 	char ch;	  ///< ASCII character for QDOS_KEY_CHAR, otherwise 0
 } qdos_key_event;
 
-/** @brief Storage result codes */
 typedef enum {
 	QDOS_STORE_OK = 0,		  ///< Success
 	QDOS_STORE_NOT_FOUND = 1, ///< No such entry
@@ -65,12 +62,11 @@ typedef enum {
 
 typedef struct qdos_hal qdos_hal;
 
-/** @brief A hardware backend */
+/** @brief Receives one stored entry name; false stops the walk */
+typedef bool (*qdos_store_visit)(const char* name, void* user);
+
 struct qdos_hal {
-	/**
-	 * @brief Bring up the hardware
-	 * @return 0 on success, non-zero on failure
-	 */
+	/** @brief Bring up the hardware; 0 on success */
 	int (*init)(qdos_hal* hal);
 
 	/** @brief Release the hardware. Safe to call after a failed init(). */
@@ -78,16 +74,12 @@ struct qdos_hal {
 
 	/**
 	 * @brief Push a framebuffer to the display
-	 * @param fb QDOS_SCREEN_W * QDOS_SCREEN_H bytes, one byte per pixel,
-	 *           0 = off through 255 = full on. Grayscale so the same buffer
+	 * @param fb One grayscale byte per pixel, QDOS_SCREEN_W * QDOS_SCREEN_H of
+	 *           them, so the same buffer serves a mono panel and an RGB one.
 	 */
 	void (*present)(qdos_hal* hal, const uint8_t* fb);
 
-	/**
-	 * @brief Fetch the next key press if one is waiting
-	 * @param[out] out Receives the event when true is returned
-	 * @return true if an event was produced, false if the queue is empty
-	 */
+	/** @brief Next key press, if one is waiting */
 	bool (*poll_key)(qdos_hal* hal, qdos_key_event* out);
 
 	/** @brief Whether the machine should keep running */
@@ -96,17 +88,14 @@ struct qdos_hal {
 	/** @brief Yield until roughly the next display refresh */
 	void (*idle)(qdos_hal* hal);
 
-	/**
-	 * @brief Read a stored entry
-	 * @param name     Entry name
-	 * @param buf      Destination buffer
-	 * @param cap      Capacity of @p buf
-	 * @param[out] len Receives the number of bytes written
-	 */
+	/** @brief Read a stored entry */
 	qdos_store_result (*store_read)(qdos_hal* hal, const char* name, void* buf, size_t cap, size_t* len);
 
 	/** @brief Write a stored entry, replacing any previous value */
 	qdos_store_result (*store_write)(qdos_hal* hal, const char* name, const void* buf, size_t len);
+
+	/** @brief Visit every stored entry name. Unordered, and may be NULL. */
+	qdos_store_result (*store_list)(qdos_hal* hal, qdos_store_visit visit, void* user);
 
 	void* impl; ///< Backend private state
 };

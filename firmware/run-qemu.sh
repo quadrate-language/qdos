@@ -7,34 +7,94 @@
 #   ./firmware/run-qemu.sh --vnc        # screen on VNC :5900
 #   ./firmware/run-qemu.sh --screenshot # boot headless and capture a PNG
 #
-# Emulates a Pi 3B, the closest machine QEMU offers to the Zero 2 W -- both are
-# quad Cortex-A53 on the same Broadcom silicon family. QEMU does not emulate the
-# GPU bootloader, so the kernel is loaded directly rather than through
-# bootcode.bin and start.elf; everything above that is the real image.
+# QDOS_BOARD picks the target: zerow (default) or zero2w.
+#
+# QEMU does not emulate the GPU bootloader, so the kernel is loaded directly
+# rather than through bootcode.bin and start.elf; everything above that is the
+# real image.
 #
 # Ctrl-C quits the graphical mode; Ctrl-A then X quits the serial ones.
 set -euo pipefail
 
 QDOS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CACHE=${QDOS_BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/qdos-firmware}
-IMAGES="$CACHE/build/images"
-SERIAL_LOG="$CACHE/serial.log"
+BOARD=${QDOS_BOARD:-zerow}
+IMAGES="$CACHE/build-$BOARD/images"
+SERIAL_LOG="$CACHE/serial-$BOARD.log"
 MODE=${1:-}
 
+case "$BOARD" in
+zerow)
+	# BCM2835, ARM1176, ARMv6. QEMU calls the machine raspi0; the Zero W is a
+	# Zero with wireless, which QEMU does not emulate anyway.
+	QEMU_BIN=qemu-system-arm
+	MACHINE=raspi0
+	KERNEL=zImage
+	DTB=bcm2708-rpi-zero-w.dtb
+	# BCM2835 puts its peripherals at 0x20000000, unlike the later chips
+	EARLYCON=0x20201000
+	# QEMU's raspi0 does not implement the BCM2835 power controller, and
+	# probing it takes an external abort that kills the deferred-probe worker
+	# with interrupts disabled. Nothing else needs it under emulation.
+	EXTRA_APPEND="initcall_blacklist=bcm2835_power_driver_init"
+	# The stock device tree looks for the SD card on a controller QEMU does not
+	# have. See firmware/qemu/make-qemu-dtb.sh.
+	PATCH_DTB=1
+	# raspi0 is a single emulated ARM1176 and runs roughly two orders of
+	# magnitude slower than realtime, so a headless capture has to wait
+	# minutes rather than seconds. Override with QDOS_BOOT_WAIT.
+	BOOT_WAIT=${QDOS_BOOT_WAIT:-900}
+	KNOWN_BROKEN=1
+	;;
+zero2w)
+	# BCM2837 is the closest QEMU offers to the Zero 2 W's BCM2710A1 -- both
+	# quad Cortex-A53 on the same silicon family.
+	QEMU_BIN=qemu-system-aarch64
+	MACHINE=raspi3b
+	KERNEL=Image
+	DTB=bcm2710-rpi-zero-2-w.dtb
+	EARLYCON=0x3f201000
+	EXTRA_APPEND=""
+	PATCH_DTB=0
+	BOOT_WAIT=${QDOS_BOOT_WAIT:-25}
+	KNOWN_BROKEN=0
+	;;
+*)
+	echo "Unknown QDOS_BOARD '$BOARD' (expected zerow or zero2w)" >&2
+	exit 1
+	;;
+esac
+
+# raspi0 does not get QDOS on screen. The patched device tree gets it as far as
+# enumerating the card and finding the partitions, and then the guest freezes
+# with QEMU pegged at 100% -- the guest clock stops, so even a plain rootdelay
+# sleep never returns. Neither clk_ignore_unused nor rootdelay changes it.
+#
+# Not worth more digging: the Zero 2 W target boots the same userspace in 25s,
+# and ./cross/run.sh already runs the whole suite as ARMv6 under qemu-arm.
+if [ "$KNOWN_BROKEN" = 1 ] && [ "${QDOS_FORCE_BROKEN:-0}" != 1 ]; then
+	echo "QDOS_BOARD=zerow does not boot under QEMU's raspi0 (known, see comment above)." >&2
+	echo >&2
+	echo "  Same userspace, 25s boot:  QDOS_BOARD=zero2w $0 ${MODE:-}" >&2
+	echo "  ARMv6 correctness:         ./cross/run.sh" >&2
+	echo "  Anyway, for debugging it:  QDOS_FORCE_BROKEN=1 $0 ${MODE:-}" >&2
+	exit 1
+fi
+
 if [ ! -f "$IMAGES/sdcard.img" ]; then
-	echo "No image. Build one first:" >&2
-	echo "  ./firmware/build-image.sh" >&2
+	echo "No $BOARD image. Build one first:" >&2
+	echo "  QDOS_BOARD=$BOARD ./firmware/build-image.sh" >&2
 	exit 1
 fi
 
 # Prefer QEMU on the host: a container has no GPU access and needs the X socket
-# plumbed in. Install with `pacman -S qemu-system-aarch64` or
+# plumbed in. Install with `pacman -S qemu` or
 # `apt install qemu-system-arm qemu-system-gui`.
-if command -v qemu-system-aarch64 >/dev/null 2>&1; then
+if command -v "$QEMU_BIN" >/dev/null 2>&1; then
 	NATIVE=1
 else
 	NATIVE=0
-	echo "qemu-system-aarch64 not installed; running it in a container."
+	echo "$QEMU_BIN not installed; running it in a container."
 	echo "Installing it on the host gives a smoother display."
 	echo
 	docker build -q -t qdos-qemu "$QDOS_DIR/firmware/qemu" >/dev/null
@@ -42,27 +102,37 @@ fi
 
 # QEMU insists an SD card image is a power of two, and ours is not. Pad a copy
 # rather than inflating what gets flashed to real hardware.
-PADDED="$CACHE/qemu-sdcard.img"
+PADDED="$CACHE/qemu-sdcard-$BOARD.img"
 if [ ! -f "$PADDED" ] || [ "$IMAGES/sdcard.img" -nt "$PADDED" ]; then
 	echo "Padding image to 256M for QEMU..."
 	cp "$IMAGES/sdcard.img" "$PADDED"
 	if [ "$NATIVE" = 1 ]; then
 		qemu-img resize -f raw "$PADDED" 256M >/dev/null
 	else
-		docker run --rm -v "$CACHE:/c" qdos-qemu qemu-img resize -f raw /c/qemu-sdcard.img 256M >/dev/null
+		docker run --rm -v "$CACHE:/c" qdos-qemu qemu-img resize -f raw "/c/qemu-sdcard-$BOARD.img" 256M >/dev/null
 	fi
+fi
+
+# The device tree QEMU is handed: the board's own, or a patched copy for
+# machines whose emulation does not match the real hardware.
+DTB_ARG="/img/$DTB"
+if [ "$PATCH_DTB" = 1 ]; then
+	PATCHED="$CACHE/${DTB%.dtb}-qemu.dtb"
+	if [ ! -f "$PATCHED" ] || [ "$IMAGES/$DTB" -nt "$PATCHED" ]; then
+		"$QDOS_DIR/firmware/qemu/make-qemu-dtb.sh" "$IMAGES/$DTB" "$PATCHED"
+	fi
+	DTB_ARG="/c/$(basename "$PATCHED")"
 fi
 
 # Paths are written as the container sees them and rewritten for a native run.
 QEMU_ARGS=(
-	-M raspi3b
-	-kernel /img/Image
-	-dtb /img/bcm2710-rpi-zero-2-w.dtb
-	-drive file=/c/qemu-sdcard.img,format=raw,if=sd
+	-M "$MACHINE"
+	-kernel "/img/$KERNEL"
+	-dtb "$DTB_ARG"
+	-drive file=/c/qemu-sdcard-$BOARD.img,format=raw,if=sd
 	# earlycon is QEMU-specific: without it the PL011 console registers too late
-	# to show the boot, which is the one thing worth watching when it fails. The
-	# address is the BCM2837 UART0, where -M raspi3b puts it.
-	-append "root=/dev/mmcblk0p2 rootwait ro console=ttyAMA0,115200 earlycon=pl011,0x3f201000 loglevel=4 vt.global_cursor_default=0 logo.nologo consoleblank=0"
+	# to show the boot, which is the one thing worth watching when it fails.
+	-append "root=/dev/mmcblk0p2 rootwait ro console=ttyAMA0,115200 earlycon=pl011,$EARLYCON $EXTRA_APPEND loglevel=4 vt.global_cursor_default=0 logo.nologo consoleblank=0"
 	-usb -device usb-kbd
 	# The machine has no audio and the default backend probes PipeWire, which is
 	# absent in the container and complains about it on every boot.
@@ -85,9 +155,9 @@ run_qemu() {
 			arg=${arg//\/c\//$CACHE/}
 			args+=("$arg")
 		done
-		qemu-system-aarch64 "${args[@]}"
+		"$QEMU_BIN" "${args[@]}"
 	else
-		docker run "${DOCKER_ARGS[@]}" qdos-qemu qemu-system-aarch64 "${QEMU_ARGS[@]}"
+		docker run "${DOCKER_ARGS[@]}" qdos-qemu "$QEMU_BIN" "${QEMU_ARGS[@]}"
 	fi
 }
 
@@ -121,11 +191,11 @@ case "$MODE" in
 	# Boot headless and capture the panel. Needs no display at all, which makes
 	# it the mode that always works -- and the one CI would use.
 	OUT=${2:-$CACHE/screen.png}
-	QEMU_ARGS+=(-display none -serial "file:/c/serial.log" -monitor stdio)
+	QEMU_ARGS+=(-display none -serial "file:/c/$(basename "$SERIAL_LOG")" -monitor stdio)
 	DOCKER_ARGS+=(-i)
 	rm -f "$CACHE/screen.ppm"
-	echo "Booting headless, capturing to $OUT ..."
-	{ sleep 25; echo "screendump /c/screen.ppm"; sleep 3; echo "quit"; } | run_qemu >/dev/null 2>&1 || true
+	echo "Booting headless, capturing to $OUT (waiting ${BOOT_WAIT}s) ..."
+	{ sleep "$BOOT_WAIT"; echo "screendump /c/screen.ppm"; sleep 5; echo "quit"; } | run_qemu >/dev/null 2>&1 || true
 	if [ ! -f "$CACHE/screen.ppm" ]; then
 		echo "No screendump produced; see $SERIAL_LOG" >&2
 		exit 1

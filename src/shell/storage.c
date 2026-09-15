@@ -29,6 +29,10 @@ static const uint8_t STORE_MAGIC[3] = {'Q', 'D', 'S'};
 /** @brief Most stack values a saved session carries */
 #define SESSION_MAX 64
 
+/** @brief Extension marking a stored entry as program source */
+#define PROGRAM_SUFFIX ".qd"
+#define PROGRAM_SUFFIX_LEN 3
+
 static void put_u64(uint8_t* out, uint64_t value) {
 	for (size_t i = 0; i < 8; i++) {
 		out[i] = (uint8_t)((value >> (i * 8)) & 0xFFu);
@@ -168,6 +172,107 @@ bool qdos_register_key(int64_t slot, char* buf, size_t cap) {
 }
 
 /** Name the entry holding one value of a saved session. */
+/** @brief Whether a name is safe as a filename and legal as a Quadrate word */
+static bool valid_program_name(const char* name) {
+	if (!name || !*name)
+		return false;
+
+	size_t n = 0;
+	for (const char* c = name; *c; c++, n++) {
+		const bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+						(*c >= '0' && *c <= '9') || *c == '_';
+		if (!ok)
+			return false;
+	}
+	return n + PROGRAM_SUFFIX_LEN < QDOS_PROGRAM_NAME_MAX;
+}
+
+bool qdos_program_key(const char* name, char* buf, size_t cap) {
+	if (!valid_program_name(name))
+		return false;
+
+	const int written = snprintf(buf, cap, "%s%s", name, PROGRAM_SUFFIX);
+	return written > 0 && (size_t)written < cap;
+}
+
+qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char* source) {
+	char key[QDOS_PROGRAM_NAME_MAX];
+	if (!qdos_program_key(name, key, sizeof(key)) || !source)
+		return QDOS_STORE_IO_ERROR;
+
+	const size_t len = strnlen(source, QDOS_PROGRAM_MAX);
+	if (len == 0 || len == QDOS_PROGRAM_MAX)
+		return QDOS_STORE_TOO_BIG;
+
+	return hal->store_write(hal, key, source, len);
+}
+
+qdos_store_result qdos_program_load(qdos_hal* hal, const char* name, char* buf, size_t cap) {
+	char key[QDOS_PROGRAM_NAME_MAX];
+	if (!qdos_program_key(name, key, sizeof(key)) || cap == 0)
+		return QDOS_STORE_IO_ERROR;
+
+	size_t len = 0;
+	const qdos_store_result result = hal->store_read(hal, key, buf, cap - 1, &len);
+	if (result != QDOS_STORE_OK)
+		return result;
+
+	buf[len] = '\0';
+	// An erased program is a zero-byte file, not a missing one.
+	return len > 0 ? QDOS_STORE_OK : QDOS_STORE_NOT_FOUND;
+}
+
+qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name) {
+	char key[QDOS_PROGRAM_NAME_MAX];
+	if (!qdos_program_key(name, key, sizeof(key)))
+		return QDOS_STORE_IO_ERROR;
+
+	return hal->store_write(hal, key, "", 0);
+}
+
+typedef struct {
+	qdos_hal* hal;
+	qd_interp* interp;
+	int declared;
+} restore_walk;
+
+static bool restore_one(const char* entry, void* user) {
+	restore_walk* walk = (restore_walk*)user;
+
+	const size_t len = strlen(entry);
+	if (len <= PROGRAM_SUFFIX_LEN || strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0)
+		return true;
+
+	char name[QDOS_PROGRAM_NAME_MAX];
+	const size_t stem = len - PROGRAM_SUFFIX_LEN;
+	if (stem >= sizeof(name))
+		return true;
+	memcpy(name, entry, stem);
+	name[stem] = '\0';
+
+	char source[QDOS_PROGRAM_MAX];
+	if (qdos_program_load(walk->hal, name, source, sizeof(source)) != QDOS_STORE_OK)
+		return true;
+
+	if (qd_interp_eval(walk->interp, source) && qd_interp_last_declared(walk->interp))
+		walk->declared++;
+
+	return true;
+}
+
+int qdos_programs_restore(qdos_hal* hal, qd_interp* interp) {
+	if (!hal->store_list)
+		return -1;
+
+	restore_walk walk = {.hal = hal, .interp = interp, .declared = 0};
+	hal->store_list(hal, restore_one, &walk);
+
+	// A stored file that runs rather than declares would otherwise leave its
+	// values under the restored session, and do it again on every boot.
+	qd_interp_eval(interp, "clear");
+	return walk.declared;
+}
+
 static bool session_key(size_t index, char* buf, size_t cap) {
 	const int written = snprintf(buf, cap, SESSION_KEY "%02zu", index);
 	return written > 0 && (size_t)written < cap;

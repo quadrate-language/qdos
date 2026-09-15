@@ -8,6 +8,7 @@
 #include <quadrate/interp/interp.h>
 
 #include "../ui/console.h"
+#include "complete.h"
 #include "storage.h"
 
 #include <stdio.h>
@@ -27,9 +28,10 @@
 #define ROW_HEADER 0
 #define ROW_TOP_RULE 1
 #define ROW_STACK_FIRST 2
-#define ROW_BOTTOM_RULE (QDOS_ROWS - 4)
-#define ROW_MESSAGE (QDOS_ROWS - 3)
+#define ROW_BOTTOM_RULE (QDOS_ROWS - 3)
+#define ROW_MESSAGE (QDOS_ROWS - 2)
 #define ROW_INPUT (QDOS_ROWS - 1)
+
 #define STACK_ROWS (ROW_BOTTOM_RULE - ROW_STACK_FIRST)
 
 /** Prompts. The character says which mode the keypad is in. */
@@ -118,17 +120,68 @@ static bool input_is_complete(const qdos_shell* sh) {
 	return depth <= 0;
 }
 
+/** @brief Store the source of a word the last eval declared, so it survives a reboot */
+static void persist_declaration(qdos_shell* sh) {
+	const char* name = qd_interp_last_declared(sh->interp);
+	if (!name) {
+		set_message(sh, "", false);
+		return;
+	}
+
+	char message[80];
+	if (qdos_program_save(sh->hal, name, sh->input) == QDOS_STORE_OK) {
+		snprintf(message, sizeof(message), "saved '%.20s'", name);
+		set_message(sh, message, false);
+	} else {
+		snprintf(message, sizeof(message), "'%.12s' declared, not saved", name);
+		set_message(sh, message, true);
+	}
+}
+
 /** @brief Evaluate the input line and report the outcome */
 static void submit(qdos_shell* sh) {
 	if (sh->input_len == 0)
 		return;
 
 	if (qd_interp_eval(sh->interp, sh->input)) {
-		set_message(sh, "", false);
+		persist_declaration(sh);
 	} else {
 		set_message(sh, qd_interp_error(sh->interp), true);
 	}
 	input_clear(sh);
+}
+
+/** @brief Complete the word being typed, or report why nothing happened */
+static void complete_word(qdos_shell* sh) {
+	const size_t n = qdos_complete_prefix_len(sh->input, sh->input_len);
+	if (n == 0) {
+		return;
+	}
+
+	char prefix[QDOS_WORD_MAX];
+	memcpy(prefix, sh->input + sh->input_len - n, n);
+	prefix[n] = '\0';
+
+	qdos_completion done;
+	qdos_complete(sh->interp, prefix, &done);
+
+	if (done.matches == 0) {
+		set_message(sh, "no match", false);
+		return;
+	}
+
+	// The shared prefix is always safe to type for the user, however many
+	// words matched. Only when it adds nothing is the list worth showing.
+	if (strlen(done.common) > n) {
+		input_append(sh, done.common + n);
+	}
+
+	if (done.matches == 1) {
+		input_append(sh, " ");
+		set_message(sh, "", false);
+	} else {
+		set_message(sh, done.listing, false);
+	}
 }
 
 /** @brief Translate a key press into an edit or an action */
@@ -180,7 +233,7 @@ static void enter_line_mode(qdos_shell* sh) {
 	entry_commit(sh);
 	sh->mode = QDOS_MODE_LINE;
 	input_clear(sh);
-	set_message(sh, "line mode - Escape to leave", false);
+	set_message(sh, "line mode - Esc to leave", false);
 }
 
 static void leave_line_mode(qdos_shell* sh) {
@@ -291,6 +344,10 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 		case QDOS_KEY_BACKSPACE:
 			input_backspace(sh);
+			break;
+
+		case QDOS_KEY_TAB:
+			complete_word(sh);
 			break;
 
 		case QDOS_KEY_CLEAR:
@@ -429,7 +486,7 @@ static bool pop_register_key(qd_context* ctx, const char* word, char* key, size_
 	}
 	if (!qdos_register_key(slot, key, cap)) {
 		char message[64];
-		snprintf(message, sizeof(message), "%s: register must be 0 to %d", word, QDOS_REGISTER_MAX);
+		snprintf(message, sizeof(message), "%s: register 0 to %d", word, QDOS_REGISTER_MAX);
 		qd_set_error_msg(ctx, message);
 		return false;
 	}
@@ -502,16 +559,18 @@ static int native_forget(qd_context* ctx, void* userdata) {
 
 	char name[QDOS_VALUE_STRING_MAX];
 	if (qd_pop_s(ctx, name, sizeof(name)) != 0) {
-		qd_set_error_msg(ctx, "forget: give the name as a string");
+		qd_set_error_msg(ctx, "forget: need a string");
 		return 1;
 	}
 
 	if (!qd_interp_undeclare(sh->interp, name)) {
 		char message[80];
-		snprintf(message, sizeof(message), "forget: '%.20s' is not declared", name);
+		snprintf(message, sizeof(message), "'%.12s' is not declared", name);
 		qd_set_error_msg(ctx, message);
 		return 1;
 	}
+
+	qdos_program_erase(sh->hal, name);
 	return 0;
 }
 
@@ -550,8 +609,15 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	register_natives(sh);
 	qdos_console_init(&sh->con);
 
+	const int programs = qdos_programs_restore(hal, sh->interp);
 	const qdos_store_result restored = qdos_storage_restore_session(hal, sh->interp);
-	if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
+
+	char message[80];
+	if (programs > 0) {
+		snprintf(message, sizeof(message), "ready - %d program%s", programs,
+				 programs == 1 ? "" : "s");
+		set_message(sh, message, false);
+	} else if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
 		set_message(sh, "session restored", false);
 	} else {
 		set_message(sh, "ready", false);

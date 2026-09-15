@@ -1,3 +1,6 @@
+# Template. post-image.sh fills in @DTB@ and @KERNEL@ from the active
+# defconfig, so one layout serves both the Zero W and the Zero 2 W.
+#
 # Two partitions: the firmware's FAT boot partition, and a read-only rootfs.
 #
 # The rootfs is mounted ro so an unclean power-off -- which is how a calculator
@@ -7,19 +10,25 @@
 image boot.vfat {
 	vfat {
 		files = {
-			"bcm2710-rpi-zero-2-w.dtb",
+			"@DTB@",
 			"rpi-firmware/bootcode.bin",
 			"rpi-firmware/cmdline.txt",
 			"rpi-firmware/config.txt",
 			"rpi-firmware/fixup.dat",
 			"rpi-firmware/start.elf",
-			"Image"
+			"@KERNEL@"
 		}
 		file overlays {
 			image = "rpi-firmware/overlays"
 		}
+		# Where programs uploaded from a PC land; see post-build.sh
+		file qdos {
+			image = "qdos-inbox"
+		}
 	}
-	size = 32M
+	# bcm2711_defconfig builds a bigger kernel than bcmrpi3 did; 32M left
+	# only ~6MB spare and overflowing here fails late, after the whole build.
+	size = 64M
 }
 
 image data.ext4 {

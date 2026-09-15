@@ -10,10 +10,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/stat.h>
 
-/** Integer scale from panel pixels to window pixels. */
-#define SIM_SCALE 3
+/**
+ * @brief Integer scale from panel pixels to window pixels
+ *
+ * Kept whole: the font is drawn pixel by pixel, and a fractional scale would
+ * render some of its 2px stems 3px wide and others 2px.
+ */
+#define SIM_SCALE 2
 
 /** Directory holding simulated persistent storage. */
 #define SIM_STORE_DIR "qdos-store"
@@ -147,6 +153,10 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 						out->key = QDOS_KEY_BACKSPACE;
 						out->ch = 0;
 						return true;
+					case SDLK_TAB:
+						out->key = QDOS_KEY_TAB;
+						out->ch = 0;
+						return true;
 					case SDLK_ESCAPE:
 						out->key = QDOS_KEY_CLEAR;
 						out->ch = 0;
@@ -231,6 +241,25 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
+static qdos_store_result sim_store_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+	(void)hal;
+
+	DIR* dir = opendir(SIM_STORE_DIR);
+	if (!dir)
+		return QDOS_STORE_NOT_FOUND;
+
+	const struct dirent* ent;
+	while ((ent = readdir(dir)) != NULL) {
+		if (ent->d_name[0] == '.')
+			continue;
+		if (!visit(ent->d_name, user))
+			break;
+	}
+
+	closedir(dir);
+	return QDOS_STORE_OK;
+}
+
 static sim_state g_sim;
 
 void qdos_sim_hal(qdos_hal* hal) {
@@ -244,5 +273,6 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->idle = sim_idle;
 	hal->store_read = sim_store_read;
 	hal->store_write = sim_store_write;
+	hal->store_list = sim_store_list;
 	hal->impl = &g_sim;
 }

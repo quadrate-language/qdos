@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Sharp Memory LCD LS027B7DH01 (400x240) on SPI0 CE0.
+//
+// Wiring: SCLK->GPIO11(pin23) SI->GPIO10(pin19) SCS->GPIO8(pin24)
+//         VDD->3V3(pin1) GND->pin6 DISP->3V3
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&spi0>;
+		__overlay__ {
+			status = "okay";
+
+			// The panel's chip select is active high, the opposite of every
+			// other SPI device. Polarity lives in cs-gpios, so spi-cs-high on
+			// the device node alone does nothing -- this is the line that
+			// decides whether the display works at all. CE1 is left as it was.
+			cs-gpios = <&gpio 8 0>, <&gpio 7 1>;
+		};
+	};
+
+	// spidev would otherwise claim CE0
+	fragment@1 {
+		target = <&spidev0>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	fragment@2 {
+		target = <&spi0>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			display@0 {
+				compatible = "sharp,ls027b7dh01";
+				reg = <0>;
+				spi-cs-high;
+				spi-max-frequency = <2000000>;
+
+				// No EXTCOMIN pin wired: the driver toggles VCOM in the
+				// message it already sends once a second.
+				sharp,vcom-mode = "software";
+				status = "okay";
+			};
+		};
+	};
+};

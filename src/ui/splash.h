@@ -12,10 +12,7 @@
 extern "C" {
 #endif
 
-/**
- * @brief Paint the startup screen
- * @param hal An initialised backend; only its display is used
- */
+/** @brief Paint the startup screen. Only the backend display is used. */
 void qdos_splash_draw(qdos_hal* hal);
 
 #ifdef __cplusplus

@@ -1,0 +1,10 @@
+# Raspberry Pi kernel, pinned by commit in the defconfig.
+#
+# BR2_DOWNLOAD_FORCE_CHECK_HASHES overrides the exemption Buildroot normally
+# grants custom tarballs, so without this the build stops at the download.
+# build-image.sh appends these lines to Buildroot's own package/linux/linux.hash.
+#
+# GitHub regenerates archive tarballs on rare occasions. If that happens the
+# build fails here rather than silently using different source -- which is the
+# failure we want. Re-verify the commit, then update the hash.
+sha256  0ea19518f4381420b3b6cedd8e97e48e88e0fe51e769378e95d28bbfc84d3082  linux-999cdc63ae791860a8b09da3af90e5dfe603cc09.tar.gz

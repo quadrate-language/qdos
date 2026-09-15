@@ -6,7 +6,7 @@
 #ifndef QDOS_CONSOLE_H
 #define QDOS_CONSOLE_H
 
-#include "font8x8.h"
+#include "font16x24.h"
 
 #include <qdos/hal.h>
 
@@ -17,51 +17,38 @@
 extern "C" {
 #endif
 
-/** @brief Console width in characters */
-#define QDOS_COLS (QDOS_SCREEN_W / QDOS_FONT_W)
-/** @brief Console height in characters */
-#define QDOS_ROWS (QDOS_SCREEN_H / QDOS_FONT_H)
+/** @brief The font is drawn at reading size, so ordinary text is unscaled */
+#define QDOS_FONT_SCALE 1
 
-/** @brief Console state — the framebuffer plus the pen */
+#define QDOS_CELL_W (QDOS_FONT_W * QDOS_FONT_SCALE)
+#define QDOS_CELL_H (QDOS_FONT_H * QDOS_FONT_SCALE)
+#define QDOS_COLS (QDOS_SCREEN_W / QDOS_CELL_W)
+#define QDOS_ROWS (QDOS_SCREEN_H / QDOS_CELL_H)
+
 typedef struct {
 	uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H]; ///< Grayscale pixels, row-major
 	uint8_t ink;							   ///< Foreground level
 	uint8_t paper;							   ///< Background level
 } qdos_console;
 
-/** @brief Reset to default ink and paper and clear the screen */
+/** @brief Default ink and paper, and clear */
 void qdos_console_init(qdos_console* con);
 
-/** @brief Fill the whole framebuffer with paper */
 void qdos_console_clear(qdos_console* con);
 
-/**
- * @brief Draw one character at a cell
- * @param col Column, 0 through QDOS_COLS - 1
- * @param row Row, 0 through QDOS_ROWS - 1
- */
 void qdos_console_putc(qdos_console* con, int col, int row, char ch);
 
-/**
- * @brief Draw a string starting at a cell, clipped at the right edge
- * @return Number of characters actually drawn
- */
+/** @brief Clipped at the right edge; returns characters drawn */
 int qdos_console_puts(qdos_console* con, int col, int row, const char* text);
 
-/** @brief Draw a string ending at the right edge of the console */
 void qdos_console_puts_right(qdos_console* con, int row, const char* text);
 
-/** @brief Invert a run of cells, for the cursor and for highlights */
+/** @brief Invert cells, for the cursor and for errors */
 void qdos_console_invert(qdos_console* con, int col, int row, int count);
 
-/** @brief Draw a horizontal rule across the console at a row */
 void qdos_console_rule(qdos_console* con, int row);
 
-/**
- * @brief Draw a string with each pixel enlarged, centred horizontally
- * @param row   Row of the top of the enlarged text, in unscaled cells
- * @param scale Pixel multiplier; 1 is the same as qdos_console_puts()
- */
+/** @brief Centred, each pixel enlarged; scale 1 matches puts() */
 void qdos_console_puts_centered(qdos_console* con, int row, const char* text, int scale);
 
 #ifdef __cplusplus

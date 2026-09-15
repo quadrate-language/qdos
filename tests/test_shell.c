@@ -106,6 +106,15 @@ static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, s
 	return QDOS_STORE_OK;
 }
 
+static qdos_store_result stub_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+	(void)hal;
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used && !visit(g_store[i].name, user))
+			break;
+	}
+	return QDOS_STORE_OK;
+}
+
 static void stub_hal(qdos_hal* hal, stub_state* st) {
 	memset(hal, 0, sizeof(*hal));
 	hal->init = stub_init;
@@ -116,12 +125,14 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->idle = stub_idle;
 	hal->store_read = stub_read;
 	hal->store_write = stub_write;
+	hal->store_list = stub_list;
 	hal->impl = st;
 }
 
 /* Where the shell draws things, mirroring shell.c's layout. */
-#define ROW_TOP_VALUE (QDOS_ROWS - 5)
-#define ROW_MESSAGE_LINE (QDOS_ROWS - 3)
+#define ROW_BOTTOM_RULE_T (QDOS_ROWS - 3)
+#define ROW_TOP_VALUE (ROW_BOTTOM_RULE_T - 1)
+#define ROW_MESSAGE_LINE (QDOS_ROWS - 2)
 
 /** Press one key. */
 static void key(qdos_key_event* script, size_t* n, qdos_key k) {
@@ -147,23 +158,41 @@ static void type_line(qdos_key_event* script, size_t* n, const char* text) {
 }
 
 /**
+ * Type while already in line mode. ':' is only the way in -- pressing it again
+ * just inserts a colon -- so these skip it.
+ */
+static void type_more(qdos_key_event* script, size_t* n, const char* text) {
+	for (const char* p = text; *p; p++)
+		script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	script[(*n)++] = (qdos_key_event){QDOS_KEY_ENTER, 0};
+}
+
+/** As type_more(), but leaves the line unsubmitted so Tab can be pressed. */
+static void type_partial(qdos_key_event* script, size_t* n, const char* text) {
+	for (const char* p = text; *p; p++)
+		script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+}
+
+/**
  * @brief Does the cell at (col,row) hold this character?
  * @param inverted Match against inverted pixels, as the shell draws errors and
  *                 the cursor
  */
 static bool cell_is(const uint8_t* fb, int col, int row, char ch, bool inverted) {
-	for (int y = 0; y < QDOS_FONT_H; y++) {
-		const uint8_t bits = qdos_font_row(ch, y);
-		for (int x = 0; x < QDOS_FONT_W; x++) {
-			const size_t i = (size_t)(row * QDOS_FONT_H + y) * QDOS_SCREEN_W + col * QDOS_FONT_W + x;
+	// A cell is QDOS_FONT_SCALE screen pixels per font pixel, so map back
+	for (int y = 0; y < QDOS_CELL_H; y++) {
+		const uint16_t bits = qdos_font_row(ch, y / QDOS_FONT_SCALE);
+		for (int x = 0; x < QDOS_CELL_W; x++) {
+			const size_t i = (size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + col * QDOS_CELL_W + x;
 			const bool dark = fb[i] < 0x80;
 			const bool lit = inverted ? !dark : dark;
-			if (lit != ((bits & (1u << x)) != 0))
+			if (lit != ((bits & (1u << (x / QDOS_FONT_SCALE))) != 0))
 				return false;
 		}
 	}
 	return true;
 }
+
 
 /** Read a row of the framebuffer back as text by matching glyphs. */
 static void read_row(const uint8_t* fb, int row, char* out, size_t cap) {
@@ -184,6 +213,7 @@ static void read_row(const uint8_t* fb, int row, char* out, size_t cap) {
 		len--;
 	out[len] = '\0';
 }
+
 
 /** Run a key script and return the resulting screen. */
 static void run_script(const qdos_key_event* script, size_t count, uint8_t* fb_out) {
@@ -651,6 +681,109 @@ static void test_forget_unknown(void) {
 	CHECK(strstr(row, "not declared") != NULL);
 }
 
+/** A declared word is written to the store and comes back after a reboot. */
+static void test_program_survives_power_cycle(void) {
+	store_reset();
+
+	qdos_key_event first[160];
+	size_t n = 0;
+	type_line(first, &n, "fn sq(x:i64 -- r:i64) { dup * }");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(first, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "saved") != NULL);
+
+	// A fresh shell, as after a reboot: the word is there without redeclaring
+	qdos_key_event second[64];
+	n = 0;
+	type_line(second, &n, "clear 7 sq");
+	run_script(second, n, fb);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "49") != NULL);
+}
+
+/** Forgetting a word also drops it from the store. */
+static void test_forget_outlives_the_reboot(void) {
+	store_reset();
+
+	qdos_key_event first[160];
+	size_t n = 0;
+	type_line(first, &n, "fn sq(x:i64 -- r:i64) { dup * }");
+	type_line(first, &n, "\"sq\" forget");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(first, n, fb);
+
+	qdos_key_event second[64];
+	n = 0;
+	type_line(second, &n, "clear 7 sq");
+	run_script(second, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL);
+}
+
+/** Tab completes a declared word, and the completed line then runs. */
+static void test_tab_completes_a_word(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "fn wobble( -- r:i64) { 7 }");
+	type_partial(script, &n, "clear wob");
+	key(script, &n, QDOS_KEY_TAB);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+}
+
+/** An ambiguous prefix types the shared part and lists the candidates. */
+static void test_tab_lists_ambiguous(void) {
+	store_reset();
+
+	qdos_key_event script[240];
+	size_t n = 0;
+	type_line(script, &n, "fn wobble( -- r:i64) { 1 }");
+	type_more(script, &n, "fn wobbly( -- r:i64) { 2 }");
+	type_partial(script, &n, "wob");
+	key(script, &n, QDOS_KEY_TAB);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "wobbl") != NULL);
+}
+
+/** Tab on something that is not a word prefix does nothing. */
+static void test_tab_on_no_match(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "zzzz");
+	key(script, &n, QDOS_KEY_TAB);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "no match") != NULL);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -675,5 +808,10 @@ int main(void) {
 	test_store_a_string();
 	test_control_flow_in_line_mode();
 	test_session_survives_power_cycle();
+	test_program_survives_power_cycle();
+	test_forget_outlives_the_reboot();
+	test_tab_completes_a_word();
+	test_tab_lists_ambiguous();
+	test_tab_on_no_match();
 	return check_report("shell");
 }

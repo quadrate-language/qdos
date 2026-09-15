@@ -22,18 +22,12 @@ typedef struct {
 	uint32_t bpp;	 ///< Bits per pixel; 16 (RGB565) and 32 (XRGB8888) are supported
 } qdos_fb_info;
 
-/**
- * @brief Is this framebuffer one we know how to write?
- * @return true for 16 or 32 bits per pixel with a pitch wide enough for the
- *         visible width
- */
+/** @brief True for 16 or 32 bpp with a pitch wide enough for the width */
 bool qdos_fb_supported(const qdos_fb_info* info);
 
 /**
- * @brief Write the panel image into a framebuffer
- * @param info Framebuffer geometry; must satisfy qdos_fb_supported()
- * @param dst  Start of the mapped framebuffer, at least info->pitch * info->height bytes
- * @param src  QDOS_SCREEN_W * QDOS_SCREEN_H grayscale pixels, row-major
+ * @brief Write the panel image into a mapped framebuffer
+ * @param info Must satisfy qdos_fb_supported()
  */
 void qdos_fb_blit(const qdos_fb_info* info, uint8_t* dst, const uint8_t* src);
 

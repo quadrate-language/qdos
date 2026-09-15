@@ -67,11 +67,21 @@ static qdos_store_result mem_write(qdos_hal* hal, const char* name, const void* 
 	return QDOS_STORE_OK;
 }
 
+static qdos_store_result mem_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+	(void)hal;
+	for (int i = 0; i < SLOTS; i++) {
+		if (g_slots[i].used && !visit(g_slots[i].name, user))
+			break;
+	}
+	return QDOS_STORE_OK;
+}
+
 static qdos_hal make_hal(void) {
 	qdos_hal hal;
 	memset(&hal, 0, sizeof(hal));
 	hal.store_read = mem_read;
 	hal.store_write = mem_write;
+	hal.store_list = mem_list;
 	return hal;
 }
 
@@ -254,6 +264,85 @@ static void test_empty_session_roundtrips(void) {
 	qd_interp_destroy(interp);
 }
 
+static void test_program_keys(void) {
+	char key[QDOS_PROGRAM_NAME_MAX];
+
+	CHECK(qdos_program_key("double", key, sizeof(key)) && strcmp(key, "double.qd") == 0);
+	CHECK(qdos_program_key("a_1", key, sizeof(key)) && strcmp(key, "a_1.qd") == 0);
+
+	// Nothing that could escape the store directory or name a non-word
+	CHECK(!qdos_program_key("", key, sizeof(key)));
+	CHECK(!qdos_program_key("../evil", key, sizeof(key)));
+	CHECK(!qdos_program_key("has space", key, sizeof(key)));
+	CHECK(!qdos_program_key("double", key, 4));
+}
+
+static void test_program_save_load_erase(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	const char* source = "fn double(x:i64 -- r:i64) { 2 * }";
+	CHECK(qdos_program_save(&hal, "double", source) == QDOS_STORE_OK);
+
+	char buf[QDOS_PROGRAM_MAX];
+	CHECK(qdos_program_load(&hal, "double", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(strcmp(buf, source) == 0);
+
+	CHECK(qdos_program_load(&hal, "missing", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
+
+	CHECK(qdos_program_erase(&hal, "double") == QDOS_STORE_OK);
+	CHECK(qdos_program_load(&hal, "double", buf, sizeof(buf)) == QDOS_STORE_NOT_FOUND);
+}
+
+static void test_programs_survive_a_restart(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	qd_interp* before = qd_interp_create(256);
+	CHECK(qd_interp_eval(before, "fn double(x:i64 -- r:i64) { 2 * }"));
+	const char* declared = qd_interp_last_declared(before);
+	CHECK(declared && strcmp(declared, "double") == 0);
+	CHECK(qdos_program_save(&hal, declared, "fn double(x:i64 -- r:i64) { 2 * }") == QDOS_STORE_OK);
+	qd_interp_destroy(before);
+
+	// Power cycle: a fresh interpreter knows nothing until the store is replayed
+	qd_interp* after = qd_interp_create(256);
+	CHECK(!qd_interp_eval(after, "21 double"));
+	CHECK(qdos_programs_restore(&hal, after) == 1);
+	CHECK(qd_interp_eval(after, "21 double"));
+
+	qd_interp_value value;
+	CHECK(qd_interp_peek(after, 0, &value) && value.i == 42);
+	qd_interp_destroy(after);
+}
+
+static void test_restore_skips_junk(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	CHECK(qdos_program_save(&hal, "good", "fn good( -- r:i64) { 7 }") == QDOS_STORE_OK);
+	CHECK(qdos_program_save(&hal, "bad", "fn bad( {{{") == QDOS_STORE_OK);
+
+	qdos_value value = {.type = QDOS_VALUE_INT, .i = 5};
+	CHECK(qdos_storage_save(&hal, "r00", &value) == QDOS_STORE_OK);
+
+	qd_interp* interp = qd_interp_create(256);
+	// One bad upload must not cost the user the rest of their programs
+	CHECK(qdos_programs_restore(&hal, interp) == 1);
+	CHECK(qd_interp_eval(interp, "good"));
+	qd_interp_destroy(interp);
+}
+
+static void test_restore_without_enumeration(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	hal.store_list = NULL;
+
+	qd_interp* interp = qd_interp_create(256);
+	CHECK(qdos_programs_restore(&hal, interp) == -1);
+	qd_interp_destroy(interp);
+}
+
 int main(void) {
 	test_encode_decode_roundtrip();
 	test_encoding_is_explicit();
@@ -264,5 +353,10 @@ int main(void) {
 	test_session_survives_a_restart();
 	test_no_session_is_not_an_error();
 	test_empty_session_roundtrips();
+	test_program_keys();
+	test_program_save_load_erase();
+	test_programs_survive_a_restart();
+	test_restore_skips_junk();
+	test_restore_without_enumeration();
 	return check_report("storage");
 }

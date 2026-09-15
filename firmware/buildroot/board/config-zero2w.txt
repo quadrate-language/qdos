@@ -49,3 +49,8 @@ enable_uart=1
 # userspace scanning is needed. Adjust the pins to the wiring actually used.
 #
 # dtoverlay=matrix-keypad,rows=5,cols=5
+
+# The calculator's panel. Commented out until the hardware is attached: it
+# takes over SPI0 CE0, and QDOS still boots to the firmware framebuffer on
+# HDMI and under QEMU without it.
+#dtoverlay=sharp-ls027b7dh01

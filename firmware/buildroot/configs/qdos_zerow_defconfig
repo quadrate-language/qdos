@@ -1,15 +1,16 @@
-# QDOS on the Raspberry Pi Zero 2 W.
+# QDOS on the Raspberry Pi Zero W.
 #
-# Derived from Buildroot's raspberrypizero2w_64_defconfig. The differences are
-# the QDOS package, a smaller rootfs, and boot files tuned for a calculator
-# rather than a general purpose board.
+# The 32-bit ARMv6 target. Derived from Buildroot's raspberrypi0w_defconfig,
+# with the same QDOS package, rootfs and boot files as the Zero 2 W build --
+# only the architecture, kernel config and device tree differ.
 
-BR2_aarch64=y
-BR2_cortex_a53=y
-BR2_ARM_FPU_VFPV4=y
+BR2_arm=y
+BR2_arm1176jzf_s=y
+BR2_ARM_EABIHF=y
+BR2_ARM_FPU_VFPV2=y
 BR2_TOOLCHAIN_EXTERNAL=y
 BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
-BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_ARMV6_EABIHF_GLIBC_STABLE=y
 BR2_GLOBAL_PATCH_DIR="board/raspberrypi/patches"
 BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
 
@@ -21,9 +22,9 @@ BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_QDOS_PATH)/board/post-image.sh"
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
 BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="$(call github,raspberrypi,linux,999cdc63ae791860a8b09da3af90e5dfe603cc09)/linux-999cdc63ae791860a8b09da3af90e5dfe603cc09.tar.gz"
-BR2_LINUX_KERNEL_DEFCONFIG="bcm2711"
+BR2_LINUX_KERNEL_DEFCONFIG="bcmrpi"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
-BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2710-rpi-zero-2-w"
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2708-rpi-zero-w"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_QDOS_PATH)/board/linux-qdos.fragment $(BR2_EXTERNAL_QDOS_PATH)/board/linux-trim.fragment"
 # Drawn the moment the framebuffer exists, about a second before init runs.
@@ -37,7 +38,7 @@ BR2_PACKAGE_XZ=y
 BR2_PACKAGE_RPI_FIRMWARE=y
 BR2_PACKAGE_RPI_FIRMWARE_BOOTCODE_BIN=y
 BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI=y
-BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_QDOS_PATH)/board/config-zero2w.txt"
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_QDOS_PATH)/board/config-zerow.txt"
 
 BR2_PACKAGE_KMOD=y
 BR2_PACKAGE_KMOD_TOOLS=y

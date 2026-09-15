@@ -5,6 +5,7 @@
 
 #include "console.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 /** Default levels: dark text on a light ground, like a reflective LCD. */
@@ -25,19 +26,39 @@ void qdos_console_clear(qdos_console* con) {
 	memset(con->fb, con->paper, sizeof(con->fb));
 }
 
+/**
+ * @brief Draw one glyph at a pixel position, each font pixel a scale x scale block
+ * @param paper_too Fill the background as well, so cells overwrite cleanly
+ */
+static void blit_glyph(qdos_console* con, int x0, int y0, char ch, int scale, bool paper_too) {
+	for (int gy = 0; gy < QDOS_FONT_H; gy++) {
+		const uint16_t bits = qdos_font_row(ch, gy);
+		for (int gx = 0; gx < QDOS_FONT_W; gx++) {
+			const bool on = (bits & (1u << gx)) != 0;
+			if (!on && !paper_too)
+				continue;
+
+			const uint8_t level = on ? con->ink : con->paper;
+			for (int sy = 0; sy < scale; sy++) {
+				const int y = y0 + gy * scale + sy;
+				if (y < 0 || y >= QDOS_SCREEN_H)
+					continue;
+				for (int sx = 0; sx < scale; sx++) {
+					const int x = x0 + gx * scale + sx;
+					if (x < 0 || x >= QDOS_SCREEN_W)
+						continue;
+					con->fb[(size_t)y * QDOS_SCREEN_W + x] = level;
+				}
+			}
+		}
+	}
+}
+
 void qdos_console_putc(qdos_console* con, int col, int row, char ch) {
 	if (!con || col < 0 || row < 0 || col >= QDOS_COLS || row >= QDOS_ROWS)
 		return;
 
-	const int x0 = col * QDOS_FONT_W;
-	const int y0 = row * QDOS_FONT_H;
-
-	for (int y = 0; y < QDOS_FONT_H; y++) {
-		const uint8_t bits = qdos_font_row(ch, y);
-		uint8_t* line = &con->fb[(size_t)(y0 + y) * QDOS_SCREEN_W + x0];
-		for (int x = 0; x < QDOS_FONT_W; x++)
-			line[x] = (bits & (1u << x)) ? con->ink : con->paper;
-	}
+	blit_glyph(con, col * QDOS_CELL_W, row * QDOS_CELL_H, ch, QDOS_FONT_SCALE, true);
 }
 
 int qdos_console_puts(qdos_console* con, int col, int row, const char* text) {
@@ -70,9 +91,9 @@ void qdos_console_invert(qdos_console* con, int col, int row, int count) {
 	for (int c = col; c < col + count; c++) {
 		if (c < 0 || c >= QDOS_COLS)
 			continue;
-		for (int y = 0; y < QDOS_FONT_H; y++) {
-			uint8_t* line = &con->fb[(size_t)(row * QDOS_FONT_H + y) * QDOS_SCREEN_W + c * QDOS_FONT_W];
-			for (int x = 0; x < QDOS_FONT_W; x++)
+		for (int y = 0; y < QDOS_CELL_H; y++) {
+			uint8_t* line = &con->fb[(size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + c * QDOS_CELL_W];
+			for (int x = 0; x < QDOS_CELL_W; x++)
 				line[x] = (uint8_t)(0xFF - line[x]);
 		}
 	}
@@ -82,7 +103,7 @@ void qdos_console_rule(qdos_console* con, int row) {
 	if (!con || row < 0 || row >= QDOS_ROWS)
 		return;
 
-	const int y = row * QDOS_FONT_H + QDOS_FONT_H - 1;
+	const int y = row * QDOS_CELL_H + QDOS_CELL_H - 1;
 	memset(&con->fb[(size_t)y * QDOS_SCREEN_W], con->ink, QDOS_SCREEN_W);
 }
 
@@ -91,30 +112,8 @@ void qdos_console_puts_centered(qdos_console* con, int row, const char* text, in
 		return;
 
 	const int len = (int)strlen(text);
-	const int width = len * QDOS_FONT_W * scale;
-	const int x0 = (QDOS_SCREEN_W - width) / 2;
-	const int y0 = row * QDOS_FONT_H;
+	const int x0 = (QDOS_SCREEN_W - len * QDOS_FONT_W * scale) / 2;
 
-	for (int i = 0; i < len; i++) {
-		for (int gy = 0; gy < QDOS_FONT_H; gy++) {
-			const uint8_t bits = qdos_font_row(text[i], gy);
-			for (int gx = 0; gx < QDOS_FONT_W; gx++) {
-				if (!(bits & (1u << gx)))
-					continue;
-
-				// One font pixel becomes a scale x scale block
-				for (int sy = 0; sy < scale; sy++) {
-					const int y = y0 + gy * scale + sy;
-					if (y < 0 || y >= QDOS_SCREEN_H)
-						continue;
-					for (int sx = 0; sx < scale; sx++) {
-						const int x = x0 + (i * QDOS_FONT_W + gx) * scale + sx;
-						if (x < 0 || x >= QDOS_SCREEN_W)
-							continue;
-						con->fb[(size_t)y * QDOS_SCREEN_W + x] = con->ink;
-					}
-				}
-			}
-		}
-	}
+	for (int i = 0; i < len; i++)
+		blit_glyph(con, x0 + i * QDOS_FONT_W * scale, row * QDOS_CELL_H, text[i], scale, false);
 }

@@ -1,0 +1,17 @@
+# Sharp Memory LCD (LS027B7DH01), the calculator's panel. In-tree since 6.13;
+# DRM_CLIENT_SELECTION and the GEM/KMS helpers come in as selects.
+CONFIG_TINYDRM_SHARP_MEMORY=m
+
+# The panel is a DRM device, but QDOS draws through /dev/fb0.
+CONFIG_DRM_FBDEV_EMULATION=y
+
+# Keypad buttons reach QDOS as evdev, the same path a USB keyboard uses.
+CONFIG_KEYBOARD_GPIO=m
+CONFIG_KEYBOARD_MATRIX=m
+CONFIG_INPUT_MATRIXKMAP=m
+
+# Adafruit GPIO Expander Bonnet (MCP23017). The keypad hangs off its gpiochip
+# over I2C, leaving SPI0 to the panel.
+CONFIG_GPIO_MCP23S08=m
+CONFIG_I2C_BCM2835=m
+CONFIG_I2C_CHARDEV=m

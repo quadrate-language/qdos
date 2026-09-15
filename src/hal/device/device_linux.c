@@ -22,6 +22,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -222,6 +223,25 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
+static qdos_store_result device_store_list(qdos_hal* hal, qdos_store_visit visit, void* user) {
+	device_state* st = (device_state*)hal->impl;
+
+	DIR* dir = opendir(st->store_dir);
+	if (!dir)
+		return QDOS_STORE_NOT_FOUND;
+
+	const struct dirent* ent;
+	while ((ent = readdir(dir)) != NULL) {
+		if (ent->d_name[0] == '.')
+			continue;
+		if (!visit(ent->d_name, user))
+			break;
+	}
+
+	closedir(dir);
+	return QDOS_STORE_OK;
+}
+
 static device_state g_device;
 
 void qdos_device_hal(qdos_hal* hal) {
@@ -238,5 +258,6 @@ void qdos_device_hal(qdos_hal* hal) {
 	hal->idle = device_idle;
 	hal->store_read = device_store_read;
 	hal->store_write = device_store_write;
+	hal->store_list = device_store_list;
 	hal->impl = &g_device;
 }

@@ -13,9 +13,9 @@
 /** Count lit pixels in a character cell. */
 static int ink_pixels(const qdos_console* con, int col, int row) {
 	int count = 0;
-	for (int y = 0; y < QDOS_FONT_H; y++)
-		for (int x = 0; x < QDOS_FONT_W; x++) {
-			const size_t i = (size_t)(row * QDOS_FONT_H + y) * QDOS_SCREEN_W + col * QDOS_FONT_W + x;
+	for (int y = 0; y < QDOS_CELL_H; y++)
+		for (int x = 0; x < QDOS_CELL_W; x++) {
+			const size_t i = (size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + col * QDOS_CELL_W + x;
 			if (con->fb[i] == con->ink)
 				count++;
 		}
@@ -105,7 +105,7 @@ static void test_rule(void) {
 	qdos_console_init(&con);
 
 	qdos_console_rule(&con, 2);
-	const size_t y = (size_t)(2 * QDOS_FONT_H + QDOS_FONT_H - 1);
+	const size_t y = (size_t)(2 * QDOS_CELL_H + QDOS_CELL_H - 1);
 	CHECK(con.fb[y * QDOS_SCREEN_W] == con.ink);
 	CHECK(con.fb[y * QDOS_SCREEN_W + QDOS_SCREEN_W - 1] == con.ink);
 }
@@ -114,9 +114,9 @@ static void test_rule(void) {
 static void dump_font(void) {
 	for (char ch = ' '; ch <= '~'; ch++) {
 		printf("'%c' (%d)\n", ch, (int)ch);
-		for (int row = 0; row < QDOS_FONT_H; row++) {
-			const uint8_t bits = qdos_font_row(ch, row);
-			for (int col = 0; col < QDOS_FONT_W; col++)
+		for (int row = 0; row < QDOS_CELL_H; row++) {
+			const uint16_t bits = qdos_font_row(ch, row);
+			for (int col = 0; col < QDOS_CELL_W; col++)
 				putchar((bits & (1u << col)) ? '#' : '.');
 			putchar('\n');
 		}

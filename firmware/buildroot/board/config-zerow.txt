@@ -1,0 +1,55 @@
+# Boot configuration for QDOS on a Raspberry Pi Zero W.
+#
+# A calculator is judged on how quickly it is usable, so this trims what the
+# firmware does before the kernel runs. The GPU stage is still about a second
+# and cannot be removed.
+
+start_file=start.elf
+fixup_file=fixup.dat
+
+kernel=zImage
+
+# The kernel uses the firmware framebuffer (CONFIG_FB_BCM2708), which is
+# allocated out of GPU memory, so this cannot be trimmed to the minimum while
+# the display is HDMI. Drop it to 16 once an SPI panel driven by fbtft is used
+# instead: that framebuffer is in system memory and the GPU is then unused.
+gpu_mem=64
+
+# Produce output even if the display is attached after power-on, which is the
+# usual way to lose an hour during bring-up
+hdmi_force_hotplug=1
+
+# The firmware splash is left on deliberately. It is the only thing that can
+# appear before Linux -- the framebuffer driver does not exist until about a
+# second in, and QDOS's own splash waits for init after that. Not branded, but
+# it fills the gap where nothing else can.
+#
+# It never shows under QEMU, which loads the kernel directly and never runs the
+# GPU bootloader at all.
+boot_delay=0
+
+disable_overscan=1
+
+# Serial console on ttyAMA0 for bring-up
+dtoverlay=miniuart-bt
+enable_uart=1
+
+# --- Display -----------------------------------------------------------------
+# HDMI works out of the box and is right for bring-up. An SPI panel needs its
+# own overlay; uncomment and adjust for the panel actually fitted, then point
+# QDOS at the node it creates with QDOS_FB.
+#
+# dtoverlay=spi0-1cs
+# dtoverlay=fbtft,spi0-0,st7789v,width=240,height=320,rotate=90,bgr=1,speed=40000000
+# dtparam=dc_pin=24,reset_pin=25
+
+# --- Keypad ------------------------------------------------------------------
+# A GPIO matrix becomes an evdev node through the matrix-keypad overlay, so no
+# userspace scanning is needed. Adjust the pins to the wiring actually used.
+#
+# dtoverlay=matrix-keypad,rows=5,cols=5
+
+# The calculator's panel. Commented out until the hardware is attached: it
+# takes over SPI0 CE0, and QDOS still boots to the firmware framebuffer on
+# HDMI and under QEMU without it.
+#dtoverlay=sharp-ls027b7dh01
