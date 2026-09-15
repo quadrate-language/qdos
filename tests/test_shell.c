@@ -11,6 +11,7 @@
 #include <qdos/shell.h>
 
 #include "qdos_version.h"
+#include "shell/mathwords.h"
 
 #include <stdlib.h>
 
@@ -375,7 +376,7 @@ static void test_operator_error_is_shown(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strstr(row, "Division by zero") != NULL);
+	CHECK(strstr(row, "ZERO DIVISOR") != NULL);
 }
 
 /** ':' switches to typing Quadrate; the prompt says so. */
@@ -1441,6 +1442,280 @@ static void test_over_in_calculator_mode(void) {
 	CHECK(strstr(row, "7") != NULL); // still where it was
 }
 
+/**
+ * A type error in the runtime used to end the process. If this regresses the
+ * test binary dies rather than failing, which is the point.
+ */
+static void test_fatal_runtime_errors_are_survivable(void) {
+	static const char* const DEADLY[] = {
+			"1.5 2.5 and", "1 2.5 mod", "1.5 shl", "\"s\" sqrt", "\"s\" sin",
+			"0.0 0.0 fac", "1 0 /", "5 ln ln ln ln",
+	};
+
+	for (size_t i = 0; i < sizeof(DEADLY) / sizeof(*DEADLY); i++) {
+		store_reset();
+
+		qdos_key_event script[64];
+		size_t n = 0;
+		type_line(script, &n, DEADLY[i]);
+		type_line(script, &n, "1 2 +"); // and it still works afterwards
+
+		static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+		run_script(script, n, fb);
+
+		char row[QDOS_COLS + 1];
+		read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+		CHECK(strstr(row, "3") != NULL);
+	}
+}
+
+/** The division key divides. Quadrate's own `/` still truncates, by design. */
+static void test_division_key_is_not_integer_division(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "22");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_DIV);
+	digits(script, &n, "100");
+	key(script, &n, QDOS_KEY_MUL);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "314") != NULL); // truncating would have given 300
+}
+
+/** An exact division stays whole, so the bitwise words still take it. */
+static void test_exact_division_stays_whole(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "10");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_DIV);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "2") != NULL);
+	CHECK(strstr(row, ".") == NULL);
+}
+
+/** What a program prints reaches the panel, not just stdout. */
+static void test_print_reaches_the_panel(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"HELLO\" print");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "HELLO") != NULL);
+}
+
+/** The debug page keeps what was printed and what went wrong. */
+static void test_debug_page_keeps_a_log(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "\"FIRST\" print");
+	type_line(script, &n, "1 0 /");
+	key(script, &n, QDOS_KEY_DEBUG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "DEBUG") != NULL);
+
+	bool printed = false, failed = false;
+	for (int r = ROW_CONTENT_FIRST_T; r <= QDOS_ROWS - 4; r++) {
+		read_row(fb, r, row, sizeof(row));
+		if (strstr(row, "FIRST") != NULL)
+			printed = true;
+		if (strstr(row, "ZERO") != NULL || strstr(row, "zero") != NULL)
+			failed = true;
+	}
+	CHECK(printed);
+	CHECK(failed);
+}
+
+/** Settings change the machine, not just the screen. */
+static void test_settings_change_angle_mode(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_ENTER); // ANGLE is the first row
+	key(script, &n, QDOS_KEY_CLEAR);
+	digits(script, &n, "30");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_SIN);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "0.5") != NULL); // radians would have given 0.988
+
+	qdos_math_set_degrees(false); // the setting outlives this shell
+}
+
+/** Decimals settle how much of a float is shown. */
+static void test_settings_change_decimals(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	for (int i = 0; i < 3; i++)
+		key(script, &n, QDOS_KEY_ENTER); // AUTO -> 0 -> 1 -> 2
+	key(script, &n, QDOS_KEY_CLEAR);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_SQRT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1.41") != NULL);
+	CHECK(strstr(row, "1.414") == NULL);
+}
+
+/** A fixed setting is a column to read down, so whole numbers get decimals too. */
+static void test_fixed_decimals_apply_to_integers(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	for (int i = 0; i < 3; i++)
+		key(script, &n, QDOS_KEY_ENTER); // AUTO -> 0 -> 1 -> 2
+	key(script, &n, QDOS_KEY_CLEAR);
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "7.00") != NULL);
+}
+
+/** Text is not a number and gets none of this. */
+static void test_fixed_decimals_leave_strings_alone(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	for (int i = 0; i < 3; i++)
+		key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "\"text\"");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "text") != NULL);
+	CHECK(strstr(row, ".00") == NULL);
+}
+
+/** Undo puts back what the last operation consumed. */
+static void test_undo_restores_the_stack(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "9");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_UNDO);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "9") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+}
+
+/** Dropping a program asks once, then takes it off the list. */
+static void test_delete_a_program(void) {
+	store_reset();
+	seed_system("shipped", "fn shipped( -- ){}");
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "fn mine( -- ) { 1 }");
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "AGAIN") != NULL); // it asked rather than acting
+
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "1/1") != NULL); // only the shipped one is left
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "shipped") != NULL);
+}
+
+/** A shipped program cannot be dropped, there being no way to put it back. */
+static void test_delete_refuses_system(void) {
+	store_reset();
+	seed_system("shipped", "fn shipped( -- ){}");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "SHIPPED") != NULL);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "1/1") != NULL);
+}
+
 /** A space is what keeps two numbers from merging into one. */
 static void test_space_separates_numbers(void) {
 	store_reset();
@@ -1692,6 +1967,18 @@ int main(void) {
 	test_edit_refuses_broken();
 	test_edit_discards();
 	test_space_separates_numbers();
+	test_print_reaches_the_panel();
+	test_debug_page_keeps_a_log();
+	test_settings_change_angle_mode();
+	test_settings_change_decimals();
+	test_fixed_decimals_apply_to_integers();
+	test_fixed_decimals_leave_strings_alone();
+	test_undo_restores_the_stack();
+	test_delete_a_program();
+	test_delete_refuses_system();
+	test_division_key_is_not_integer_division();
+	test_exact_division_stays_whole();
+	test_fatal_runtime_errors_are_survivable();
 	test_rot_in_calculator_mode();
 	test_rot_three_times_is_a_full_turn();
 	test_over_in_calculator_mode();

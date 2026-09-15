@@ -6,6 +6,7 @@
 #include "check.h"
 
 #include "../src/shell/mathwords.h"
+#include "../src/ui/console.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -102,8 +103,62 @@ static void test_refusal_keeps_the_value(void) {
 	qd_interp_destroy(interp);
 }
 
+/** Constants, so trigonometry does not need fifteen digits typed by hand. */
+static void test_constants(void) {
+	close_to("pi", 3.14159265358979323846);
+	close_to("e", 2.71828182845904523536);
+	close_to("pi 2 divide sin", 1.0);
+}
+
+/** Degrees, because a calculator is asked for sin 30 far more often. */
+static void test_degree_mode(void) {
+	qdos_math_set_degrees(true);
+	close_to("30 sin", 0.5);
+	close_to("180 cos", -1.0);
+	close_to("1 asin", 90.0);
+	qdos_math_set_degrees(false);
+
+	close_to("0 sin", 0.0); // radians again
+	CHECK(!qdos_math_degrees());
+}
+
+/** True division, which the calculator key uses in place of `/`. */
+static void test_divide(void) {
+	close_to("22 7 divide 100 *", 22.0 / 7.0 * 100.0);
+	close_to("10 4 divide", 2.5);
+	close_to("10 5 divide", 2.0);
+	CHECK(refuses("1 0 divide"));
+}
+
+/**
+ * A message the panel cannot show in full is not a message. Only QDOS's own
+ * are checked: the runtime's arity errors are longer than 25 columns and are
+ * left as written, being Quadrate's words rather than ours.
+ */
+static void test_messages_fit_the_screen(void) {
+	static const char* const REFUSED[] = {
+			"-1 sqrt", "0 ln", "0 log10", "0 log2", "2 asin", "2 acos",
+			"0 acosh", "1 atanh", "0 inv", "-1 fac", "5 0 fmod", "1 0 divide",
+	};
+
+	for (size_t i = 0; i < sizeof(REFUSED) / sizeof(*REFUSED); i++) {
+		qd_interp* interp = fresh();
+		CHECK(!qd_interp_eval(interp, REFUSED[i]));
+
+		const char* text = qd_interp_error(interp);
+		if (strlen(text) > (size_t)QDOS_COLS)
+			fprintf(stderr, "  too long (%zu): %s\n", strlen(text), text);
+		CHECK(strlen(text) <= (size_t)QDOS_COLS);
+		qd_interp_destroy(interp);
+	}
+}
+
 int main(void) {
 	test_domains_are_errors();
+	test_constants();
+	test_degree_mode();
+	test_divide();
+	test_messages_fit_the_screen();
 	test_inside_the_domain();
 	test_repeated_ln_does_not_abort();
 	test_refusal_keeps_the_value();

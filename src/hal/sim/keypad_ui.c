@@ -52,7 +52,7 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 
 	// Where the DM42 keeps sto, rcl and roll down
 	{{KEY("DUP", QDOS_KEY_DUP), TXT("N", "n"), TXT("NIP", " nip ")},
-			{KEY("DRP", QDOS_KEY_DROP), TXT("O", "o"), TXT("PIK", " pick ")},
+			{KEY("DRP", QDOS_KEY_DROP), TXT("O", "o"), KEY("UNDO", QDOS_KEY_UNDO)},
 			{KEY("OVR", QDOS_KEY_OVER), TXT("P", "p"), TXT("[", "[")},
 			{KEY("ROT", QDOS_KEY_ROT), TXT("Q", "q"), TXT("]", "]")},
 			{KEY("MOD", QDOS_KEY_MOD), TXT("R", "r"), TXT("=", "=")}},

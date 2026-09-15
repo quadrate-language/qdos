@@ -8,6 +8,8 @@
 
 #include "storage.h"
 
+#include "guarded.h"
+
 #include <quadrate/rt/qd_string.h>
 #include <quadrate/rt/runtime.h>
 #include <quadrate/rt/stack.h>
@@ -257,13 +259,15 @@ static bool restore_one(const char* entry, void* user) {
 	if (qdos_program_load(walk->hal, walk->scope, name, source, sizeof(source)) != QDOS_STORE_OK)
 		return true;
 
-	if (qd_interp_eval(walk->interp, source) && qd_interp_last_declared(walk->interp))
+	// A stored program that kills the runtime must not stop the shell booting
+	if (qdos_guarded_eval(walk->interp, source) && qd_interp_last_declared(walk->interp))
 		walk->declared++;
 
 	return true;
 }
 
 typedef struct {
+	qdos_hal* hal;
 	qdos_program_entry* out;
 	size_t cap;
 	size_t count;
@@ -284,6 +288,13 @@ static bool gather_one(const char* entry, void* userdata) {
 	char name[QDOS_PROGRAM_NAME_MAX];
 	memcpy(name, entry, stem);
 	name[stem] = '\0';
+
+	// Erasing writes an empty entry, there being no delete in the HAL, so a
+	// dropped program is still listed unless its contents are looked at
+	char source[QDOS_PROGRAM_MAX];
+	const qdos_store_scope scope = w->system ? QDOS_SCOPE_SYSTEM : QDOS_SCOPE_USER;
+	if (qdos_program_load(w->hal, scope, name, source, sizeof(source)) != QDOS_STORE_OK)
+		return true;
 
 	for (size_t i = 0; i < w->count; i++) {
 		if (strcmp(w->out[i].name, name) == 0) {
@@ -313,7 +324,7 @@ size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap) 
 	if (!hal->store_list || cap == 0)
 		return 0;
 
-	gather_walk walk = {.out = out, .cap = cap, .count = 0, .system = true};
+	gather_walk walk = {.hal = hal, .out = out, .cap = cap, .count = 0, .system = true};
 	hal->store_list(hal, QDOS_SCOPE_SYSTEM, gather_one, &walk);
 	walk.system = false;
 	hal->store_list(hal, QDOS_SCOPE_USER, gather_one, &walk);

@@ -10,6 +10,7 @@
 #include "../ui/console.h"
 #include "complete.h"
 #include "editor.h"
+#include "guarded.h"
 #include "mathwords.h"
 
 #include "qdos_version.h"
@@ -63,9 +64,23 @@ typedef enum {
 	QDOS_MODE_CALC, ///< Digits build a number; an operator applies immediately
 	QDOS_MODE_LINE,	///< Whole lines of Quadrate, evaluated on Enter
 	QDOS_MODE_LIST,	///< Browsing the vocabulary
-	QDOS_MODE_EDIT,	///< Editing a program in the stack area
-	QDOS_MODE_ABOUT ///< What this firmware is
+	QDOS_MODE_EDIT,	   ///< Editing a program in the stack area
+	QDOS_MODE_ABOUT,   ///< What this firmware is
+	QDOS_MODE_SETTINGS,
+	QDOS_MODE_DEBUG	   ///< What the machine has been saying
 } qdos_mode;
+
+#define LOG_LINES 48
+
+/** @brief What a setting can be changed to */
+typedef enum {
+	SETTING_ANGLE = 0,
+	SETTING_DECIMALS,
+	SETTING__COUNT
+} qdos_setting;
+
+#define DECIMALS_AUTO -1
+#define DECIMALS_MAX 9
 
 struct qdos_shell {
 	qdos_hal* hal;	   ///< Borrowed, not owned
@@ -87,6 +102,19 @@ struct qdos_shell {
 	size_t list_top;
 	qdos_mode list_from;
 	qdos_mode about_from; ///< Mode to return to
+	qdos_mode page_from;  ///< Where settings and debug were opened from
+
+	char log[LOG_LINES][QDOS_COLS + 1];
+	size_t log_count; ///< Lines ever written, so the ring can be read in order
+	size_t log_top;   ///< First line shown on the debug page
+
+	size_t setting_sel;
+	int decimals; ///< DECIMALS_AUTO, or how many to show after the point
+
+	qdos_value undo[QDOS_REGISTER_MAX];
+	size_t undo_depth;
+	bool undo_ready;
+	bool delete_armed; ///< One press of backspace has already asked
 
 	qdos_editor ed;
 	size_t ed_top; ///< First visible line
@@ -128,9 +156,81 @@ static void input_clear(qdos_shell* sh) {
 	sh->input[0] = '\0';
 }
 
+/*
+ * Every evaluation goes through here. A type error in lib/rt -- `1.5 2.5 and`,
+ * a string where a number was wanted -- is fatal and would end the process, so
+ * recovery is armed and the runtime longjmps back instead. The stack may have
+ * been left part-way through the failed word, which is the documented price.
+ */
+
+
+/** @brief Append one line, wrapped to the panel, to the ring */
+static void log_line(qdos_shell* sh, const char* text, size_t len) {
+	while (len > 0) {
+		const size_t take = (len > QDOS_COLS) ? (size_t)QDOS_COLS : len;
+		char* slot = sh->log[sh->log_count % LOG_LINES];
+		memcpy(slot, text, take);
+		slot[take] = '\0';
+		sh->log_count++;
+		text += take;
+		len -= take;
+	}
+}
+
+/** @brief Record whatever a program printed, or anything worth reading later */
+static void log_add(qdos_shell* sh, const char* text) {
+	if (text == NULL || text[0] == '\0')
+		return;
+
+	const char* start = text;
+	for (const char* p = text;; p++) {
+		if (*p != '\n' && *p != '\0')
+			continue;
+		if (p > start)
+			log_line(sh, start, (size_t)(p - start));
+		if (*p == '\0')
+			break;
+		start = p + 1;
+	}
+}
+
+/** @brief The i-th line still in the ring, oldest first, or NULL */
+static const char* log_at(const qdos_shell* sh, size_t index) {
+	const size_t held = (sh->log_count < LOG_LINES) ? sh->log_count : LOG_LINES;
+	if (index >= held)
+		return NULL;
+	const size_t first = sh->log_count - held;
+	return sh->log[(first + index) % LOG_LINES];
+}
+
+static size_t log_held(const qdos_shell* sh) {
+	return (sh->log_count < LOG_LINES) ? sh->log_count : LOG_LINES;
+}
+
+/**
+ * @brief A value as the settings say to show it
+ *
+ * The interpreter renders a float to as many digits as it takes, which is
+ * fifteen more often than anyone wants.
+ */
+static void format_value(const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap) {
+	const bool number = value->type == QD_INTERP_VALUE_INT || value->type == QD_INTERP_VALUE_FLOAT;
+	if (sh->decimals == DECIMALS_AUTO || !number) {
+		snprintf(out, cap, "%s", value->text);
+		return;
+	}
+
+	// A fixed number of decimals is a column to read down, so whole numbers
+	// get them too rather than jumping about
+	const double shown = (value->type == QD_INTERP_VALUE_INT) ? (double)value->i : value->f;
+	snprintf(out, cap, "%.*f", sh->decimals, shown);
+}
+
 static void set_message(qdos_shell* sh, const char* text, bool is_error) {
 	snprintf(sh->message, sizeof(sh->message), "%s", text ? text : "");
 	sh->message_is_error = is_error;
+	if (is_error)
+		log_add(sh, sh->message);
 }
 
 /** @brief Is the line ready to evaluate, or still open? */
@@ -189,7 +289,7 @@ typedef struct {
 	qdos_key key;
 } soft_key;
 
-static const soft_key SOFT[5][SOFT_KEYS] = {
+static const soft_key SOFT[7][SOFT_KEYS] = {
 	[QDOS_MODE_CALC] = {{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
 			{"INFO", QDOS_KEY_ABOUT}, {"OFF", QDOS_KEY_POWER}},
 	[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
@@ -199,8 +299,12 @@ static const soft_key SOFT[5][SOFT_KEYS] = {
 			{"PICK", QDOS_KEY_ENTER}, {"EDIT", QDOS_KEY_OPEN}},
 	[QDOS_MODE_EDIT] = {{"DROP", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
 			{"", QDOS_KEY_NONE}, {"SAVE", QDOS_KEY_SAVE}},
-	[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
-			{"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}},
+	[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"SET", QDOS_KEY_SETTINGS},
+			{"LOG", QDOS_KEY_DEBUG}, {"", QDOS_KEY_NONE}},
+	[QDOS_MODE_SETTINGS] = {{"ESC", QDOS_KEY_CLEAR}, {"DOWN", QDOS_KEY_DOWN}, {"UP", QDOS_KEY_UP},
+			{"CHG", QDOS_KEY_ENTER}, {"LOG", QDOS_KEY_DEBUG}},
+	[QDOS_MODE_DEBUG] = {{"ESC", QDOS_KEY_CLEAR}, {"DOWN", QDOS_KEY_DOWN}, {"UP", QDOS_KEY_UP},
+			{"CLR", QDOS_KEY_BACKSPACE}, {"SET", QDOS_KEY_SETTINGS}},
 };
 
 static void render_soft(qdos_shell* sh, qdos_console* con) {
@@ -218,6 +322,64 @@ static void render_soft(qdos_shell* sh, qdos_console* con) {
 	}
 }
 
+static int push_value(qd_context* ctx, const qdos_value* value);
+
+/** @brief Take what an evaluation printed and put it where it can be seen */
+static void absorb_output(qdos_shell* sh) {
+	const char* printed = qdos_guarded_output();
+	if (printed[0] == '\0')
+		return;
+
+	log_add(sh, printed);
+	const size_t held = log_held(sh);
+	if (held > 0)
+		set_message(sh, log_at(sh, held - 1), false);
+}
+
+/* One step back, which is all a calculator ever offers */
+static void undo_snapshot(qdos_shell* sh) {
+	const size_t depth = qd_interp_depth(sh->interp);
+	sh->undo_depth = (depth > QDOS_REGISTER_MAX) ? (size_t)QDOS_REGISTER_MAX : depth;
+
+	for (size_t i = 0; i < sh->undo_depth; i++) {
+		qd_interp_value value;
+		if (!qd_interp_peek(sh->interp, i, &value)) {
+			sh->undo_depth = i;
+			break;
+		}
+
+		qdos_value* slot = &sh->undo[i];
+		if (value.type == QD_INTERP_VALUE_INT) {
+			slot->type = QDOS_VALUE_INT;
+			slot->i = value.i;
+		} else if (value.type == QD_INTERP_VALUE_FLOAT) {
+			slot->type = QDOS_VALUE_FLOAT;
+			slot->f = value.f;
+		} else {
+			slot->type = QDOS_VALUE_STRING;
+			snprintf(slot->s, sizeof(slot->s), "%s", value.text);
+		}
+	}
+	sh->undo_ready = true;
+}
+
+static void undo_restore(qdos_shell* sh) {
+	if (!sh->undo_ready) {
+		set_message(sh, "NOTHING TO UNDO", false);
+		return;
+	}
+
+	qd_context* ctx = qd_interp_context(sh->interp);
+	qdos_guarded_eval(sh->interp, "clear");
+
+	// Snapshots run top-first, so put them back the other way round
+	for (size_t i = sh->undo_depth; i > 0; i--)
+		push_value(ctx, &sh->undo[i - 1]);
+
+	sh->undo_ready = false;
+	set_message(sh, "UNDONE", false);
+}
+
 /** @brief Evaluate the input line and report the outcome */
 static void submit(qdos_shell* sh) {
 	if (sh->input_len == 0)
@@ -227,12 +389,17 @@ static void submit(qdos_shell* sh) {
 	// left are its business, not ours
 	const qdos_mode before = sh->mode;
 
-	if (qd_interp_eval(sh->interp, sh->input)) {
+	undo_snapshot(sh);
+	if (qdos_guarded_eval(sh->interp, sh->input)) {
 		if (sh->mode == before)
 			persist_declaration(sh);
 	} else {
-		set_message(sh, qd_interp_error(sh->interp), true);
+		set_message(sh, qdos_guarded_error(sh->interp), true);
 	}
+
+	// What a program printed outranks whatever the shell had to say
+	if (sh->mode == before)
+		absorb_output(sh);
 
 	input_clear(sh);
 }
@@ -294,8 +461,9 @@ static bool entry_commit(qdos_shell* sh) {
 		return true;
 	}
 
-	if (!qd_interp_eval(sh->interp, sh->entry)) {
-		set_message(sh, qd_interp_error(sh->interp), true);
+	undo_snapshot(sh);
+	if (!qdos_guarded_eval(sh->interp, sh->entry)) {
+		set_message(sh, qdos_guarded_error(sh->interp), true);
 		return false;
 	}
 	entry_clear(sh);
@@ -307,10 +475,12 @@ static void apply_word(qdos_shell* sh, const char* word) {
 	if (!entry_commit(sh)) {
 		return;
 	}
-	if (qd_interp_eval(sh->interp, word)) {
+	undo_snapshot(sh);
+	if (qdos_guarded_eval(sh->interp, word)) {
 		set_message(sh, "", false);
+		absorb_output(sh);
 	} else {
-		set_message(sh, qd_interp_error(sh->interp), true);
+		set_message(sh, qdos_guarded_error(sh->interp), true);
 	}
 }
 
@@ -382,11 +552,13 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_ADD: apply_word(sh, "+"); break;
 		case QDOS_KEY_SUB: apply_word(sh, "-"); break;
 		case QDOS_KEY_MUL: apply_word(sh, "*"); break;
-		case QDOS_KEY_DIV: apply_word(sh, "/"); break;
+		// A calculator divides rather than truncating; the language keeps "/"
+		case QDOS_KEY_DIV: apply_word(sh, "divide"); break;
 		case QDOS_KEY_DUP: apply_word(sh, "dup"); break;
 		case QDOS_KEY_DROP: apply_word(sh, "drop"); break;
 		case QDOS_KEY_SWAP: apply_word(sh, "swap"); break;
 		case QDOS_KEY_NEG: entry_negate(sh); break;
+		case QDOS_KEY_UNDO: undo_restore(sh); break;
 
 		// Bare Enter duplicates: how an RPN calculator squares a number.
 		case QDOS_KEY_ENTER:
@@ -409,7 +581,7 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 			if (sh->entry_len > 0) {
 				entry_clear(sh);
 			} else {
-				qd_interp_eval(sh->interp, "clear");
+				qdos_guarded_eval(sh->interp, "clear");
 				set_message(sh, "STACK CLEARED", false);
 			}
 			break;
@@ -548,6 +720,9 @@ static void list_scroll_into_view(qdos_shell* sh) {
 }
 
 static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
+	if (ev->key != QDOS_KEY_BACKSPACE)
+		sh->delete_armed = false;
+
 	switch (ev->key) {
 		case QDOS_KEY_UP:
 			if (sh->list_sel > 0)
@@ -615,6 +790,36 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 			break;
 		}
 
+		case QDOS_KEY_BACKSPACE: {
+			if (sh->list_all || list_count(sh) == 0)
+				break;
+
+			const char* name = list_name(sh, sh->list_sel);
+			if (!qdos_program_is_user(sh->hal, name)) {
+				set_message(sh, "THAT ONE IS SHIPPED", false);
+				break;
+			}
+
+			// Asking once, because there is no way back from this
+			char confirm[QDOS_COLS + 8];
+			snprintf(confirm, sizeof(confirm), "BKS AGAIN: DROP '%.8s'", name);
+			if (!sh->delete_armed) {
+				sh->delete_armed = true;
+				set_message(sh, confirm, false);
+				break;
+			}
+
+			char message[QDOS_COLS + 8];
+			qdos_program_erase(sh->hal, name);
+			snprintf(message, sizeof(message), "DROPPED '%.10s'", name);
+			sh->delete_armed = false;
+			list_load(sh);
+			if (sh->list_sel >= list_count(sh) && sh->list_sel > 0)
+				sh->list_sel--;
+			set_message(sh, message, false);
+			break;
+		}
+
 		case QDOS_KEY_LIST:
 		case QDOS_KEY_CLEAR:
 			sh->mode = sh->list_from;
@@ -665,11 +870,11 @@ static void check_program(qdos_shell* sh) {
 	qdos_programs_restore(sh->hal, QDOS_SCOPE_USER, scratch);
 
 	char message[80];
-	const bool ok = qd_interp_eval(scratch, sh->ed.text);
+	const bool ok = qdos_guarded_eval(scratch, sh->ed.text);
 	if (ok)
 		snprintf(message, sizeof(message), "'%.12s' COMPILES", sh->ed.name);
 	else
-		snprintf(message, sizeof(message), "%s", qd_interp_error(scratch));
+		snprintf(message, sizeof(message), "%s", qdos_guarded_error(scratch));
 
 	qd_interp_destroy(scratch);
 	set_message(sh, message, !ok);
@@ -711,9 +916,9 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 		case QDOS_KEY_SAVE: {
 			char message[80];
-			if (!qd_interp_eval(sh->interp, sh->ed.text)) {
+			if (!qdos_guarded_eval(sh->interp, sh->ed.text)) {
 				// Stay in the editor: the text is still the only copy
-				set_message(sh, qd_interp_error(sh->interp), true);
+				set_message(sh, qdos_guarded_error(sh->interp), true);
 				break;
 			}
 			qdos_program_save(sh->hal, sh->ed.name, sh->ed.text);
@@ -761,6 +966,73 @@ static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 	handle_mode_key(sh, ev);
 }
 
+static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
+	switch (ev->key) {
+		case QDOS_KEY_UP:
+			if (sh->setting_sel > 0)
+				sh->setting_sel--;
+			break;
+
+		case QDOS_KEY_DOWN:
+			if (sh->setting_sel + 1 < SETTING__COUNT)
+				sh->setting_sel++;
+			break;
+
+		case QDOS_KEY_ENTER:
+		case QDOS_KEY_RIGHT:
+			if (sh->setting_sel == SETTING_ANGLE) {
+				qdos_math_set_degrees(!qdos_math_degrees());
+			} else {
+				sh->decimals = (sh->decimals >= DECIMALS_MAX) ? DECIMALS_AUTO : sh->decimals + 1;
+			}
+			break;
+
+		case QDOS_KEY_LEFT:
+			if (sh->setting_sel == SETTING_ANGLE) {
+				qdos_math_set_degrees(!qdos_math_degrees());
+			} else {
+				sh->decimals = (sh->decimals <= DECIMALS_AUTO) ? DECIMALS_MAX : sh->decimals - 1;
+			}
+			break;
+
+		case QDOS_KEY_CLEAR:
+			sh->mode = sh->page_from;
+			break;
+
+		default:
+			break;
+	}
+}
+
+static void handle_debug_key(qdos_shell* sh, const qdos_key_event* ev) {
+	const size_t held = log_held(sh);
+	const size_t last = (held > (size_t)LIST_ROWS) ? held - (size_t)LIST_ROWS : 0;
+
+	switch (ev->key) {
+		case QDOS_KEY_UP:
+			if (sh->log_top > 0)
+				sh->log_top--;
+			break;
+
+		case QDOS_KEY_DOWN:
+			if (sh->log_top < last)
+				sh->log_top++;
+			break;
+
+		case QDOS_KEY_BACKSPACE:
+			sh->log_count = 0;
+			sh->log_top = 0;
+			break;
+
+		case QDOS_KEY_CLEAR:
+			sh->mode = sh->page_from;
+			break;
+
+		default:
+			break;
+	}
+}
+
 static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 	if (ev->key == QDOS_KEY_LIST && sh->mode != QDOS_MODE_LIST) {
 		list_open(sh);
@@ -772,6 +1044,23 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		return;
 	}
 
+	if (ev->key == QDOS_KEY_SETTINGS && sh->mode != QDOS_MODE_SETTINGS) {
+		sh->page_from = (sh->mode == QDOS_MODE_DEBUG) ? sh->page_from : sh->mode;
+		sh->mode = QDOS_MODE_SETTINGS;
+		set_message(sh, "", false);
+		return;
+	}
+
+	if (ev->key == QDOS_KEY_DEBUG && sh->mode != QDOS_MODE_DEBUG) {
+		sh->page_from = (sh->mode == QDOS_MODE_SETTINGS) ? sh->page_from : sh->mode;
+		// Open at the end, where the newest lines are
+		const size_t held = log_held(sh);
+		sh->log_top = (held > (size_t)LIST_ROWS) ? held - (size_t)LIST_ROWS : 0;
+		sh->mode = QDOS_MODE_DEBUG;
+		set_message(sh, "", false);
+		return;
+	}
+
 	if (ev->key == QDOS_KEY_ABOUT && sh->mode != QDOS_MODE_ABOUT) {
 		sh->about_from = sh->mode;
 		sh->mode = QDOS_MODE_ABOUT;
@@ -779,7 +1068,11 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		return;
 	}
 
-	if (sh->mode == QDOS_MODE_ABOUT) {
+	if (sh->mode == QDOS_MODE_SETTINGS) {
+		handle_settings_key(sh, ev);
+	} else if (sh->mode == QDOS_MODE_DEBUG) {
+		handle_debug_key(sh, ev);
+	} else if (sh->mode == QDOS_MODE_ABOUT) {
 		// Any way out will do
 		if (ev->key == QDOS_KEY_CLEAR || ev->key == QDOS_KEY_ENTER || ev->key == QDOS_KEY_ABOUT)
 			sh->mode = sh->about_from;
@@ -846,6 +1139,59 @@ static void render_about(qdos_console* con) {
 	qdos_console_rule(con, ROW_CONTENT_LAST);
 }
 
+static const char* angle_text(void) {
+	return qdos_math_degrees() ? "DEG" : "RAD";
+}
+
+static void decimals_text(const qdos_shell* sh, char* out, size_t cap) {
+	if (sh->decimals == DECIMALS_AUTO)
+		snprintf(out, cap, "AUTO");
+	else
+		snprintf(out, cap, "%d", sh->decimals);
+}
+
+static void render_settings(qdos_shell* sh, qdos_console* con) {
+	qdos_console_puts(con, 0, ROW_HEADER, "SETTINGS");
+	qdos_console_rule(con, ROW_HEADER);
+
+	char value[16];
+	decimals_text(sh, value, sizeof(value));
+
+	static const char* const NAMES[SETTING__COUNT] = {"ANGLE", "DECIMALS"};
+	const char* values[SETTING__COUNT] = {angle_text(), value};
+
+	for (size_t i = 0; i < SETTING__COUNT; i++) {
+		const int row = ROW_CONTENT_FIRST + (int)i;
+		qdos_console_puts(con, 1, row, NAMES[i]);
+		qdos_console_puts_right(con, row, values[i]);
+		if (i == sh->setting_sel)
+			qdos_console_invert(con, 0, row, QDOS_COLS);
+	}
+
+	qdos_console_rule(con, ROW_CONTENT_LAST);
+}
+
+static void render_debug(qdos_shell* sh, qdos_console* con) {
+	char header[QDOS_COLS + 1];
+	snprintf(header, sizeof(header), "%zu", sh->log_count);
+	qdos_console_puts(con, 0, ROW_HEADER, "DEBUG");
+	qdos_console_puts_right(con, ROW_HEADER, header);
+	qdos_console_rule(con, ROW_HEADER);
+
+	const size_t held = log_held(sh);
+	if (held == 0)
+		qdos_console_puts(con, 1, ROW_CONTENT_FIRST, "NOTHING LOGGED");
+
+	for (size_t i = 0; i < (size_t)LIST_ROWS; i++) {
+		const char* text = log_at(sh, sh->log_top + i);
+		if (text == NULL)
+			break;
+		qdos_console_puts(con, 0, ROW_CONTENT_FIRST + (int)i, text);
+	}
+
+	qdos_console_rule(con, ROW_CONTENT_LAST);
+}
+
 static void render_list(qdos_shell* sh, qdos_console* con) {
 	const size_t total = list_count(sh);
 
@@ -896,6 +1242,26 @@ static void render(qdos_shell* sh) {
 
 	if (sh->mode == QDOS_MODE_LIST) {
 		render_list(sh, con);
+		// The delete prompt lives here, so the list has to show messages too
+		if (sh->message[0]) {
+			qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
+			if (sh->message_is_error)
+				qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
+		}
+		render_soft(sh, con);
+		sh->hal->present(sh->hal, con->fb);
+		return;
+	}
+
+	if (sh->mode == QDOS_MODE_SETTINGS) {
+		render_settings(sh, con);
+		render_soft(sh, con);
+		sh->hal->present(sh->hal, con->fb);
+		return;
+	}
+
+	if (sh->mode == QDOS_MODE_DEBUG) {
+		render_debug(sh, con);
 		render_soft(sh, con);
 		sh->hal->present(sh->hal, con->fb);
 		return;
@@ -922,7 +1288,10 @@ static void render(qdos_shell* sh) {
 		char label[16];
 		snprintf(label, sizeof(label), "%zu:", i + 1);
 		qdos_console_puts(con, 0, row, label);
-		qdos_console_puts_right(con, row, value.text);
+
+		char shown[QD_INTERP_VALUE_TEXT_MAX];
+		format_value(sh, &value, shown, sizeof(shown));
+		qdos_console_puts_right(con, row, shown);
 	}
 
 	if (depth > (size_t)STACK_ROWS)
@@ -1115,7 +1484,7 @@ static int native_forget(qd_context* ctx, void* userdata) {
 	// Forgetting an override brings the shipped version back
 	char source[QDOS_PROGRAM_MAX];
 	if (qdos_program_load(sh->hal, QDOS_SCOPE_SYSTEM, name, source, sizeof(source)) == QDOS_STORE_OK)
-		qd_interp_eval(sh->interp, source);
+		qdos_guarded_eval(sh->interp, source);
 
 	return 0;
 }
@@ -1179,6 +1548,7 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	}
 
 	sh->hal = hal;
+	sh->decimals = DECIMALS_AUTO; // calloc would otherwise mean nought decimals
 	register_natives(sh, sh->interp);
 	qdos_console_init(&sh->con);
 

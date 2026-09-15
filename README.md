@@ -397,11 +397,39 @@ That is enough to write a program without touching a keyboard:
 `: SYM fn ALP h i ALP SYM ( SYM -- SYM ) SYM { 3 SYM } Enter` defines
 `fn hi( -- ) { 3 }` in nineteen presses.
 
+`/` on the keypad is not Quadrate's `/`. The language divides integers into an
+integer, so `22 7 / 100 *` is 300, which is the language being consistent and
+the wrong answer on a calculator. The key applies `divide` instead, which gives
+314.28..., and keeps the result an integer when it divides exactly so the
+bitwise words still take it. Typed into a line, `/` is still the language's.
+`pi` and `e` are registered, and the angle mode converts on the way in and out
+of the trigonometry, because `sin 30` is asked for far more often than
+`sin 0.5236`.
+
+`print` and `nl` are built into the runtime and write to stdout, which on the
+device goes nowhere at all. Evaluation runs with stdout on a pipe, so what a
+program prints lands in the message line and in the debug log. It cannot be
+done by registering a word: the runtime resolves these names itself and a
+native of the same name is never called.
+
 The maths comes from Quadrate's `lib/math`, which ships in the dist but is not
 registered with the interpreter; `src/shell/mathwords.c` registers its 34
 functions so they are words like any other. Integers coerce, so `9 sqrt` works
 without a decimal point. A word of yours shadows a built-in of the same name,
 and forgetting yours brings the built-in back.
+
+Nothing typed into the shell can end it. Quadrate treats a runtime fault as
+fatal -- `1.5 2.5 and`, a string where a number was wanted, `ln` of a negative
+-- and printed a stack dump before exiting, taking the calculator and the
+stack with it. `lib/rt` has a recovery mechanism for this, armed with
+`qd_recovery_arm()` and a `setjmp`, but only some paths went through the helper
+that honours it; 128 sites across `lib/rt` and `stdlib/math` reported and
+exited directly instead. Those now raise through the same helper, so an
+embedder that has armed recovery survives them. Every evaluation in QDOS is
+armed, including the one that loads stored programs at boot, so a bad upload
+cannot stop the shell starting. Driving all 99 words against 14 stack shapes
+through the shell ends the process in no case, where before the change it ended
+in 69.
 
 `lib/math` treats a domain error as fatal: `ln` of a negative prints a stack
 dump and aborts the process. That is reasonable for a program and fatal for a
@@ -416,7 +444,12 @@ which ones did not come back, rather than by reading the domains off a
 textbook; `tests/test_mathwords.c` keeps them honest.
 
 `INFO` (F4 from the calculator) shows what the firmware is: version, the git
-commit it was built from, and the panel. The version comes from `meson.build`
+commit it was built from, and the panel. `SET` and `LOG` sit behind it.
+Settings holds the angle mode and how many decimals a number shows -- `AUTO`
+being however many the interpreter renders, which is fifteen more often than
+anyone wants. A fixed setting applies to whole numbers as well, since the point
+of fixing it is a column of figures that line up; text is left as it is. The debug page is the log: everything a program printed and every
+error, oldest first, scrollable, and clearable with `CLR`. The version comes from `meson.build`
 and the commit from `git describe --dirty` at configure time, generated into
 `qdos_version.h`, so neither can be written down twice and drift; a tree without
 git reports `unknown` rather than failing to build.
@@ -430,6 +463,11 @@ which is the whole point of putting them on the front layer.
 
 A button either sends a logical key or types text; only the logical keys and `:`
 reach calculator mode, which is the same constraint a physical keypad would have.
+
+Backspace in the apps list drops the selected program, asking once first; a
+shipped one is refused, there being no way to put it back. `UNDO` (symbol layer
+of `DRP`) puts back what the last operation consumed, one step, which is all a
+calculator ever offers.
 
 `DUP DRP OVR ROT SWP` are the stack, and `ROT` is the only way to reach the
 third entry: without it the keypad can see two deep and no further. Like `NEG`

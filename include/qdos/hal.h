@@ -71,7 +71,10 @@ typedef enum {
 	QDOS_KEY_OPEN,	///< Edit the selection
 	QDOS_KEY_CHECK,   ///< Compile what is in the editor without keeping it
 	QDOS_KEY_CATALOG, ///< Every word there is, to pick from
-	QDOS_KEY_ABOUT,   ///< What this firmware is
+	QDOS_KEY_ABOUT,    ///< What this firmware is
+	QDOS_KEY_SETTINGS,
+	QDOS_KEY_DEBUG,    ///< The log of what has been said
+	QDOS_KEY_UNDO,
 
 	/* Soft keys, labelled on screen because their meaning follows the mode */
 	QDOS_KEY_SOFT1,
