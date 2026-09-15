@@ -327,13 +327,20 @@ The panel is 400x240 -- a Sharp Memory LCD (LS027B7DH01), reflective and
 instant rather than backlit -- and only 2.7 inches, so its active area is
 58.8 x 35.3mm. That is small enough that the font has to suit the pixel grid rather
 than be scaled up to it: `src/ui/font16x24.c` is 95 glyphs baked in as bitmaps,
-giving a 25x10 console where a capital is 2.4mm tall.
+giving a 25x10 console where a capital is 19 rows, or 2.8mm, tall.
 
 The glyphs come from "VCR OSD Mono" by Riciery Leal, rasterised by
 `tools/genfont.py` at the largest size whose ink still fits a cell -- 27px, as
 it happens. Thresholding happens at build time, so the firmware links no
 rasteriser and the panel gets bitmaps. Point the generator at another font to
 change it; the metrics are worked out rather than hard coded.
+
+Stems and bars land on 3 pixels almost everywhere, because the typeface is
+itself pixel-derived. Where they do not, it is a diagonal: its coverage falls
+either side of the cut depending on where it crosses the grid, so `x`, `8` and
+`*` came out lopsided on shapes the typeface draws symmetric. The generator
+patches those five rows from each glyph's own mirror, and a test walks the
+symmetric glyphs and fails on any row that is not its own mirror.
 
 The kernel's boot logo is the same glyphs: `tools/genlogo.py` reads
 `font16x24.c` rather than the TTF, so what the firmware paints before Linux has
@@ -354,8 +361,8 @@ just in the calculator: the apps list and the editor show seven lines rather
 than six. `cls` takes a message down without pressing anything.
 
 A rule is a single pixel along the bottom edge of a row, and the lowest ink in
-the font is two pixels above that, so a rule underlines a row of content rather
-than occupying a row of its own. Ten rows is not enough to spend two of them on
+the font is two pixels above that -- bar the underscore, which is one -- so a
+rule underlines a row of content rather than occupying a row of its own. Ten rows is not enough to spend two of them on
 lines: the caption is underlined, the last row of content is underlined, and
 both of those rows still hold text. That is two rows back, which is a third of
 the pane in the list and the editor.

@@ -3,8 +3,10 @@
  * @brief 16x24 bitmap font covering printable ASCII
  *
  * Drawn for the calculator's 2.7 inch panel, where a cell is 2.35 x 3.53mm.
- * Cap height is 16 rows (3 through 18), x-height 11, descenders to row 22,
- * stems 2px, and the body sits in columns 2 through 13 with even bearings.
+ * Cap height is 19 rows (3 through 21), x-height 16 (6 through 21), stems 3px,
+ * and the body sits in columns 1 through 14 with even bearings. The typeface
+ * has no descent, so nothing reaches past the baseline; only the underscore
+ * uses row 22.
  */
 
 #ifndef QDOS_FONT16X24_H
