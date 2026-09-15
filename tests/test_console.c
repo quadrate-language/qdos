@@ -201,6 +201,20 @@ static void test_font_symmetry(void) {
 	}
 }
 
+/** Letters and digits sit on one baseline, whatever shape their terminal is. */
+static void test_font_baseline(void) {
+	const int baseline = 21;
+	for (const char* ch = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+						  "abcdefghijklmnopqrstuvwxyz0123456789";
+		 *ch; ch++) {
+		int bottom = -1;
+		for (int row = 0; row < QDOS_FONT_H; row++)
+			if (qdos_font_row(*ch, row))
+				bottom = row;
+		CHECK(bottom == baseline);
+	}
+}
+
 int main(int argc, char** argv) {
 	if (argc > 1 && strcmp(argv[1], "--dump") == 0) {
 		dump_font();
@@ -217,5 +231,6 @@ int main(int argc, char** argv) {
 	test_splash();
 	test_scaled_text();
 	test_font_symmetry();
+	test_font_baseline();
 	return check_report("console");
 }

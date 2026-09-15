@@ -105,6 +105,18 @@ PATCHES = {
     ord("*"): {9: "...##..##..##..."},
 }
 
+# Hinting snaps a round or pointed bottom up a row while leaving a flat one on
+# the baseline, so O ends a pixel above E and 0 above 1. Repeat the last row of
+# the straight part and let the terminal fall a row lower, which is where the
+# unhinted outline puts it. The row to repeat is per glyph because it is the
+# last one before the terminal starts, and that is a matter of the shape.
+STRETCH = {
+    "0": 17, "5": 17, "6": 17, "8": 17, "9": 17,
+    "C": 17, "G": 17, "J": 16, "O": 17, "U": 17, "V": 15, "W": 17,
+    "b": 16, "c": 17, "d": 16, "o": 17, "u": 17, "v": 15, "w": 17,
+    "{": 17, "}": 17,
+}
+
 
 def largest_fitting_size(path):
     """The biggest size whose ink still fits a cell, for every character."""
@@ -151,6 +163,13 @@ def render(path, size):
         ]
         for row, bits in PATCHES.get(code, {}).items():
             glyphs[code][row] = bits
+
+        row = STRETCH.get(chr(code))
+        if row is not None:
+            cell = glyphs[code]
+            if "#" in cell[CELL_H - 1]:
+                sys.exit(f"{chr(code)}: no room below to stretch")
+            glyphs[code] = cell[: row + 1] + [cell[row]] + cell[row + 1 : CELL_H - 1]
     return glyphs
 
 

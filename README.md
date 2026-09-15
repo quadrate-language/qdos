@@ -342,6 +342,18 @@ either side of the cut depending on where it crosses the grid, so `x`, `8` and
 patches those five rows from each glyph's own mirror, and a test walks the
 symmetric glyphs and fails on any row that is not its own mirror.
 
+Hinting costs a row at the bottom. Every glyph in the typeface ends on the
+same baseline, but at 27px the hinter snaps a round or pointed terminal up to
+the row above while it leaves a flat one where it is, so `O` ended a pixel
+above `E` and `0` above `1` -- on a calculator, in the digits, which is the
+worst place for it. Rendering unhinted puts them back in line but tapers the
+bars of `E` and breaks the bowl of `a`; 28px hints to one baseline but is
+worse everywhere else. So the generator keeps the hinted render for its clean
+stems and stretches the 21 affected glyphs instead: repeat the last row of the
+straight part and the terminal falls a row lower, where the outline had it.
+Which row to repeat is per glyph, being the last one before the terminal
+starts, and a test fails if any letter or digit stops short of the baseline.
+
 The kernel's boot logo is the same glyphs: `tools/genlogo.py` reads
 `font16x24.c` rather than the TTF, so what the firmware paints before Linux has
 a framebuffer driver cannot drift from what the shell paints after. Regenerate
