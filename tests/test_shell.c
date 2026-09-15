@@ -6,6 +6,7 @@
 #include "check.h"
 
 #include "../src/ui/console.h"
+#include "../src/ui/font16x24.h"
 
 #include <qdos/hal.h>
 #include <qdos/shell.h>
@@ -230,6 +231,13 @@ static void read_row(const uint8_t* fb, int row, char* out, size_t cap) {
 				found = ch;
 				break;
 			}
+		}
+
+		// The drawn symbols read back as themselves, so a cap showing an arrow
+		// can still be checked
+		for (char ch = QDOS_GLYPH_FIRST; found == ' ' && ch <= QDOS_GLYPH_LAST; ch++) {
+			if (cell_is(fb, col, row, ch, false) || cell_is(fb, col, row, ch, true))
+				found = ch;
 		}
 		out[len++] = found;
 	}
@@ -1646,6 +1654,33 @@ static void test_fixed_decimals_leave_strings_alone(void) {
 	CHECK(strstr(row, ".00") == NULL);
 }
 
+/**
+ * OFF is a soft key, so it arrives as SOFT5 and is only the power key once
+ * expanded. Testing the power key alone missed that for a long time.
+ */
+static void test_off_soft_key_stops_the_shell(void) {
+	static const qdos_key WAYS[] = {QDOS_KEY_POWER, QDOS_KEY_SOFT5};
+
+	for (size_t w = 0; w < sizeof(WAYS) / sizeof(*WAYS); w++) {
+		store_reset();
+
+		stub_state st;
+		memset(&st, 0, sizeof(st));
+		qdos_key_event script[3] = {{WAYS[w], 0}, {QDOS_KEY_1, 0}, {QDOS_KEY_2, 0}};
+		st.script = script;
+		st.count = 3;
+
+		qdos_hal hal;
+		stub_hal(&hal, &st);
+		qdos_shell* sh = qdos_shell_create(&hal);
+		CHECK(sh != NULL);
+		qdos_shell_run(sh);
+		qdos_shell_destroy(sh);
+
+		CHECK(st.next < st.count); // it stopped rather than reading on
+	}
+}
+
 /** Undo puts back what the last operation consumed. */
 static void test_undo_restores_the_stack(void) {
 	store_reset();
@@ -1838,7 +1873,7 @@ static void test_soft_key_opens_apps(void) {
 
 	// and in the list its labels have changed
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "DOWN") != NULL);
+	CHECK(strstr(row, QDOS_GLYPH_DOWN) != NULL);
 	CHECK(strstr(row, "EDIT") != NULL);
 }
 
@@ -1974,6 +2009,7 @@ int main(void) {
 	test_fixed_decimals_apply_to_integers();
 	test_fixed_decimals_leave_strings_alone();
 	test_undo_restores_the_stack();
+	test_off_soft_key_stops_the_shell();
 	test_delete_a_program();
 	test_delete_refuses_system();
 	test_division_key_is_not_integer_division();

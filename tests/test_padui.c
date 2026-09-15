@@ -272,6 +272,58 @@ static void test_modifiers_send_nothing(void) {
 		}
 }
 
+/** @brief The label with no surrounding spaces, as the cap prints it */
+static void trimmed(const char* text, char* out, size_t cap) {
+	while (*text == ' ')
+		text++;
+	size_t len = strlen(text);
+	while (len > 0 && text[len - 1] == ' ')
+		len--;
+	if (len >= cap)
+		len = cap - 1;
+	memcpy(out, text, len);
+	out[len] = '\0';
+}
+
+/**
+ * Case carries meaning: a lower-case cap is exactly the word, so it can be
+ * typed as printed, and a capitalised one is QDOS's own shorthand. A cap that
+ * is neither says nothing.
+ */
+static void test_cap_case_says_whether_it_is_the_word(void) {
+	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
+
+			for (int l = 0; l < 3; l++) {
+				const char* label = layers[l]->label;
+				if (label == NULL || (unsigned char)label[0] < 32)
+					continue;
+
+				int lower = 0, upper = 0;
+				for (const char* c = label; *c; c++) {
+					if (*c >= 'a' && *c <= 'z')
+						lower++;
+					if (*c >= 'A' && *c <= 'Z')
+						upper++;
+				}
+				CHECK(lower == 0 || upper == 0); // never a mixture
+
+				// The alphabet is a keyboard, which prints capitals and types small
+				const bool is_letter_key = (l == 1);
+				if (lower == 0 || layers[l]->text == NULL || is_letter_key)
+					continue;
+
+				char want[32];
+				trimmed(layers[l]->text, want, sizeof(want));
+				if (strcmp(label, want) != 0)
+					fprintf(stderr, "  cap '%s' types '%s'\n", label, want);
+				CHECK(strcmp(label, want) == 0);
+			}
+		}
+}
+
 int main(void) {
 	test_every_slot_is_filled();
 	test_labels_fit_their_button();
@@ -284,6 +336,7 @@ int main(void) {
 	test_alpha_layer_has_the_alphabet();
 	test_alpha_keeps_the_editing_keys();
 	test_modifiers_send_nothing();
+	test_cap_case_says_whether_it_is_the_word();
 	test_draw_stays_in_bounds();
 	return check_report("padui");
 }

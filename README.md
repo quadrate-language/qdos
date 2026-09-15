@@ -353,18 +353,23 @@ capitals, being the machine's own lettering; what a key types is not, so `FN`
 types `fn ` and `I64` types `i64`:
 
 ```
-      plain                alpha (locks)          symbol (one press)
+      plain                 alpha (locks)         symbol (one press)
 F1  F2  F3  F4  F5
-SIN COS TAN LN  LOG      A   B   C   D   E      (   )   {   }   "
-SQRT SQ POW INV ABS      F   G   H   I   J      FN  --  I64 F64 STR
-FLR CEIL RND SPC SYM     K   L   M   SPC        IF  ELS LOP BRK
-DUP DRP OVR ROT MOD      N   O   P   Q   R      NIP PIK [   ]   =
-ENT SWP NEG TAB BKS      ENT S   T   U   BKS    APP ROL FRE <   >
-UP  7   8   9   /        UP  V   W   X   Y      LT  AND OR  XOR SHL
-DN  4   5   6   *        DN  Z   _   6   *      RT  NOT ==  !=  ,
-ALP 1   2   3   -        ALP 1   2   3   -          <=  >=  WTH INC
-ESC 0   .   :   +        ESC 0   .   :   +      PWR LEN NTH ;   DEC
+sin cos tan ln  log      A   B   C   D   E      (    )    {   }   "
+ v  sq  pow inv abs      F   G   H   I   J      fn   --   i64 f64 str
+FLR ceil RND SPC SYM     K   L   M   SPC        if   else loop BRK
+dup drop over rot mod    N   O   P   Q   R      nip  UNDO [   ]   =
+ENT swap +-  TAB BKS     ENT S   T   U   BKS    APP  roll free <  >
+ ^   7   8   9  div      ^   V   W   X   Y      <-   and  or  xor shl
+ v   4   5   6   x       v   Z   _   6   x      ->   not  ==  !=  ,
+ALP 1   2   3   -        ALP 1   2   3   -           <=   >=  pi  INC
+ESC 0   .   :   +        ESC 0   .   :   +      PWR  len  nth ;   DEC
 ```
+
+(The caps shown as `^ v <- -> +- x div pi` and the root sign are drawn glyphs,
+not those letters.)
+
+
 
 Navigation runs down the left column, the digits sit in a 3x3 block, and the
 operators run down the right in the DM42's order. `ESC` is its EXIT, and `PWR`
@@ -376,6 +381,16 @@ takes the R/S slot, being the key that runs something.
 
 The numpad sits at the bottom of the pad with nothing under it, where a thumb
 expects it, and the menu keys stay directly under the labels they answer to.
+
+A cap in lower case is exactly the word it stands for, so `sin` can be typed as
+it is printed; a cap in capitals is QDOS's own -- `FLR` and `RND` because
+`floor` and `round` are five characters and would touch the bezel, `ENT` and
+`ESC` because the language has no name for them. The case is the signal, and a
+test enforces it: no cap mixes the two, and a lower-case one that types text
+must type exactly itself. `log` is registered as a name for `log10` so that the
+cap can be honest about it, which is what a calculator means by log anyway. The
+alphabet is the exception, printing capitals and typing small, as every
+keyboard does.
 
 Three faces, because one modifier is not enough for a keypad this size -- the
 same reason a TI-83 carries both `2nd` and `ALPHA`. Plain is a calculator:
@@ -481,6 +496,16 @@ enter a negative number in calculator mode: `-` there is subtraction, so `5` `-`
 is an operator with one operand and nothing to take from. It works as `+/-` does
 on an HP -- while a number is being typed it flips that number's sign, and with
 nothing being typed it negates x.
+
+The typeface is ASCII and nothing else, so the arrows, the root sign, divide,
+times, plus-or-minus and pi are drawn by hand in `tools/genfont.py` rather than
+taken from a font. VCR OSD Mono has arrows, but its vertical ones are outlines
+that flare the wrong way at this size, and it has none of the mathematics. At
+16x24 and one bit a stroke either lands on the grid or smears, so drawing them
+is the lesser of the two jobs. They sit below space, where ASCII has nothing
+printable, which keeps a keycap a plain C string and `qdos_font_row()` taking a
+`char`. A test walks them and fails on any that has no ink, since a blank key
+is not something the eye catches.
 
 `SPC` earns its place because two numbers typed in a row would otherwise merge:
 `7` `8` `+` is the single token `78` followed by an operator with nothing to add

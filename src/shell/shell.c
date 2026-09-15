@@ -114,7 +114,8 @@ struct qdos_shell {
 	qdos_value undo[QDOS_REGISTER_MAX];
 	size_t undo_depth;
 	bool undo_ready;
-	bool delete_armed; ///< One press of backspace has already asked
+	bool delete_armed;  ///< One press of backspace has already asked
+	bool powering_off;  ///< Set by the power key, acted on by the run loop
 
 	qdos_editor ed;
 	size_t ed_top; ///< First visible line
@@ -295,15 +296,15 @@ static const soft_key SOFT[7][SOFT_KEYS] = {
 	[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
 			{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_NONE}},
 	// down then up, so the pair sits like vim's j and k
-	[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {"DOWN", QDOS_KEY_DOWN}, {"UP", QDOS_KEY_UP},
+	[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
 			{"PICK", QDOS_KEY_ENTER}, {"EDIT", QDOS_KEY_OPEN}},
 	[QDOS_MODE_EDIT] = {{"DROP", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
 			{"", QDOS_KEY_NONE}, {"SAVE", QDOS_KEY_SAVE}},
 	[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"SET", QDOS_KEY_SETTINGS},
 			{"LOG", QDOS_KEY_DEBUG}, {"", QDOS_KEY_NONE}},
-	[QDOS_MODE_SETTINGS] = {{"ESC", QDOS_KEY_CLEAR}, {"DOWN", QDOS_KEY_DOWN}, {"UP", QDOS_KEY_UP},
+	[QDOS_MODE_SETTINGS] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
 			{"CHG", QDOS_KEY_ENTER}, {"LOG", QDOS_KEY_DEBUG}},
-	[QDOS_MODE_DEBUG] = {{"ESC", QDOS_KEY_CLEAR}, {"DOWN", QDOS_KEY_DOWN}, {"UP", QDOS_KEY_UP},
+	[QDOS_MODE_DEBUG] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
 			{"CLR", QDOS_KEY_BACKSPACE}, {"SET", QDOS_KEY_SETTINGS}},
 };
 
@@ -501,7 +502,7 @@ static void leave_line_mode(qdos_shell* sh) {
 /** Keys while the keypad is a calculator. */
 /* In QDOS_KEY_FN_FIRST..QDOS_KEY_FN_LAST order */
 static const char* const FUNCTION_WORD[] = {
-	"sin", "cos", "tan", "ln", "log10", "sqrt", "sq",
+	"sin", "cos", "tan", "ln", "log", "sqrt", "sq",
 	"pow", "inv", "abs", "floor", "ceil", "round", "mod",
 	"rot", "over",
 };
@@ -1041,6 +1042,11 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 	if (ev->key == QDOS_KEY_CATALOG && sh->mode != QDOS_MODE_LIST) {
 		catalog_open(sh);
+		return;
+	}
+
+	if (ev->key == QDOS_KEY_POWER) {
+		sh->powering_off = true;
 		return;
 	}
 
@@ -1588,12 +1594,15 @@ void qdos_shell_run(qdos_shell* sh) {
 		bool dirty = false;
 
 		while (sh->hal->poll_key(sh->hal, &ev)) {
-			if (ev.key == QDOS_KEY_POWER) {
+			handle_key(sh, &ev);
+			dirty = true;
+
+			// Checked after handling, because OFF arrives as a soft key and is
+			// only the power key once expanded
+			if (sh->powering_off) {
 				qdos_storage_save_session(sh->hal, sh->interp);
 				return;
 			}
-			handle_key(sh, &ev);
-			dirty = true;
 		}
 
 		if (dirty)

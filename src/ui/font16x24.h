@@ -21,6 +21,25 @@ extern "C" {
 /** @brief Glyph cell height in pixels */
 #define QDOS_FONT_H 24
 
+/*
+ * Symbols with no ASCII of their own, drawn in tools/genfont.py rather than
+ * taken from the typeface. They sit below space, so a label is still a plain
+ * C string and this function still takes a char.
+ */
+#define QDOS_GLYPH_UP "\x01"
+#define QDOS_GLYPH_DOWN "\x02"
+#define QDOS_GLYPH_LEFT "\x03"
+#define QDOS_GLYPH_SQRT "\x04"
+#define QDOS_GLYPH_DIVIDE "\x05"
+#define QDOS_GLYPH_TIMES "\x06"
+#define QDOS_GLYPH_PLUSMINUS "\x07"
+#define QDOS_GLYPH_PI "\x08"
+#define QDOS_GLYPH_RIGHT "\x09"
+
+/** @brief First and last drawn symbol, for walking them */
+#define QDOS_GLYPH_FIRST 1
+#define QDOS_GLYPH_LAST 9
+
 /**
  * @brief Row bitmap for one character
  * @param ch  Character to look up

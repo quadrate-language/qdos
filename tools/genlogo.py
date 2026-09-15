@@ -13,7 +13,10 @@ import sys
 from PIL import Image
 
 CELL_W, CELL_H, SCALE = 16, 24, 2
-FIRST = 32
+def first_char(text):
+    """Read the table's base from the file, which now starts below space."""
+    m = re.search(r"#define FIRST_CHAR (\d+)", text)
+    return int(m.group(1)) if m else 32
 
 
 def glyphs():
@@ -21,17 +24,18 @@ def glyphs():
     rows = re.findall(r'^\t\t"([.#]{16})",$', src, re.M)
     if len(rows) % CELL_H:
         sys.exit("font16x24.c: rows do not divide into glyphs")
-    return [rows[i : i + CELL_H] for i in range(0, len(rows), CELL_H)]
+    table = [rows[i : i + CELL_H] for i in range(0, len(rows), CELL_H)]
+    return table, first_char(src)
 
 
 def main():
     text, out = sys.argv[1], sys.argv[2]
-    table = glyphs()
+    table, first = glyphs()
 
     img = Image.new("L", (len(text) * CELL_W * SCALE, CELL_H * SCALE), 0)
     px = img.load()
     for i, ch in enumerate(text):
-        cell = table[ord(ch) - FIRST]
+        cell = table[ord(ch) - first]
         for y in range(CELL_H):
             for x in range(CELL_W):
                 if cell[y][x] != "#":

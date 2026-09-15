@@ -225,6 +225,8 @@ void qdos_register_math(qd_interp* interp) {
 			{"sqrt", UNARY, w_sqrt},
 			{"ln", UNARY, w_ln},
 			{"log10", UNARY, w_log10},
+			// What a calculator means by log, so the cap can say it
+			{"log", UNARY, w_log10},
 			{"log2", UNARY, w_log2},
 			{"acosh", UNARY, w_acosh},
 			{"atanh", UNARY, w_atanh},

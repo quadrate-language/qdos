@@ -5,6 +5,8 @@
 
 #include "check.h"
 
+#include "../src/ui/font16x24.h"
+
 #include "../src/ui/console.h"
 #include "../src/ui/splash.h"
 
