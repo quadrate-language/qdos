@@ -52,3 +52,19 @@ test_mathwords = executable('test_mathwords', 'test_mathwords.c',
 		dependencies: [qdos_core_dep],
 		link_language: 'cpp')
 test('mathwords', test_mathwords)
+
+test_guarded = executable('test_guarded', 'test_guarded.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('guarded', test_guarded)
+
+# The store half of the device backend is plain file handling, so it is tested
+# wherever the backend is built rather than only on the hardware
+if get_option('device')
+	test_device_store = executable('test_device_store', 'test_device_store.c',
+			include_directories: qdos_inc,
+			dependencies: [qdos_device_dep],
+			link_language: 'cpp')
+	test('device_store', test_device_store)
+endif

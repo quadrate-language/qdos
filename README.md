@@ -193,6 +193,11 @@ meson test -C build                     # Full suite
 ./cross/run.sh                          # Cross-compile ARMv6, run tests under QEMU
 QDOS_ARCH=aarch64 ./cross/run.sh        # ... and ARM64
 
+# Coverage. Two tests reach for real device nodes and quietly skip without
+# them, so check here rather than in the pass/fail count that they ran.
+meson setup build/cov -Db_coverage=true && meson test -C build/cov
+ninja -C build/cov coverage-text        # needs gcovr or lcov
+
 # ARM's char is unsigned where x86's is signed; this catches the difference here
 meson setup build/uchar -Dc_args=-funsigned-char -Dcpp_args=-funsigned-char
 meson test -C build/uchar

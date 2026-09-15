@@ -123,6 +123,202 @@ static void test_poll_guards(void) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Poll over a pipe                                                       */
+/*                                                                        */
+/* qdos_keypad_poll() wants a descriptor that yields input_event records, */
+/* and a pipe is one. The real device test below needs /dev/uinput and is */
+/* skipped wherever that is not there, so the modifier state machine is   */
+/* driven here instead, where it always runs.                             */
+/* ---------------------------------------------------------------------- */
+
+typedef struct {
+	int read_fd;
+	int write_fd;
+} fake_pad;
+
+static bool fake_pad_open(fake_pad* pad) {
+	int fds[2];
+	if (pipe(fds) != 0)
+		return false;
+
+	// qdos_keypad_open() opens the device non-blocking; the read loop relies on
+	// that to stop at the end of the queue rather than waiting for more
+	fcntl(fds[0], F_SETFL, O_NONBLOCK);
+	pad->read_fd = fds[0];
+	pad->write_fd = fds[1];
+	return true;
+}
+
+static void fake_pad_close(fake_pad* pad) {
+	close(pad->read_fd);
+	close(pad->write_fd);
+}
+
+static void feed(const fake_pad* pad, uint16_t type, uint16_t code, int32_t value) {
+	struct input_event ev;
+	memset(&ev, 0, sizeof(ev));
+	ev.type = type;
+	ev.code = code;
+	ev.value = value;
+	CHECK(write(pad->write_fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev));
+}
+
+/** 1 is a press, as the kernel reports it */
+static void press(const fake_pad* pad, uint16_t code) {
+	feed(pad, EV_KEY, code, 1);
+}
+
+static void release(const fake_pad* pad, uint16_t code) {
+	feed(pad, EV_KEY, code, 0);
+}
+
+/** Poll once and report the key, or QDOS_KEY_NONE if nothing was delivered */
+static qdos_key polled(const fake_pad* pad, char* ch) {
+	qdos_key_event ev;
+	memset(&ev, 0, sizeof(ev));
+	if (!qdos_keypad_poll(pad->read_fd, &ev)) {
+		if (ch)
+			*ch = 0;
+		return QDOS_KEY_NONE;
+	}
+	if (ch)
+		*ch = ev.ch;
+	return ev.key;
+}
+
+/** Only presses of keys the calculator knows come back out. */
+static void test_poll_filters_the_queue(void) {
+	fake_pad pad;
+	if (!fake_pad_open(&pad)) {
+		CHECK(0 && "cannot make a pipe");
+		return;
+	}
+
+	// Anything that is not a key press is not a key: the kernel frames every
+	// report with EV_SYN, and EV_MSC arrives alongside on real keyboards
+	feed(&pad, EV_SYN, SYN_REPORT, 0);
+	feed(&pad, EV_MSC, MSC_SCAN, 0x1e);
+	press(&pad, KEY_1);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_1);
+
+	// A release is the other edge of a press already reported, and value 2 is
+	// autorepeat. Neither is a new press.
+	release(&pad, KEY_2);
+	feed(&pad, EV_KEY, KEY_2, 2);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+
+	press(&pad, KEY_2);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_2);
+
+	// A key with no meaning here is skipped over rather than ending the walk,
+	// or one stray key would swallow the press behind it
+	press(&pad, KEY_F9);
+	press(&pad, KEY_3);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_3);
+
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE); // drained
+
+	fake_pad_close(&pad);
+}
+
+/**
+ * Modifiers are held between polls. Shift arrives as its own event well before
+ * the key it shifts, and the two are almost never read in the same poll.
+ */
+static void test_poll_holds_the_modifiers(void) {
+	fake_pad pad;
+	if (!fake_pad_open(&pad)) {
+		CHECK(0 && "cannot make a pipe");
+		return;
+	}
+
+	char ch = 0;
+
+	press(&pad, KEY_LEFTSHIFT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE); // a modifier is not a press
+
+	press(&pad, KEY_1);
+	CHECK(polled(&pad, &ch) == QDOS_KEY_CHAR);
+	CHECK(ch == '!'); // the shift held across a separate poll
+
+	release(&pad, KEY_LEFTSHIFT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+
+	press(&pad, KEY_1);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_1); // and let go again
+
+	// The right-hand one is the same key as far as the layout is concerned
+	press(&pad, KEY_RIGHTSHIFT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+	press(&pad, KEY_A);
+	CHECK(polled(&pad, &ch) == QDOS_KEY_CHAR);
+	CHECK(ch == 'A');
+	release(&pad, KEY_RIGHTSHIFT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+
+	fake_pad_close(&pad);
+}
+
+/** AltGr is the third level, and the Swedish layout is where QDOS needs it. */
+static void test_poll_holds_altgr(void) {
+	fake_pad pad;
+	if (!fake_pad_open(&pad)) {
+		CHECK(0 && "cannot make a pipe");
+		return;
+	}
+
+	CHECK(qdos_keypad_set_layout("se"));
+	char ch = 0;
+
+	press(&pad, KEY_RIGHTALT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+
+	press(&pad, KEY_7);
+	CHECK(polled(&pad, &ch) == QDOS_KEY_CHAR);
+	CHECK(ch == '{'); // a declaration's brace, which SE puts on AltGr
+
+	release(&pad, KEY_RIGHTALT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+
+	press(&pad, KEY_7);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_7); // plain again, and a digit key
+
+	// SE leaves shift+4 undefined. Nothing is better than the wrong character.
+	press(&pad, KEY_LEFTSHIFT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+	press(&pad, KEY_4);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+	release(&pad, KEY_LEFTSHIFT);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+
+	press(&pad, KEY_4);
+	CHECK(polled(&pad, NULL) == QDOS_KEY_4);
+
+	CHECK(qdos_keypad_set_layout("us"));
+	fake_pad_close(&pad);
+}
+
+/** A record cut short is the end of the queue, not a key. */
+static void test_poll_ignores_a_partial_record(void) {
+	fake_pad pad;
+	if (!fake_pad_open(&pad)) {
+		CHECK(0 && "cannot make a pipe");
+		return;
+	}
+
+	struct input_event ev;
+	memset(&ev, 0, sizeof(ev));
+	ev.type = EV_KEY;
+	ev.code = KEY_5;
+	ev.value = 1;
+	CHECK(write(pad.write_fd, &ev, sizeof(ev) / 2) == (ssize_t)(sizeof(ev) / 2));
+
+	CHECK(polled(&pad, NULL) == QDOS_KEY_NONE);
+
+	fake_pad_close(&pad);
+}
+
+/* ---------------------------------------------------------------------- */
 /* Virtual keypad via uinput                                              */
 /* ---------------------------------------------------------------------- */
 
@@ -291,6 +487,10 @@ static void test_real_input_device(void) {
 int main(void) {
 	test_mapping();
 	test_poll_guards();
+	test_poll_filters_the_queue();
+	test_poll_holds_the_modifiers();
+	test_poll_holds_altgr();
+	test_poll_ignores_a_partial_record();
 	test_real_input_device();
 	return check_report("keypad");
 }

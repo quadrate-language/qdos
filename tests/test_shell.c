@@ -20,8 +20,14 @@ typedef struct {
 	const qdos_key_event* script;
 	size_t count;
 	size_t next;
+	bool served; ///< A key has already gone out on this pass
 	uint8_t last_fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	int presents;
+
+	/** Where to stop, so a screen part-way through a script can be read */
+	size_t stop_after;
+	uint8_t stopped_fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	bool stopped;
 } stub_state;
 
 static int stub_init(qdos_hal* hal) {
@@ -37,13 +43,32 @@ static void stub_present(qdos_hal* hal, const uint8_t* fb) {
 	stub_state* st = hal->impl;
 	memcpy(st->last_fb, fb, sizeof(st->last_fb));
 	st->presents++;
+
+	// Keep the screen as it stood after stop_after keys. The final frame is a
+	// different mode by then, so a page a script only passes through cannot be
+	// read any other way.
+	if (st->stop_after > 0 && !st->stopped && st->next >= st->stop_after) {
+		memcpy(st->stopped_fb, fb, sizeof(st->stopped_fb));
+		st->stopped = true;
+	}
 }
 
+/**
+ * One key per pass, because the shell renders once per drain of the queue. A
+ * keypad does not hand over the whole script at once, and handing it over that
+ * way would mean no test ever saw a screen between the first key and the last.
+ */
 static bool stub_poll_key(qdos_hal* hal, qdos_key_event* out) {
 	stub_state* st = hal->impl;
+	if (st->served) {
+		st->served = false;
+		return false;
+	}
 	if (st->next >= st->count)
 		return false;
+
 	*out = st->script[st->next++];
+	st->served = true;
 	return true;
 }
 
@@ -158,6 +183,7 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 #define ROW_CONTENT_LAST_T (QDOS_ROWS - 4)
 #define ROW_TOP_VALUE ROW_CONTENT_LAST_T
 #define ROW_MESSAGE_LINE (QDOS_ROWS - 3)
+#define ROW_INPUT_LINE (QDOS_ROWS - 2)
 
 /** Press one key. */
 static void key(qdos_key_event* script, size_t* n, qdos_key k) {
@@ -249,12 +275,19 @@ static void read_row(const uint8_t* fb, int row, char* out, size_t cap) {
 }
 
 
-/** Run a key script and return the resulting screen. */
-static void run_script(const qdos_key_event* script, size_t count, uint8_t* fb_out) {
+/**
+ * @brief Run a key script and keep two screens
+ * @param stop_after Which key to also keep the screen after, or 0 for none
+ * @param fb_out     The final screen
+ * @param mid_out    The screen after @p stop_after keys, or NULL
+ */
+static void run_script_capturing(const qdos_key_event* script, size_t count, size_t stop_after, uint8_t* fb_out,
+		uint8_t* mid_out) {
 	stub_state st;
 	memset(&st, 0, sizeof(st));
 	st.script = script;
 	st.count = count;
+	st.stop_after = stop_after;
 
 	qdos_hal hal;
 	stub_hal(&hal, &st);
@@ -266,6 +299,33 @@ static void run_script(const qdos_key_event* script, size_t count, uint8_t* fb_o
 
 	CHECK(st.presents > 0);
 	memcpy(fb_out, st.last_fb, (size_t)QDOS_SCREEN_W * QDOS_SCREEN_H);
+
+	if (mid_out != NULL) {
+		CHECK(st.stopped);
+		memcpy(mid_out, st.stopped_fb, (size_t)QDOS_SCREEN_W * QDOS_SCREEN_H);
+	}
+}
+
+/** Run a key script and return the resulting screen. */
+static void run_script(const qdos_key_event* script, size_t count, uint8_t* fb_out) {
+	run_script_capturing(script, count, 0, fb_out, NULL);
+}
+
+/** Does any content row of this screen hold this text? */
+static bool page_has(const uint8_t* fb, const char* text) {
+	char row[QDOS_COLS + 1];
+	for (int r = ROW_CONTENT_FIRST_T; r <= ROW_CONTENT_LAST_T; r++) {
+		read_row(fb, r, row, sizeof(row));
+		if (strstr(row, text) != NULL)
+			return true;
+	}
+	return false;
+}
+
+/** As run_script(), but also returns the screen part-way through. */
+static void run_script_mid(
+		const qdos_key_event* script, size_t count, size_t stop_after, uint8_t* fb_out, uint8_t* mid_out) {
+	run_script_capturing(script, count, stop_after, fb_out, mid_out);
 }
 
 /**
@@ -1534,6 +1594,30 @@ static void test_print_reaches_the_panel(void) {
 	CHECK(strstr(row, "HELLO") != NULL);
 }
 
+/**
+ * Printing still works after a forget. `forget` restores a shipped program by
+ * evaluating it, so an evaluation runs inside an evaluation -- and the output
+ * capture has to come back out of that in one piece, or every later print is
+ * swallowed for the rest of the session.
+ */
+static void test_print_survives_a_nested_evaluation(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "fn hyp( -- r:i64) { 9 }"); // override the shipped one
+	type_line(script, &n, "\"hyp\" forget");			 // and put it back
+	type_line(script, &n, "\"HELLO\" print");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "HELLO") != NULL);
+}
+
 /** The debug page keeps what was printed and what went wrong. */
 static void test_debug_page_keeps_a_log(void) {
 	store_reset();
@@ -1561,6 +1645,212 @@ static void test_debug_page_keeps_a_log(void) {
 	}
 	CHECK(printed);
 	CHECK(failed);
+}
+
+/**
+ * The keypad types into the line as well as acting on the stack. A keypad has
+ * no letters on it, so these keys are how anything gets typed at all.
+ */
+static void test_keypad_types_into_the_line(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	digits(script, &n, "1234567890.");
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_SUB);
+	key(script, &n, QDOS_KEY_MUL);
+	key(script, &n, QDOS_KEY_DIV);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "1234567890.+-*/") != NULL);
+}
+
+/** The stack keys spell their word out rather than acting on the spot. */
+static void test_keypad_words_reach_the_line(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	key(script, &n, QDOS_KEY_DUP);
+	key(script, &n, QDOS_KEY_SWAP);
+	key(script, &n, QDOS_KEY_DROP);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "dupswapdrop") != NULL);
+}
+
+/** A word typed by its key has room around it, so it runs the line it lands in. */
+static void test_a_typed_function_word_evaluates(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	digits(script, &n, "9");
+	key(script, &n, QDOS_KEY_SQRT); // " sqrt ", not "9sqrt"
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+}
+
+/** +/- is a word in the line, where it cannot sign an entry that is not there. */
+static void test_neg_key_types_the_word(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_NEG);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "-5") != NULL);
+}
+
+/** `cls` takes the message down, which is the only way to clear one. */
+static void test_cls_clears_the_message(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"HELLO\" print");
+	const size_t printed_at = n;
+	type_more(script, &n, "cls");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t printed[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, printed_at, fb, printed);
+
+	char row[QDOS_COLS + 1];
+	read_row(printed, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "HELLO") != NULL);
+
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** Print more lines than the debug page can hold at once. */
+static void log_nine_lines(qdos_key_event* script, size_t* n) {
+	type_line(script, n, "\"L0\" print");
+	for (int i = 1; i < 9; i++) {
+		char text[32];
+		snprintf(text, sizeof(text), "\"L%d\" print", i);
+		type_more(script, n, text);
+	}
+}
+
+/** The page opens on the newest lines, which are the ones worth seeing. */
+static void test_debug_page_opens_at_the_end(void) {
+	store_reset();
+
+	qdos_key_event script[512];
+	size_t n = 0;
+	log_nine_lines(script, &n);
+	key(script, &n, QDOS_KEY_DEBUG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(page_has(fb, "L8"));
+	CHECK(!page_has(fb, "L0"));
+}
+
+/**
+ * Scrolling reaches both ends of the log and stops there. Pressed past the end
+ * it must hold still, not walk off into whatever is next in memory.
+ */
+static void test_debug_page_scrolls_to_both_ends(void) {
+	store_reset();
+
+	qdos_key_event script[768];
+	size_t n = 0;
+	log_nine_lines(script, &n);
+	key(script, &n, QDOS_KEY_DEBUG);
+
+	// Far more than the log holds, in both directions
+	const size_t at_top = n + 40;
+	for (int i = 0; i < 40; i++)
+		key(script, &n, QDOS_KEY_UP);
+	for (int i = 0; i < 40; i++)
+		key(script, &n, QDOS_KEY_DOWN);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t top[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, at_top, fb, top);
+
+	// Up as far as it goes shows the oldest line and holds there
+	CHECK(page_has(top, "L0"));
+	CHECK(!page_has(top, "L8"));
+
+	// And down as far as it goes comes back to the newest
+	CHECK(page_has(fb, "L8"));
+	CHECK(!page_has(fb, "L0"));
+}
+
+/** Backspace throws the log away, which is the only way to empty it. */
+static void test_debug_page_clears_the_log(void) {
+	store_reset();
+
+	qdos_key_event script[512];
+	size_t n = 0;
+	log_nine_lines(script, &n);
+	key(script, &n, QDOS_KEY_DEBUG);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(page_has(fb, "NOTHING LOGGED"));
+	CHECK(!page_has(fb, "L8"));
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "DEBUG") != NULL);
+	CHECK(strstr(row, "0") != NULL); // the count in the corner agrees
+}
+
+/** The page is a detour, so it goes back to whichever mode opened it. */
+static void test_debug_page_returns(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST); // open a page with a header of its own
+	key(script, &n, QDOS_KEY_DEBUG);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t debug[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, 2, fb, debug);
+
+	char row[QDOS_COLS + 1];
+	read_row(debug, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "DEBUG") != NULL);
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "DEBUG") == NULL); // back to the list, not the calculator
+	CHECK(strstr(row, "APPS") != NULL);
 }
 
 /** Settings change the machine, not just the screen. */
@@ -1608,6 +1898,130 @@ static void test_settings_change_decimals(void) {
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "1.41") != NULL);
 	CHECK(strstr(row, "1.414") == NULL);
+}
+
+/**
+ * The settings page says what it is about to change. Every other test presses
+ * through it to check the machine changed, so this is the one that looks at it.
+ */
+static void test_settings_page_shows_both_settings(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_CLEAR); // leave again, so the page is passed through
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t page[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, 1, fb, page);
+
+	char row[QDOS_COLS + 1];
+	read_row(page, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "SETTINGS") != NULL);
+
+	read_row(page, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "ANGLE") != NULL);
+	CHECK(strstr(row, "RAD") != NULL); // radians until asked otherwise
+
+	read_row(page, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "DECIMALS") != NULL);
+	CHECK(strstr(row, "AUTO") != NULL);
+
+	// Clear goes back where it came from, rather than leaving the page up
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "SETTINGS") == NULL);
+}
+
+/** The selected row is the inverted one, so a press has a visible target. */
+static void test_settings_marks_the_selection(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t opened[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, 1, fb, opened);
+
+	// ANGLE is selected when the page opens; the names start one cell in
+	CHECK(cell_is(opened, 1, ROW_CONTENT_FIRST_T, 'A', true));
+	CHECK(cell_is(opened, 1, ROW_CONTENT_FIRST_T + 1, 'D', false));
+
+	// And down moves the mark to DECIMALS
+	CHECK(cell_is(fb, 1, ROW_CONTENT_FIRST_T + 1, 'D', true));
+	CHECK(cell_is(fb, 1, ROW_CONTENT_FIRST_T, 'A', false));
+}
+
+/** Angle mode is one setting with two values, so either direction toggles it. */
+static void test_settings_angle_toggles_both_ways(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_RIGHT);
+	key(script, &n, QDOS_KEY_LEFT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t degrees[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, 2, fb, degrees);
+
+	char row[QDOS_COLS + 1];
+	read_row(degrees, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "DEG") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "RAD") != NULL);
+
+	CHECK(!qdos_math_degrees()); // and the machine is as it was found
+}
+
+/** Decimals run out at both ends and come round, rather than sticking. */
+static void test_settings_decimals_wrap_downwards(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_LEFT); // AUTO has nothing below it
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "9") != NULL); // so it wraps to the most there is
+	CHECK(strstr(row, "AUTO") == NULL);
+}
+
+/** The selection stops at the ends instead of running off them. */
+static void test_settings_selection_stops_at_the_ends(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_UP);	// already at the top
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN); // already at the bottom
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+
+	// Neither press moved off the list, so Enter changed DECIMALS
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "RAD") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "AUTO") == NULL);
+	CHECK(strstr(row, "0") != NULL);
 }
 
 /** A fixed setting is a column to read down, so whole numbers get decimals too. */
@@ -2003,7 +2417,22 @@ int main(void) {
 	test_edit_discards();
 	test_space_separates_numbers();
 	test_print_reaches_the_panel();
+	test_print_survives_a_nested_evaluation();
+	test_keypad_types_into_the_line();
+	test_keypad_words_reach_the_line();
+	test_a_typed_function_word_evaluates();
+	test_neg_key_types_the_word();
+	test_cls_clears_the_message();
 	test_debug_page_keeps_a_log();
+	test_debug_page_opens_at_the_end();
+	test_debug_page_scrolls_to_both_ends();
+	test_debug_page_clears_the_log();
+	test_debug_page_returns();
+	test_settings_page_shows_both_settings();
+	test_settings_marks_the_selection();
+	test_settings_angle_toggles_both_ways();
+	test_settings_decimals_wrap_downwards();
+	test_settings_selection_stops_at_the_ends();
 	test_settings_change_angle_mode();
 	test_settings_change_decimals();
 	test_fixed_decimals_apply_to_integers();

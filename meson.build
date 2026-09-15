@@ -118,8 +118,22 @@ if get_option('sim')
 	qdos_args += '-DQDOS_WITH_SIM'
 endif
 
+# Split out as a library for the same reason as qdos_core: the store half of
+# the backend is plain file handling and wants a test, which must not have to
+# drag in main() to get at it.
+qdos_device_dep = []
 if get_option('device')
-	qdos_sources += 'src/hal/device/device_linux.c'
+	qdos_device = static_library('qdos_device',
+			['src/hal/device/device_linux.c'],
+			include_directories: qdos_inc,
+			dependencies: [qdos_core_dep])
+
+	qdos_device_dep = declare_dependency(
+			link_with: qdos_device,
+			include_directories: qdos_inc,
+			dependencies: [qdos_core_dep])
+
+	qdos_deps += qdos_device_dep
 	qdos_args += '-DQDOS_WITH_DEVICE'
 endif
 
