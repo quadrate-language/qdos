@@ -202,6 +202,51 @@ static void test_font_symmetry(void) {
 }
 
 /** Letters and digits sit on one baseline, whatever shape their terminal is. */
+/** How many unlit pixels lie between the leftmost and rightmost ink of a row */
+static int interior_gaps(char ch) {
+	int gaps = 0;
+	for (int row = 0; row < QDOS_FONT_H; row++) {
+		const uint16_t bits = qdos_font_row(ch, row);
+		if (bits == 0)
+			continue;
+
+		int first = -1, last = -1;
+		for (int col = 0; col < QDOS_FONT_W; col++) {
+			if (bits & (1u << col)) {
+				if (first < 0)
+					first = col;
+				last = col;
+			}
+		}
+		for (int col = first; col < last; col++)
+			if (!(bits & (1u << col)))
+				gaps++;
+	}
+	return gaps;
+}
+
+/**
+ * The zero's slash must not close its counter.
+ *
+ * Telling O from 0 is the discrimination a calculator most needs, and the
+ * slash was once rasterised thick enough to fill most of the bowl, leaving the
+ * zero reading as the heavier shape -- backwards, and hard to read at a glance.
+ */
+static void test_zero_is_not_a_blob(void) {
+	const int zero = interior_gaps('0');
+	const int oh = interior_gaps('O');
+
+	// The slash costs some of the counter, but nothing like most of it
+	CHECK(zero > (oh * 3) / 4);
+
+	// And it is still a slash: the two must not be the same glyph
+	bool differs = false;
+	for (int row = 0; row < QDOS_FONT_H; row++)
+		if (qdos_font_row('0', row) != qdos_font_row('O', row))
+			differs = true;
+	CHECK(differs);
+}
+
 static void test_font_baseline(void) {
 	const int baseline = 21;
 	for (const char* ch = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -232,5 +277,6 @@ int main(int argc, char** argv) {
 	test_scaled_text();
 	test_font_symmetry();
 	test_font_baseline();
+	test_zero_is_not_a_blob();
 	return check_report("console");
 }

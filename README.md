@@ -203,8 +203,8 @@ on a Swedish keyboard the braces a function needs are on AltGr.
 include/qdos/       Public interfaces (HAL, shell)
 src/shell/          Input line, stack display, evaluation via Quadrate's lib/interp
 src/ui/             Framebuffer text console and 16x24 font
-assets/fonts/       The font the glyphs are rasterised from
-tools/              genfont.py and genlogo.py, which generate the font and
+assets/             font16x24.txt, the font's pixels; fonts/, where they began
+tools/              genfont.py and genlogo.py, which pack the font and build
                     the kernel boot logo from it
 src/hal/sim/        SDL3 backend (develop on the desktop)
 src/hal/device/     Pi backend (framebuffer + evdev)
@@ -329,30 +329,46 @@ instant rather than backlit -- and only 2.7 inches, so its active area is
 than be scaled up to it: `src/ui/font16x24.c` is 95 glyphs baked in as bitmaps,
 giving a 25x10 console where a capital is 19 rows, or 2.8mm, tall.
 
-The glyphs come from "VCR OSD Mono" by Riciery Leal, rasterised by
-`tools/genfont.py` at the largest size whose ink still fits a cell -- 27px, as
-it happens. Thresholding happens at build time, so the firmware links no
-rasteriser and the panel gets bitmaps. Point the generator at another font to
-change it; the metrics are worked out rather than hard coded.
+The glyphs began as "VCR OSD Mono" by Riciery Leal, rasterised at the largest
+size whose ink still fits a cell -- 27px, as it happens. They are no longer
+rasterised. `assets/font16x24.txt` holds the pixels, one `#` or `.` per pixel,
+and `tools/genfont.py` packs it into `src/ui/font16x24.c`.
 
-Stems and bars land on 3 pixels almost everywhere, because the typeface is
-itself pixel-derived. Where they do not, it is a diagonal: its coverage falls
-either side of the cut depending on where it crosses the grid, so `x`, `8` and
-`*` came out lopsided on shapes the typeface draws symmetric. The generator
-patches those five rows from each glyph's own mirror, and a test walks the
-symmetric glyphs and fails on any row that is not its own mirror.
+That changed because 16x24 at one bit is small enough that the rasteriser had
+to be corrected glyph by glyph. A stroke either lands on the pixel grid or
+smears across it, so a diagonal's coverage falls either side of the threshold
+depending on where it crosses: `x`, `8` and `*` came out lopsided on shapes the
+typeface draws symmetric. Hinting cost a row at the bottom, snapping round and
+pointed terminals up while leaving flat ones alone, so `O` ended a pixel above
+`E`. Nine symbols the typeface has no glyph for were drawn by hand anyway. By
+the end a third of the font was hand-maintained correction tables in a Python
+script, which is a bitmap font with extra steps and no way to see what you are
+editing. Now a fix is a pixel, reviewable in the diff.
 
-Hinting costs a row at the bottom. Every glyph in the typeface ends on the
-same baseline, but at 27px the hinter snaps a round or pointed terminal up to
-the row above while it leaves a flat one where it is, so `O` ended a pixel
-above `E` and `0` above `1` -- on a calculator, in the digits, which is the
-worst place for it. Rendering unhinted puts them back in line but tapers the
-bars of `E` and breaks the bowl of `a`; 28px hints to one baseline but is
-worse everywhere else. So the generator keeps the hinted render for its clean
-stems and stretches the 21 affected glyphs instead: repeat the last row of the
-straight part and the terminal falls a row lower, where the outline had it.
-Which row to repeat is per glyph, being the last one before the terminal
-starts, and a test fails if any letter or digit stops short of the baseline.
+The metrics are the thing a bitmap font lives or dies by, so `meson test` runs
+`tools/genfont.py --check` over the source: every letter and digit ends on row
+21, capitals and digits start on row 3, and nothing strays outside columns 1 to
+14 where it would touch the cell beside it. One glyph a pixel off is invisible
+alone and obvious in a word, which is exactly the kind of thing to let a machine
+notice. `test_console` also walks the symmetric glyphs and fails on any row that
+is not its own mirror.
+
+Stems come in two widths, and the reason is arithmetic rather than taste. A
+paired stem -- the two sides of `H`, `n`, `O` -- is 3 pixels, in columns 1-3 and
+12-14, and the pair mirrors about the centre. A stem standing alone cannot be 3:
+a run of columns mirrors only when its first and last add to 15, which no odd
+width satisfies in a cell 16 wide. So `I`, `T`, `1`, `l`, `|` and the rest are 2
+pixels in columns 7-8, every one of them, and they do read a shade lighter than
+`H`. Widening them to 3 would put them off centre and widening them to 4 would
+make them heavier than the stems they are trying to match, so light and centred
+is the better of the three. The check enforces it rather than leaving it to
+whoever edits next.
+
+The zero is drawn rather than inherited. Rasterising put a slash through it
+thick enough to fill most of the bowl, leaving `0` reading as a heavier shape
+than `O` -- backwards, and the wrong way round for the one pair a calculator
+most needs to tell apart. It is now a 2-pixel slash kept clear of both walls, and
+a test fails if the counter ever closes up again.
 
 The kernel's boot logo is the same glyphs: `tools/genlogo.py` reads
 `font16x24.c` rather than the TTF, so what the firmware paints before Linux has
@@ -563,8 +579,8 @@ on an HP -- while a number is being typed it flips that number's sign, and with
 nothing being typed it negates x.
 
 The typeface is ASCII and nothing else, so the arrows, the root sign, divide,
-times, plus-or-minus and pi are drawn by hand in `tools/genfont.py` rather than
-taken from a font. VCR OSD Mono has arrows, but its vertical ones are outlines
+times, plus-or-minus and pi are drawn by hand in `assets/font16x24.txt` rather
+than taken from a font. VCR OSD Mono has arrows, but its vertical ones are outlines
 that flare the wrong way at this size, and it has none of the mathematics. At
 16x24 and one bit a stroke either lands on the grid or smears, so drawing them
 is the lesser of the two jobs. They sit below space, where ASCII has nothing

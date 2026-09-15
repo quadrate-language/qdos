@@ -59,6 +59,16 @@ test_guarded = executable('test_guarded', 'test_guarded.c',
 		link_language: 'cpp')
 test('guarded', test_guarded)
 
+# The font's source is a bitmap, so nothing checks its metrics at compile time.
+# A glyph a pixel off the baseline is invisible on its own and obvious in a
+# word, which is exactly the kind of thing to let a machine notice.
+python = find_program('python3', required: false)
+if python.found()
+	test('font', python,
+			args: [meson.project_source_root() / 'tools/genfont.py', '--check'],
+			workdir: meson.project_source_root())
+endif
+
 # The store half of the device backend is plain file handling, so it is tested
 # wherever the backend is built rather than only on the hardware
 if get_option('device')
