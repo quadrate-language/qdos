@@ -80,6 +80,11 @@ quadrate_dep = declare_dependency(
 # '.' also brings in the build directory, where qdos_version.h is generated
 qdos_inc = include_directories('include', 'src', '.')
 
+# Native modules are opened by the dynamic linker. On glibc 2.34 and later
+# dlopen lives in libc itself, so there is nothing to find; older libcs and musl
+# keep it apart.
+dl_dep = meson.get_compiler('c').find_library('dl', required: false)
+
 # Core: the shell and the display layer — everything that is
 # independent of which hardware backend is underneath. Split out as a library
 # so tests can link it without dragging in a backend or main().
@@ -92,6 +97,7 @@ qdos_core = static_library('qdos_core',
 			'src/shell/editor.c',
 			'src/shell/guarded.c',
 			'src/shell/lint.cc',
+			'src/shell/native.c',
 			'src/shell/mathwords.c',
 			version_h,
 			'src/hal/sim/keypad_ui.c',
@@ -103,12 +109,12 @@ qdos_core = static_library('qdos_core',
 			'src/hal/device/keypad.c',
 		],
 		include_directories: qdos_inc,
-		dependencies: [quadrate_dep])
+		dependencies: [quadrate_dep, dl_dep])
 
 qdos_core_dep = declare_dependency(
 		link_with: qdos_core,
 		include_directories: qdos_inc,
-		dependencies: [quadrate_dep])
+		dependencies: [quadrate_dep, dl_dep])
 
 qdos_sources = ['src/main.c']
 qdos_deps = [qdos_core_dep]

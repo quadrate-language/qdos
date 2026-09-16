@@ -167,6 +167,93 @@ evaluate keeps its text, because the stack it half-moved is visible above it and
 the typing is what cost something. `Escape` is the way to be rid of it, and only
 leaves the mode once there is nothing left on the line.
 
+### Uploaded native code
+
+`lib/interp` executes Quadrate. A module is how the machine executes something
+else: a shared object on the card, opened by the dynamic linker, whose words
+join the vocabulary through the same `qd_interp_register()` that `sto` and `rcl`
+arrive by.
+
+**A module links against nothing of ours.** It includes `qdos/native.h` and
+libc, and is handed a table of what it may call. The alternative — letting it
+link Quadrate's own symbols — would tie every built module to the layout of
+`qd_context`, and Quadrate is at 0.5.0 and moving. With the table, the loader is
+about fifty lines behind a boundary that does not move, which is also what keeps
+the option of a different loader open: if the firmware ever goes static and
+`dlopen` goes with it, the module's source does not change.
+
+Which raises the question of whether it should be static. The two build paths
+already answer differently and both are right: `stage-to-raspios.sh` copies one
+binary onto a rootfs it does not control, which is what `-Dstatic=true` is for,
+while the Buildroot image builds the binary and its libc together and has no
+version to match. Modules are a firmware-image feature.
+
+The store speaks in bytes everywhere else, and this is the one thing that
+cannot: `dlopen` takes a path. Hence `hal->store_path`, NULL on a backend with
+no filesystem, and then the machine simply has no modules.
+
+#### There is no graphics mode
+
+The panel is 400x240 pixels and nothing else. The character console is one way
+of writing into them, not a mode the machine is in, so a program that wants
+pixels needs no mode switched on — it needs the screen and the keypad to be
+*its* for a while, and that already existed: a word that does not return holds
+both, and the shell, which is waiting inside `qd_interp_eval()`, paints over
+nothing until it gets them back. `submit()` has had the comment since before any
+of this: a word may take over the screen, and then what is on it is its business.
+
+So `canvas()` hands back the shell's own framebuffer. Sharing it is the point:
+the shell repaints from nothing every frame, so a program's pixels last exactly
+as long as it holds the loop and are gone the moment it gives it back, with
+nothing to save or restore.
+
+That leaves one thing worth stating in the descriptor rather than inferring. A
+module with a `main()` is a program: it takes its bare name, so `libdoom.so` is
+`doom` rather than `doom::`, and the list shows it the way it shows every other
+thing the machine runs. A module with only words is a library and reads as a way
+into somewhere. A module can be both, and the demo one is.
+
+Whether the interpreter could drive this instead is settled by arithmetic:
+96,000 pixels a frame against an AST walk is not a frame, so the Quadrate side
+gets the canvas for plotting a graph and the native side gets it for everything
+else. The same two tiers as the rest of the machine.
+
+The ceiling is not the processor. A full frame is 12 KB on the wire to a Sharp
+panel that clocks at about 2 MHz, which is roughly 48 ms — about twenty frames a
+second before anything has been drawn — and `device_present()` converts the
+whole frame each time on top of that. An ARM1176 at 1 GHz is comfortably faster
+than the machines this kind of software shipped on; the SPI bus is what will
+hurt, and the answer when it does is the panel's own per-line addressing rather
+than a faster loop.
+
+#### The loop, not the crash
+
+Native code can fault where a Quadrate error cannot, and the shell is respawned
+by init rather than resumed. So the failure to design against is not a module
+crashing — it is a module crashing *while being opened*, which faults again on
+the next boot, and the next, with the machine never coming up far enough to be
+told otherwise. Recovery would mean taking the card out.
+
+So a module's name is written to the store before anything of it runs and
+cleared once it is in. A name still sitting there at the next start belongs to
+something that did not survive being opened: it goes on a list the loader walks
+past, and the machine says so. One bad module costs one message.
+
+Catching `SIGSEGV` and carrying on would have mirrored `qd_recovery_arm()`
+neatly and was the wrong answer twice over. It does not break the loop — a
+module that faults while loading faults just as fast with a handler in the way.
+And it fails quietly: a module that corrupted the heap before dying would be
+"recovered", and the shell would carry on and write the corrupted session to
+storage, which on a machine whose premise is that your stack survives a power
+cycle is worse than a visible restart. Recovery from a runtime error is sound
+because the runtime raises it deliberately, at a known point. A segfault is the
+opposite of that.
+
+The smaller half of the same problem is a module that faults mid-calculation
+rather than mid-load. The first module word reached after each keypress writes
+the session first, so that costs a reboot rather than the stack — at most one
+write per keypress, and nothing at all on a machine with no modules.
+
 ### Two tiers
 
 | tier | executed by | cost |

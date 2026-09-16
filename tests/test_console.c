@@ -102,12 +102,7 @@ static bool cell_holds(const qdos_console* con, int col, int row, char ch) {
 	return true;
 }
 
-/**
- * Too long to fit keeps the head, and says it was cut.
- *
- * It used to keep the tail, which on a number means dropping the leading digits
- * and leaving something that still reads as an answer.
- */
+/** Too long to fit keeps the head, and says it was cut. */
 static void test_puts_right_keeps_the_head(void) {
 	qdos_console con;
 	qdos_console_init(&con);

@@ -14,7 +14,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <poll.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /**
  * @brief The panel is 1bpp and the kernel cuts at 128 (drm_fb_gray8_to_mono_line)
@@ -51,8 +54,9 @@ static const uint8_t PANEL_PAPER[3] = {0xC9, 0xCE, 0xC6};
 /* The shipped programs as they sit in the source tree; the device installs
  * them to /usr/share/qdos/programs. */
 #define SIM_SYSTEM_DIR "programs/system"
-/* Stands in for the card a PC drops .qd files onto. There is no USB gadget
- * here, so the simulator reads it but never offers to share it. */
+/* Stands in for the card a PC drops .qd files onto. There is no gadget to hand
+ * it over with, so sharing it here means the shell stops reading it and says
+ * so, and your own file manager is the PC. */
 #define SIM_INBOX_DIR "qdos-inbox"
 
 typedef struct {
@@ -60,6 +64,9 @@ typedef struct {
 	SDL_Renderer* renderer;
 	SDL_Texture* texture;
 	bool running;
+
+	/** The card is a PC's to write, and so nothing the shell may read */
+	bool shared;
 	int scale;
 	const char* pending; ///< Rest of a text button still to be delivered
 	qdos_pad_layer layer;   ///< Which keypad face is showing
@@ -68,9 +75,60 @@ typedef struct {
 	/** Held down by the mouse, drawn sunk until the button comes back up */
 	const qdos_pad_button* pressed;
 
+	/*
+	 * SDL_WaitEvent takes no extra descriptor, so the card's watch gets a
+	 * thread that pushes an event to wake the loop. A timeout on the wait
+	 * would have cost the wakeups an idle machine is not supposed to have.
+	 */
+	int watch_fd;
+	int watch_id;
+
+	/** Closing the watched descriptor does not reliably wake a blocked read */
+	int wake_fd[2];
+
+	SDL_Thread* watcher;
+	volatile bool store_dirty;
+
 	/** Staging buffer: the HAL speaks 8-bit gray, the texture wants RGB. */
 	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
 } sim_state;
+
+static int SDLCALL sim_watch_thread(void* data) {
+	sim_state* st = (sim_state*)data;
+
+	struct pollfd fds[2] = {
+			{.fd = st->watch_fd, .events = POLLIN, .revents = 0},
+			{.fd = st->wake_fd[0], .events = POLLIN, .revents = 0},
+	};
+
+	for (;;) {
+		if (poll(fds, 2, -1) < 0)
+			break;
+		if (fds[1].revents != 0)
+			break; // shutdown
+
+		char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+		if (read(st->watch_fd, buf, sizeof(buf)) <= 0)
+			break;
+
+		st->store_dirty = true;
+
+		SDL_Event wake;
+		SDL_zero(wake);
+		wake.type = SDL_EVENT_USER;
+		SDL_PushEvent(&wake);
+	}
+	return 0;
+}
+
+static bool sim_store_changed(qdos_hal* hal) {
+	sim_state* st = (sim_state*)hal->impl;
+	const bool changed = st->store_dirty;
+	st->store_dirty = false;
+	return changed;
+}
+
+static const char* dir_for(qdos_store_scope scope);
 
 static int sim_init(qdos_hal* hal) {
 	sim_state* st = (sim_state*)hal->impl;
@@ -112,6 +170,15 @@ static int sim_init(qdos_hal* hal) {
 
 	SDL_StartTextInput(st->window);
 
+	mkdir(dir_for(QDOS_SCOPE_INBOX), 0755);
+
+	st->watch_fd = inotify_init1(IN_CLOEXEC);
+	if (st->watch_fd >= 0 && pipe(st->wake_fd) == 0) {
+		st->watch_id = inotify_add_watch(st->watch_fd, dir_for(QDOS_SCOPE_INBOX),
+				IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE);
+		st->watcher = SDL_CreateThread(sim_watch_thread, "qdos-watch", st);
+	}
+
 	st->running = true;
 	return 0;
 }
@@ -127,6 +194,28 @@ static void sim_shutdown(qdos_hal* hal) {
 		SDL_DestroyRenderer(st->renderer);
 	if (st->window)
 		SDL_DestroyWindow(st->window);
+
+	// Told to stop before being waited for: closing the descriptor it is
+	// blocked on leaves the read blocked and the wait below never returns
+	if (st->watcher != NULL) {
+		const char stop = 'x';
+		ssize_t ignored = write(st->wake_fd[1], &stop, 1);
+		(void)ignored;
+
+		SDL_WaitThread(st->watcher, NULL);
+		st->watcher = NULL;
+	}
+
+	if (st->wake_fd[0] >= 0) {
+		close(st->wake_fd[0]);
+		close(st->wake_fd[1]);
+		st->wake_fd[0] = -1;
+		st->wake_fd[1] = -1;
+	}
+	if (st->watch_fd >= 0) {
+		close(st->watch_fd);
+		st->watch_fd = -1;
+	}
 
 	st->texture = NULL;
 	st->renderer = NULL;
@@ -372,6 +461,11 @@ static const char* dir_for(qdos_store_scope scope) {
 	}
 }
 
+/** @brief The device unmounts the inbox while a gadget has it; same answer */
+static bool scope_is_reachable(const sim_state* st, qdos_store_scope scope) {
+	return !(st->shared && scope == QDOS_SCOPE_INBOX);
+}
+
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
 	// Reject anything that could escape the store directory
 	if (!name || !*name || strchr(name, '/') || strchr(name, '\\') || strcmp(name, "..") == 0)
@@ -383,7 +477,8 @@ static bool store_path(const char* dir, const char* name, char* buf, size_t cap)
 
 static qdos_store_result sim_store_read(
 		qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
-	(void)hal;
+	if (!scope_is_reachable((sim_state*)hal->impl, scope))
+		return QDOS_STORE_NOT_FOUND;
 
 	char path[512];
 	if (!store_path(dir_for(scope), name, path, sizeof(path)))
@@ -424,9 +519,37 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
+static bool sim_store_path(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+	if (!scope_is_reachable((sim_state*)hal->impl, scope))
+		return false;
+	return store_path(dir_for(scope), name, buf, cap);
+}
+
+/**
+ * @brief Hand the card over, or take it back
+ *
+ * No gadget to simulate, but the half the shell copes with is real: the inbox
+ * goes quiet, and is read afresh when it comes back.
+ */
+static int sim_usb_export(qdos_hal* hal, bool on) {
+	sim_state* st = (sim_state*)hal->impl;
+
+	st->shared = on;
+	if (on)
+		printf("qdos: card shared -- drop .qd and lib*.so in %s/\n", dir_for(QDOS_SCOPE_INBOX));
+	else
+		printf("qdos: card taken back\n");
+	fflush(stdout);
+
+	return 0;
+}
+
 static qdos_store_result sim_store_list(
 		qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
-	(void)hal;
+	// An empty mount point rather than an error
+	if (!scope_is_reachable((sim_state*)hal->impl, scope))
+		return QDOS_STORE_OK;
 
 	DIR* dir = opendir(dir_for(scope));
 	if (!dir)
@@ -448,6 +571,9 @@ static sim_state g_sim;
 
 void qdos_sim_hal(qdos_hal* hal) {
 	memset(&g_sim, 0, sizeof(g_sim));
+	g_sim.watch_fd = -1;
+	g_sim.wake_fd[0] = -1;
+	g_sim.wake_fd[1] = -1;
 
 	hal->init = sim_init;
 	hal->shutdown = sim_shutdown;
@@ -460,5 +586,8 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->store_read = sim_store_read;
 	hal->store_write = sim_store_write;
 	hal->store_list = sim_store_list;
+	hal->store_path = sim_store_path;
+	hal->usb_export = sim_usb_export;
+	hal->store_changed = sim_store_changed;
 	hal->impl = &g_sim;
 }

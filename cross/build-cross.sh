@@ -58,7 +58,7 @@ meson setup "$BUILD" "$QUADRATE_SRC" \
 	--buildtype=release \
 	-Dbuild_tests=true
 
-meson compile -C "$BUILD" interp qc rt_static test_interp
+meson compile -C "$BUILD" interp qc math rt_static test_interp
 
 echo
 echo "=== Staging a dist tree for the cross build ==="
@@ -75,12 +75,14 @@ repack() {
 repack "$BUILD/lib/interp"       libinterp.a     libinterp_packed.a
 repack "$BUILD/lib/qc"           libqc.a         libqc_packed.a
 repack "$BUILD/lib/rt"           librt_static.a  librt_packed.a
+repack "$BUILD/stdlib/math"      libmath.a       libmath_packed.a
 repack "$BUILD/subprojects/u8t"  libu8t.a        libu8t_packed.a
 
 # Stage under the names QDOS links
 mv "$STAGE/lib/quadrate/libinterp_packed.a" "$STAGE/lib/quadrate/libinterp.a"
 mv "$STAGE/lib/quadrate/libqc_packed.a"     "$STAGE/lib/quadrate/libqc.a"
 mv "$STAGE/lib/quadrate/librt_packed.a"     "$STAGE/lib/quadrate/librt.a"
+mv "$STAGE/lib/quadrate/libmath_packed.a"   "$STAGE/lib/quadrate/libmath.a"
 mv "$STAGE/lib/quadrate/libu8t_packed.a"    "$STAGE/lib/quadrate/libu8t.a"
 
 for mod in interp qc rt; do

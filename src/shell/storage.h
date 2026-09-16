@@ -59,6 +59,12 @@ bool qdos_register_key(int64_t slot, char* buf, size_t cap);
 /** @brief Plain `<name>.qd`, so an uploaded file and a saved one are alike */
 bool qdos_program_key(const char* name, char* buf, size_t cap);
 
+/** @brief `libfoo.so` is the module `foo`, reached as `foo::bar` */
+bool qdos_module_name(const char* entry, char* out, size_t cap);
+
+/** @brief The store entry a module name belongs to: `foo` is `libfoo.so` */
+bool qdos_module_key(const char* name, char* buf, size_t cap);
+
 qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char* source);
 
 /** @brief NOT_FOUND if absent or erased */

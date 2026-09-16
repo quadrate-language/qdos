@@ -1,3 +1,26 @@
+# Real shared objects, so what the module tests exercise is the dynamic linker
+# and the descriptor a module author writes, not a stand-in for them. 'demo' and
+# 'other' are the same module under two names, which is how the scoping is
+# checked; the rest are the shapes the loader has to turn away.
+module_deps = []
+foreach name : ['demo', 'other']
+	module_deps += shared_library(name, 'module_demo.c', include_directories: qdos_inc)
+endforeach
+
+foreach bad : ['magic', 'abi', 'arch', 'words', 'open']
+	module_deps += shared_library('bad' + bad, 'module_bad.c',
+			include_directories: qdos_inc,
+			c_args: ['-DBAD_' + bad.to_upper()])
+endforeach
+
+# One with no descriptor at all, which is what any other .so on the card is
+module_deps += shared_library('nosym', 'module_bad.c',
+		include_directories: qdos_inc,
+		c_args: ['-DNO_SYMBOL'])
+
+# A program rather than a library: it has a main, and takes its bare name
+module_deps += shared_library('app', 'module_app.c', include_directories: qdos_inc)
+
 # link_language: the tests are C, but they link the C++ Quadrate front-end
 test_console = executable('test_console', 'test_console.c',
 		include_directories: qdos_inc,
@@ -8,8 +31,9 @@ test('console', test_console)
 test_shell = executable('test_shell', 'test_shell.c',
 		include_directories: qdos_inc,
 		dependencies: [qdos_core_dep],
+		c_args: ['-DMODULE_DIR="' + meson.current_build_dir() + '"'],
 		link_language: 'cpp')
-test('shell', test_shell)
+test('shell', test_shell, depends: module_deps)
 
 test_framebuffer = executable('test_framebuffer', 'test_framebuffer.c',
 		include_directories: qdos_inc,
@@ -52,6 +76,23 @@ test_mathwords = executable('test_mathwords', 'test_mathwords.c',
 		dependencies: [qdos_core_dep],
 		link_language: 'cpp')
 test('mathwords', test_mathwords)
+
+test_native = executable('test_native', 'test_native.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		c_args: ['-DMODULE_DIR="' + meson.current_build_dir() + '"'],
+		link_language: 'cpp')
+test('native', test_native, depends: module_deps)
+
+# The simulator backend is only built where the simulator is, and it needs SDL
+# and a video driver -- the dummy one, since this never shows a window.
+if get_option('sim')
+	test_simhal = executable('test_simhal', ['test_simhal.c', '../src/hal/sim/sim_sdl3.c'],
+			include_directories: qdos_inc,
+			dependencies: [qdos_core_dep, dependency('sdl3')],
+			link_language: 'cpp')
+	test('simhal', test_simhal, env: {'SDL_VIDEODRIVER': 'dummy'}, timeout: 30)
+endif
 
 test_lint = executable('test_lint', 'test_lint.c',
 		include_directories: qdos_inc,

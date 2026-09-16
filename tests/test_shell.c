@@ -120,6 +120,12 @@ static bool g_usb_shared;
 static bool g_usb_fails; ///< A gadget that refuses to switch
 static int g_usb_calls;
 
+/* A card that gains a file while the machine is running */
+static bool g_card_arrival;
+static const char* g_card_name;
+static const char* g_card_source;
+static const char* g_card_module;
+
 /* A keypad with more than one face, which only some backends have */
 static qdos_keypad_mod g_modifier;
 static bool g_has_modifier;
@@ -132,6 +138,10 @@ static void store_reset(void) {
 	g_usb_calls = 0;
 	g_modifier = QDOS_MOD_NONE;
 	g_has_modifier = false;
+	g_card_arrival = false;
+	g_card_name = NULL;
+	g_card_source = NULL;
+	g_card_module = NULL;
 }
 
 static qdos_store_result stub_read(
@@ -183,6 +193,20 @@ static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, qdos_s
 			break;
 	}
 	return QDOS_STORE_OK;
+}
+
+/** Put an entry in a store under its own name, whatever shape that name is */
+static void seed_raw(qdos_store_scope scope, const char* file, const char* bytes) {
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used)
+			continue;
+		snprintf(g_store[i].name, sizeof(g_store[i].name), "%s", file);
+		memcpy(g_store[i].data, bytes, strlen(bytes));
+		g_store[i].len = strlen(bytes);
+		g_store[i].scope = scope;
+		g_store[i].used = true;
+		return;
+	}
 }
 
 /** Put a program in one of the read-only stores */
@@ -246,6 +270,32 @@ static qdos_keypad_mod stub_modifier(qdos_hal* hal) {
 	return g_modifier;
 }
 
+/* The modules the suite builds sit beside this binary */
+#ifndef MODULE_DIR
+#define MODULE_DIR "."
+#endif
+
+static bool stub_store_changed(qdos_hal* hal) {
+	(void)hal;
+	if (!g_card_arrival)
+		return false;
+
+	g_card_arrival = false;
+	if (g_card_name != NULL)
+		seed_inbox(g_card_name, g_card_source);
+	if (g_card_module != NULL)
+		seed_raw(QDOS_SCOPE_INBOX, g_card_module, "");
+	return true;
+}
+
+static bool stub_store_path(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+	(void)hal;
+	(void)scope;
+	const int written = snprintf(buf, cap, "%s/%s", MODULE_DIR, name);
+	return written > 0 && (size_t)written < cap;
+}
+
 static void stub_hal(qdos_hal* hal, stub_state* st) {
 	memset(hal, 0, sizeof(*hal));
 	hal->init = stub_init;
@@ -259,6 +309,8 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->store_read = stub_read;
 	hal->store_write = stub_write;
 	hal->store_list = stub_list;
+	hal->store_path = stub_store_path;
+	hal->store_changed = stub_store_changed;
 	hal->usb_export = g_usb_supported ? stub_usb_export : NULL;
 	hal->impl = st;
 }
@@ -1067,14 +1119,14 @@ static void test_list_shows_apps_and_origin(void) {
 	CHECK(strstr(row, "APPS") != NULL);
 	CHECK(strstr(row, "/2") != NULL);
 
-	// Sorted: hyp then mine
+	// Yours first, whatever the alphabet says
 	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
-	CHECK(strstr(row, "hyp") != NULL);
-	CHECK(strstr(row, "SYS") != NULL);
-
-	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
 	CHECK(strstr(row, "mine") != NULL);
 	CHECK(strstr(row, "USER") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "hyp") != NULL);
+	CHECK(strstr(row, "SYS") != NULL);
 }
 
 /** Tab widens from the installed programs to the catalog. */
@@ -1983,12 +2035,7 @@ static void test_the_stack_reaches_the_reclaimed_row(void) {
 	CHECK(strstr(row, "1:") != NULL);
 }
 
-/**
- * Deeper than that says how many are hidden, on a row of its own.
- *
- * Sharing the top row with a value left the deepest entry drawn beside the
- * marker with its own label overwritten, so it read as part of it.
- */
+/** Deeper than that says how many are hidden, on a row of its own. */
 static void test_a_deeper_stack_still_marks_itself(void) {
 	store_reset();
 
@@ -2787,12 +2834,7 @@ static void test_space_separates_numbers(void) {
 	CHECK(strstr(row, "15") != NULL); // 78 + would have been an error
 }
 
-/**
- * A line that would not evaluate stays on the input for correction.
- *
- * Retyping is the expensive part here: there are no letters on the keypad, so
- * every word costs a layer switch before it costs a keystroke.
- */
+/** A line that would not evaluate stays on the input for correction. */
 static void test_a_failed_line_is_kept(void) {
 	store_reset();
 
@@ -2924,12 +2966,7 @@ static void test_clearing_the_stack_can_be_undone(void) {
 	CHECK(strstr(row, "1") != NULL);
 }
 
-/**
- * A number too wide for its row goes to exponent form.
- *
- * Cutting it would leave something that still reads as an answer, and there is
- * no end of a number that is safe to drop.
- */
+/** A number too wide for its row goes to exponent form rather than being cut. */
 static void test_a_wide_number_keeps_its_magnitude(void) {
 	store_reset();
 	seed_setting("settings.decimals", 9); // nine places of 1e24 fits nowhere
@@ -3049,12 +3086,7 @@ static void test_a_register_press_does_not_outlive_the_calculator(void) {
 	CHECK(strstr(row, "STORED") == NULL);
 }
 
-/**
- * The angle soft key is the setting, and pressing it turns it over.
- *
- * It is the one setting that silently changes an answer, so the label doing
- * double duty as the annunciator is most of the point.
- */
+/** The angle soft key is the setting, and pressing it turns it over. */
 static void test_the_angle_soft_key_shows_and_toggles(void) {
 	store_reset();
 	// The angle lives in mathwords, which outlives one shell, so say where to
@@ -3114,6 +3146,398 @@ static void test_the_prompt_shows_the_keypad_layer(void) {
 	CHECK(row[0] == '>' && row[1] != 'A');
 }
 
+/* ---- uploaded native code ------------------------------------------------ */
+
+/**
+ * The whole path: a shared object on the card, and a stored program calling a
+ * word out of it.
+ */
+static void test_a_program_calls_an_uploaded_module(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+	seed_system("twice", "fn twice(n:i64 -- r:i64) { demo::double }");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "21 twice");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+}
+
+/** And from the line, scoped by the file it came from. */
+static void test_a_module_word_is_callable_directly(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "3.0 4.0 demo::hypot");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "5") != NULL);
+}
+
+/** The lint compiles against a scratch interpreter, which needs them too. */
+static void test_check_knows_about_module_words(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+	seed_system("uses", "fn uses(n:i64 -- r:i64) { demo::double }");
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"uses\" edit");
+	key(script, &n, QDOS_KEY_CHECK);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "COMPILES") != NULL);
+	CHECK(strstr(row, "not defined") == NULL);
+}
+
+/** A module that was being opened when the machine stopped is left alone. */
+static void test_a_module_that_faulted_is_not_opened_again(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+
+	// What the last boot left behind, having died part-way through opening it
+	seed_raw(QDOS_SCOPE_USER, "native.loading", "demo");
+
+	// The screen the machine comes up with, before any key is pressed
+	static uint8_t boot[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(NULL, 0, boot);
+
+	char row[QDOS_COLS + 1];
+	read_row(boot, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "FAULTED") != NULL);
+	CHECK(strstr(row, "demo") != NULL);
+
+	// It stays blocked at the next start too, so the word is not there -- which
+	// is the machine being usable rather than the machine being absent
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "21 demo::double");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "demo::double") != NULL);
+	CHECK(strstr(row, "not def") != NULL);
+}
+
+/** Once blocked it stays blocked, which is what the settings row is for. */
+static void test_a_blocked_module_can_be_let_back_in(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+	seed_raw(QDOS_SCOPE_USER, "native.loading", "demo");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN); // past angle, decimals, auto off
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// The row is only there because something is blocked
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T + 3, row, sizeof(row));
+	CHECK(strstr(row, "MODULES") != NULL);
+	CHECK(strstr(row, "1 BLOCKED") != NULL);
+
+	// Changing it clears the list, and the row goes with it
+	n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	run_script(script, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "NEXT START") != NULL);
+	CHECK(!page_has(fb, "MODULES"));
+}
+
+/** A machine with no modules at all is unchanged by any of this. */
+static void test_no_modules_means_no_settings_row(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(!page_has(fb, "MODULES"));
+	CHECK(page_has(fb, "ANGLE"));
+}
+
+/** Installed code is listed with the programs, marked as the scope it is. */
+static void test_the_list_shows_modules(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+	seed_system("twice", "fn twice(n:i64 -- r:i64) { demo::double }");
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Modules first, being what the programs under them are liable to call
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "demo::") != NULL);
+	CHECK(strstr(row, "CARD") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "twice") != NULL);
+
+	// Both of them counted
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "1/2") != NULL);
+}
+
+/** A module that is not loaded says why, that being what there is to know. */
+static void test_the_list_says_why_a_module_is_missing(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libbadarch.so", "");
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "badarch::") != NULL);
+	CHECK(strstr(row, "BUILT FOR") != NULL);
+}
+
+/** Picking a module types the way into it rather than a word. */
+static void test_picking_a_module_types_its_scope(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "demo::") != NULL);
+
+	// And the soft row does not offer to edit something that is not text
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "EDIT") == NULL);
+	CHECK(strstr(row, "PICK") == NULL); // line mode by now, so the row changed
+}
+
+/** From there Tab finishes the word, the colons being part of the name. */
+static void test_tab_completes_a_scoped_word(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "demo::hy");
+	key(script, &n, QDOS_KEY_TAB);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "demo::hypot") != NULL);
+}
+
+/** A program is listed as what you type to run it, with no colons. */
+static void test_the_list_shows_a_program_without_colons(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libapp.so", "");
+	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "app") != NULL);
+	CHECK(strstr(row, "app::") == NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "demo::") != NULL);
+}
+
+/** And picking it types the name, the way picking a program does. */
+static void test_picking_a_program_types_its_name(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libapp.so", "");
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "app") != NULL);
+	CHECK(strstr(row, "::") == NULL);
+}
+
+/** Running one takes the screen, and gives it back on the way out. */
+static void test_a_program_owns_the_screen_while_it_runs(void) {
+	store_reset();
+	seed_raw(QDOS_SCOPE_INBOX, "libapp.so", "");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "app");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// The shell has painted over it by now, which is the screen coming back:
+	// the prompt is there and the program's corner is not
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == ':');
+	CHECK(fb[0] != 0x00 || fb[7 * QDOS_SCREEN_W + 7] != 0x00);
+}
+
+/* ---- the card changing underneath ---------------------------------------- */
+
+/** A program dropped on the card arrives without a restart. */
+static void test_a_program_arriving_on_the_card_is_picked_up(void) {
+	store_reset();
+	g_card_arrival = true;
+	g_card_name = "landed";
+	g_card_source = "fn landed( -- r:i64) { 7 }";
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(NULL, 0, 0, 3, fb, NULL);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "1 FROM THE CARD") != NULL);
+}
+
+/** And it is a word by then, not just a name on a list. */
+static void test_a_program_arriving_is_callable(void) {
+	store_reset();
+	g_card_arrival = true;
+	g_card_name = "landed";
+	g_card_source = "fn landed( -- r:i64) { 7 }";
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "landed");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(script, n, 0, 3, fb, NULL);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+}
+
+/** A module cannot arrive the same way, and says so rather than being ignored. */
+static void test_a_module_arriving_asks_for_a_restart(void) {
+	store_reset();
+	g_card_arrival = true;
+	g_card_module = "libarrived.so"; // lands after the machine is already up
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(NULL, 0, 0, 3, fb, NULL);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "RESTART") != NULL);
+	CHECK(strstr(row, "arrived") != NULL);
+}
+
+/** A list already on screen takes the new program without being reopened. */
+static void test_an_open_list_takes_what_arrives(void) {
+	store_reset();
+	seed_system("already", "fn already( -- r:i64) { 1 }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+
+	g_card_arrival = true;
+	g_card_name = "landed";
+	g_card_source = "fn landed( -- r:i64) { 7 }";
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(script, n, 0, 3, fb, NULL);
+
+	// Still the list, and the arrival is on it
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "APPS") != NULL);
+	CHECK(page_has(fb, "landed"));
+	CHECK(page_has(fb, "already"));
+}
+
+/** While a host holds the card, those blocks are not ours to read. */
+static void test_the_card_is_not_read_while_it_is_shared(void) {
+	store_reset();
+	g_usb_supported = true;
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN); // onto USB
+	key(script, &n, QDOS_KEY_ENTER); // share it
+
+	// And only then does something land
+	g_card_arrival = true;
+	g_card_name = "late";
+	g_card_source = "fn late( -- r:i64) { 1 }";
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(script, n, 0, 3, fb, NULL);
+
+	// Still the sharing message: the arrival was not acted on
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "FROM THE CARD") == NULL);
+}
+
 /** Leaving without writing, once it has asked. */
 static void test_edit_discards(void) {
 	store_reset();
@@ -3133,12 +3557,7 @@ static void test_edit_discards(void) {
 	CHECK(strstr(row, "NOT SAVED") != NULL);
 }
 
-/**
- * The first press asks, because the editor holds the only copy.
- *
- * This is the leftmost soft key, which everywhere else in the shell is the way
- * out of a page that costs nothing to leave.
- */
+/** The first press asks, because the editor holds the only copy. */
 static void test_edit_asks_before_losing_work(void) {
 	store_reset();
 
@@ -3690,5 +4109,23 @@ int main(void) {
 	test_the_prompt_shows_the_keypad_layer();
 	test_edit_asks_before_losing_work();
 	test_an_untouched_editor_leaves_at_once();
+	test_a_program_calls_an_uploaded_module();
+	test_a_module_word_is_callable_directly();
+	test_check_knows_about_module_words();
+	test_a_module_that_faulted_is_not_opened_again();
+	test_a_blocked_module_can_be_let_back_in();
+	test_no_modules_means_no_settings_row();
+	test_the_list_shows_modules();
+	test_the_list_says_why_a_module_is_missing();
+	test_picking_a_module_types_its_scope();
+	test_tab_completes_a_scoped_word();
+	test_the_list_shows_a_program_without_colons();
+	test_picking_a_program_types_its_name();
+	test_a_program_owns_the_screen_while_it_runs();
+	test_a_program_arriving_on_the_card_is_picked_up();
+	test_a_program_arriving_is_callable();
+	test_a_module_arriving_asks_for_a_restart();
+	test_the_card_is_not_read_while_it_is_shared();
+	test_an_open_list_takes_what_arrives();
 	return check_report("shell");
 }

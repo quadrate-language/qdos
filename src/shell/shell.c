@@ -13,6 +13,7 @@
 #include "guarded.h"
 #include "lint.h"
 #include "mathwords.h"
+#include "native.h"
 
 #include "qdos_version.h"
 #include "wordlist.h"
@@ -114,7 +115,8 @@ typedef enum {
 	SETTING_ANGLE = 0,
 	SETTING_DECIMALS,
 	SETTING_AUTO_OFF,
-	SETTING_USB, ///< Last, so leaving it out is only a smaller count
+	SETTING_USB,	 ///< Only where the backend has a gadget to offer
+	SETTING_MODULES, ///< Only when something is blocked, there being nothing else to say
 	SETTING__COUNT
 } qdos_setting;
 
@@ -158,8 +160,9 @@ struct qdos_shell {
 	bool powering_off;  ///< Set by the power key, acted on by the run loop
 	bool usb_exported;  ///< The inbox is currently a PC's to write to
 
-	/** Waiting for the digit that says which register; see handle_calc_key() */
 	enum { REGISTER_IDLE = 0, REGISTER_STORING, REGISTER_RECALLING } register_wait;
+
+	qdos_natives natives; ///< Uploaded code, and its words in the vocabulary
 
 	qdos_editor ed;
 	size_t ed_top; ///< First visible line
@@ -185,12 +188,7 @@ static uint32_t auto_off_ms(const qdos_shell* sh) {
 	return (uint32_t)AUTO_OFF_MINUTES[sh->auto_off] * 60u * 1000u;
 }
 
-/**
- * @brief One character for the keypad face the next press will come from
- *
- * A keycap does not light up, so nothing on the machine says ALPHA is still
- * locked. A keypad with one face reports none, and costs no space.
- */
+/** @brief A keypad with one face reports none, and costs no space */
 static char modifier_char(const qdos_shell* sh) {
 	if (sh->hal->modifier == NULL)
 		return '\0';
@@ -300,9 +298,8 @@ static size_t log_held(const qdos_shell* sh) {
 /**
  * @brief A value as the settings say to show it, in @p room columns
  *
- * The interpreter renders a float to as many digits as it takes, which is
- * fifteen more often than anyone wants. Too wide for the row, a number goes to
- * exponent form: there is no end of one that is safe to drop.
+ * Too wide for the row, a number goes to exponent form: there is no end of one
+ * that is safe to drop.
  */
 static void format_value(
 		const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap, size_t room) {
@@ -391,9 +388,8 @@ typedef struct {
 } soft_key;
 
 static const soft_key SOFT[7][SOFT_KEYS] = {
-	// Turning off is the PWR key's job, not a soft key's: it is the one action
-	// on the row that cannot be undone by pressing it again. The last slot is
-	// the angle, whose label is the setting rather than a name for it.
+	// Turning off is the PWR key's job: the one action on the row that cannot be
+	// undone by pressing it again. The last slot's label is the setting itself.
 	[QDOS_MODE_CALC] ={{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
 			{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_ANGLE}},
 	[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
@@ -401,8 +397,7 @@ static const soft_key SOFT[7][SOFT_KEYS] = {
 	// down then up, so the pair sits like vim's j and k
 	[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
 			{"PICK", QDOS_KEY_ENTER}, {"EDIT", QDOS_KEY_OPEN}},
-	// ESC, as everywhere else. DROP is a word on the keypad that empties the
-	// stack, and it was not doing that here.
+	// ESC, as everywhere else: DROP is a keypad word that empties the stack
 	[QDOS_MODE_EDIT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
 			{"", QDOS_KEY_NONE}, {"SAVE", QDOS_KEY_SAVE}},
 	[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"SET", QDOS_KEY_SETTINGS},
@@ -414,24 +409,25 @@ static const soft_key SOFT[7][SOFT_KEYS] = {
 };
 
 static const char* angle_text(void);
+static const qdos_native_entry* list_module(const qdos_shell* sh, size_t i);
 
 static void render_soft(qdos_shell* sh, qdos_console* con) {
 	for (int i = 0; i < SOFT_KEYS; i++) {
 		const char* label = SOFT[sh->mode][i].label;
 
-		// This one says what it is rather than what it does
 		if (SOFT[sh->mode][i].key == QDOS_KEY_ANGLE)
 			label = angle_text();
 
-		// And this one has two jobs, so it names whichever is next
+		// Two jobs, so it names whichever is next
 		if (sh->mode == QDOS_MODE_LINE && SOFT[sh->mode][i].key == QDOS_KEY_CLEAR)
 			label = (sh->input_len > 0) ? "CLR" : "ESC";
 
 		if (label[0] == '\0')
 			continue;
 
-		// Only a program can be edited, and the catalog lists words too
-		if (sh->mode == QDOS_MODE_LIST && sh->list_all && SOFT[sh->mode][i].key == QDOS_KEY_OPEN)
+		// Only a program can be edited
+		if (sh->mode == QDOS_MODE_LIST && SOFT[sh->mode][i].key == QDOS_KEY_OPEN
+				&& (sh->list_all || list_module(sh, sh->list_sel) != NULL))
 			continue;
 
 		const int width = (int)strlen(label);
@@ -521,9 +517,8 @@ static bool infix_number(const char* text, size_t len) {
 /**
  * @brief Catch a line written the way it is said aloud
  *
- * `5 - 3` and `5-3` are both valid Quadrate, neither is an error, and neither
- * of them is two. The shape is narrow on purpose: a number, an operator, a
- * number, and nothing else on the line. See docs/design.md.
+ * `5 - 3` and `5-3` are both valid Quadrate and neither is two. See
+ * docs/design.md.
  *
  * @return true when @p out holds what to say instead
  */
@@ -559,8 +554,7 @@ static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
 		right_len = token_len[2];
 		op = token[1][0];
 	} else if (count == 1) {
-		// Unspaced, where the operator is inside the one token. Never the first
-		// character, which is a sign rather than an operator.
+		// Never the first character, which is a sign rather than an operator
 		for (size_t i = 1; i + 1 < token_len[0]; i++) {
 			if (!infix_operator(token[0][i]))
 				continue;
@@ -576,7 +570,6 @@ static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
 	if (op == 0 || !infix_number(left, left_len) || !infix_number(right, right_len))
 		return false;
 
-	// Their own numbers, the right way round, is the whole of the explanation
 	const int shown = 6;
 	snprintf(out, cap, "RPN: TRY %.*s %.*s %c", (int)(left_len < (size_t)shown ? left_len : (size_t)shown),
 			left, (int)(right_len < (size_t)shown ? right_len : (size_t)shown), right, op);
@@ -588,8 +581,7 @@ static void submit(qdos_shell* sh) {
 	if (sh->input_len == 0)
 		return;
 
-	// Infix is valid Quadrate that means something else, so it is caught here
-	// rather than left to fail: nothing on the stack has moved yet.
+	// Caught before anything on the stack moves
 	char hint[QDOS_COLS + 1];
 	if (infix_hint(sh->input, sh->input_len, hint, sizeof(hint))) {
 		set_message(sh, hint, true);
@@ -607,8 +599,7 @@ static void submit(qdos_shell* sh) {
 	} else {
 		set_message(sh, qdos_guarded_error(sh->interp), true);
 
-		// The line stays, to be corrected rather than typed again. Retyping it
-		// is the expensive part on a keypad with no letters of its own.
+		// The line stays, to be corrected rather than typed again
 		if (sh->mode == before)
 			return;
 	}
@@ -748,12 +739,7 @@ static void entry_negate(qdos_shell* sh) {
 	}
 }
 
-/**
- * @brief Finish a register press: the digit says which one
- *
- * Nought to nine, which is what a key marked STO has ever reached. The other
- * ninety are still there behind `sto` and `rcl` typed out in full.
- */
+/** @brief Nought to nine; the other ninety need `sto` and `rcl` written out */
 static bool register_digit(qdos_shell* sh, const qdos_key_event* ev) {
 	if (sh->register_wait == REGISTER_IDLE)
 		return false;
@@ -816,8 +802,7 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_NEG: entry_negate(sh); break;
 		case QDOS_KEY_UNDO: undo_restore(sh); break;
 
-		// The pending number goes on the stack first, or the register would be
-		// given whatever was under what is being typed
+		// Commit first, or the register gets what was under the entry
 		case QDOS_KEY_STO:
 		case QDOS_KEY_RCL:
 			if (!entry_commit(sh))
@@ -847,8 +832,6 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 			if (sh->entry_len > 0) {
 				entry_clear(sh);
 			} else {
-				// Emptying the stack is the largest thing this key does and the
-				// only one it used to do unrecoverably
 				undo_snapshot(sh);
 				qdos_guarded_eval(sh->interp, "clear");
 				set_message(sh, "STACK CLEARED", false);
@@ -900,7 +883,6 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_SWAP: input_append(sh, "swap"); break;
 		case QDOS_KEY_NEG: input_append(sh, " neg "); break;
 
-		// Typed out, because here the register number is part of the line
 		case QDOS_KEY_STO: input_append(sh, " sto "); break;
 		case QDOS_KEY_RCL: input_append(sh, " rcl "); break;
 
@@ -955,12 +937,46 @@ static void edit_open(qdos_shell* sh, const char* name, const char* source);
 
 #define LIST_ROWS (ROW_CONTENT_LAST - ROW_CONTENT_FIRST + 1)
 
+/* Modules first, being what the programs under them are liable to call. */
 static size_t list_count(const qdos_shell* sh) {
-	return sh->list_all ? sh->list.count : sh->app_count;
+	if (sh->list_all)
+		return sh->list.count;
+	return sh->natives.count + sh->app_count;
+}
+
+/** @brief The module a row shows, or NULL where the row is a program */
+static const qdos_native_entry* list_module(const qdos_shell* sh, size_t i) {
+	if (sh->list_all || i >= sh->natives.count)
+		return NULL;
+	return &sh->natives.entry[i];
+}
+
+/** @brief The program a row shows, or NULL where the row is a module */
+static const qdos_program_entry* list_program(const qdos_shell* sh, size_t i) {
+	if (sh->list_all || i < sh->natives.count)
+		return NULL;
+
+	const size_t at = i - sh->natives.count;
+	return (at < sh->app_count) ? &sh->apps[at] : NULL;
 }
 
 static const char* list_name(const qdos_shell* sh, size_t i) {
-	return sh->list_all ? sh->list.name[i] : sh->apps[i].name;
+	if (sh->list_all)
+		return sh->list.name[i];
+
+	const qdos_native_entry* module = list_module(sh, i);
+	if (module != NULL)
+		return module->name;
+
+	const qdos_program_entry* program = list_program(sh, i);
+	return (program != NULL) ? program->name : "";
+}
+
+/** @brief A star is an override with a read-only copy underneath */
+static const char* origin_text(bool system, bool inbox, bool user) {
+	if (user)
+		return (system || inbox) ? "USER*" : "USER";
+	return inbox ? "CARD" : "SYS";
 }
 
 /** @brief Read a program from wherever it lives, nearest scope first */
@@ -1061,12 +1077,16 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 			sh->mode = QDOS_MODE_LINE;
 			if (list_count(sh) > 0) {
 				input_append(sh, list_name(sh, sh->list_sel));
-				input_append(sh, " ");
+
+				// A library is a scope; Tab does the rest. A program is a word.
+				const qdos_native_entry* picked = list_module(sh, sh->list_sel);
+				input_append(sh, (picked != NULL && !qdos_native_is_app(picked)) ? "::" : " ");
 			}
 			break;
 
 		case QDOS_KEY_OPEN: {
-			if (list_count(sh) == 0 || sh->list_all)
+			// A module is not text and there is nothing to open
+			if (list_count(sh) == 0 || sh->list_all || list_module(sh, sh->list_sel) != NULL)
 				break;
 
 			const char* name = list_name(sh, sh->list_sel);
@@ -1079,6 +1099,12 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_BACKSPACE: {
 			if (sh->list_all || list_count(sh) == 0)
 				break;
+
+			// Nothing here writes a module, so there is no copy to drop
+			if (list_module(sh, sh->list_sel) != NULL) {
+				set_message(sh, "TAKE IT OFF THE CARD", false);
+				break;
+			}
 
 			const char* name = list_name(sh, sh->list_sel);
 			if (!qdos_program_is_user(sh->hal, name)) {
@@ -1160,6 +1186,7 @@ static void check_program(qdos_shell* sh) {
 	// The same vocabulary the real interpreter has, or a program that calls
 	// another would fail to compile here and nowhere else
 	register_natives(sh, scratch);
+	qdos_natives_register(&sh->natives, scratch);
 	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++)
 		qdos_programs_restore(sh->hal, (qdos_store_scope)scope, scratch);
 
@@ -1176,7 +1203,6 @@ static void check_program(qdos_shell* sh) {
 	set_message(sh, message, bad);
 }
 
-/** @brief Type a word into the editor, spaced off whatever is around it */
 static void edit_insert_word(qdos_shell* sh, const char* word) {
 	qdos_editor_insert(&sh->ed, ' ');
 	for (const char* c = word; *c; c++)
@@ -1239,8 +1265,7 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 		}
 
 		case QDOS_KEY_CLEAR:
-			// Asking once, because the editor holds the only copy of what has
-			// been typed. Untouched text has nothing to lose, so it just leaves.
+			// The editor holds the only copy; untouched text has nothing to lose
 			if (sh->ed.dirty && !sh->drop_armed) {
 				sh->drop_armed = true;
 				set_message(sh, "ESC AGAIN: LOSE EDITS", false);
@@ -1281,6 +1306,9 @@ static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 	sh->message[0] = '\0';
 	sh->message_is_error = false;
 
+	// One keypress, one session write at most
+	qdos_natives_rearm();
+
 	qdos_key_event expanded;
 	if (expand_soft(sh, ev, &expanded)) {
 		handle_mode_key(sh, &expanded);
@@ -1290,9 +1318,36 @@ static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 	handle_mode_key(sh, ev);
 }
 
-/** USB is only offered where the backend can actually hand the inbox over */
+/**
+ * @brief The settings this machine actually has, in the order they are listed
+ *
+ * Two are conditional, so the page is built rather than numbered and the
+ * selection indexes what is on screen.
+ */
+static size_t settings_visible(const qdos_shell* sh, qdos_setting* out) {
+	size_t n = 0;
+	out[n++] = SETTING_ANGLE;
+	out[n++] = SETTING_DECIMALS;
+	out[n++] = SETTING_AUTO_OFF;
+
+	if (sh->hal->usb_export)
+		out[n++] = SETTING_USB;
+	if (qdos_natives_blocked_count(&sh->natives) > 0)
+		out[n++] = SETTING_MODULES;
+
+	return n;
+}
+
 static size_t setting_count(const qdos_shell* sh) {
-	return sh->hal->usb_export ? SETTING__COUNT : SETTING__COUNT - 1;
+	qdos_setting shown[SETTING__COUNT];
+	return settings_visible(sh, shown);
+}
+
+/** @brief Which setting the selection is sitting on */
+static qdos_setting setting_at(const qdos_shell* sh, size_t index) {
+	qdos_setting shown[SETTING__COUNT];
+	const size_t count = settings_visible(sh, shown);
+	return (index < count) ? shown[index] : shown[0];
 }
 
 /**
@@ -1384,13 +1439,20 @@ static void restore_settings(qdos_shell* sh) {
  *            way, which is why both arrows reach them.
  */
 static void setting_step(qdos_shell* sh, int dir) {
-	switch (sh->setting_sel) {
+	const qdos_setting setting = setting_at(sh, sh->setting_sel);
+
+	switch (setting) {
 		case SETTING_ANGLE:
 			qdos_math_set_degrees(!qdos_math_degrees());
 			break;
 
 		case SETTING_USB:
 			toggle_usb(sh);
+			break;
+
+		case SETTING_MODULES:
+			qdos_natives_unblock(&sh->natives, sh->hal);
+			set_message(sh, "ON AT NEXT START", false);
 			break;
 
 		case SETTING_AUTO_OFF:
@@ -1405,10 +1467,14 @@ static void setting_step(qdos_shell* sh, int dir) {
 			break;
 	}
 
-	// Written now rather than on the way out, because pulling the battery is a
-	// normal way to turn a calculator off. USB is live state, not a preference.
-	if (sh->setting_sel != SETTING_USB)
+	// Written now: pulling the battery is a normal way to turn a calculator off.
+	// The other two are live state rather than a preference.
+	if (setting != SETTING_USB && setting != SETTING_MODULES)
 		save_settings(sh);
+
+	// Unblocking takes the row away
+	if (sh->setting_sel >= setting_count(sh) && sh->setting_sel > 0)
+		sh->setting_sel = setting_count(sh) - 1;
 }
 
 static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
@@ -1471,8 +1537,7 @@ static void handle_debug_key(qdos_shell* sh, const qdos_key_event* ev) {
 }
 
 static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
-	// Only the calculator asks which register, so an excursion anywhere else
-	// gives up waiting for the digit rather than eating a later one
+	// Only the calculator asks which register
 	if (sh->mode != QDOS_MODE_CALC)
 		sh->register_wait = REGISTER_IDLE;
 
@@ -1546,8 +1611,6 @@ static void render_edit(qdos_shell* sh, qdos_console* con) {
 	size_t line, col;
 	qdos_editor_where(&sh->ed, &line, &col);
 
-	// Alongside the position, because the editor is where a locked ALPHA layer
-	// is easiest to leave on and hardest to notice
 	const char mod = modifier_char(sh);
 	char header[QDOS_COLS + 1];
 	if (mod != '\0')
@@ -1630,14 +1693,21 @@ static void render_settings(qdos_shell* sh, qdos_console* con) {
 	char off[16];
 	auto_off_text(sh, off, sizeof(off));
 
-	static const char* const NAMES[SETTING__COUNT] = {"ANGLE", "DECIMALS", "AUTO OFF", "USB"};
-	const char* values[SETTING__COUNT] = {
-			angle_text(), value, off, sh->usb_exported ? "SHARED" : "OFF"};
+	char blocked[16];
+	snprintf(blocked, sizeof(blocked), "%zu BLOCKED", qdos_natives_blocked_count(&sh->natives));
 
-	for (size_t i = 0; i < setting_count(sh); i++) {
+	static const char* const NAMES[SETTING__COUNT] = {
+			"ANGLE", "DECIMALS", "AUTO OFF", "USB", "MODULES"};
+	const char* values[SETTING__COUNT] = {
+			angle_text(), value, off, sh->usb_exported ? "SHARED" : "OFF", blocked};
+
+	qdos_setting shown[SETTING__COUNT];
+	const size_t count = settings_visible(sh, shown);
+
+	for (size_t i = 0; i < count; i++) {
 		const int row = ROW_CONTENT_FIRST + (int)i;
-		qdos_console_puts(con, 1, row, NAMES[i]);
-		qdos_console_puts_right(con, row, values[i]);
+		qdos_console_puts(con, 1, row, NAMES[shown[i]]);
+		qdos_console_puts_right(con, row, values[shown[i]]);
 		if (i == sh->setting_sel)
 			qdos_console_invert(con, 0, row, QDOS_COLS);
 	}
@@ -1681,14 +1751,24 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 			break;
 
 		const int row = ROW_CONTENT_FIRST + (int)i;
-		qdos_console_puts(con, 1, row, list_name(sh, item));
-		if (!sh->list_all) {
-			// Where it came from, and so where to go to be rid of it. A star
-			// means this one is an override with a read-only copy underneath.
-			const qdos_program_entry* e = &sh->apps[item];
-			const char* origin = e->user ? ((e->system || e->inbox) ? "USER*" : "USER")
-										 : (e->inbox ? "CARD" : "SYS");
-			qdos_console_puts_right(con, row, origin);
+
+		const qdos_native_entry* module = list_module(sh, item);
+		if (module != NULL) {
+			char shown[QDOS_PROGRAM_NAME_MAX + 3];
+			snprintf(shown, sizeof(shown), "%s%s", module->name,
+					qdos_native_is_app(module) ? "" : "::");
+			qdos_console_puts(con, 1, row, shown);
+
+			// What went wrong outranks where it came from
+			qdos_console_puts_right(con, row,
+					module->error[0] ? module->error
+									 : origin_text(module->system, module->inbox, module->user));
+		} else {
+			qdos_console_puts(con, 1, row, list_name(sh, item));
+
+			const qdos_program_entry* e = list_program(sh, item);
+			if (e != NULL)
+				qdos_console_puts_right(con, row, origin_text(e->system, e->inbox, e->user));
 		}
 		if (item == sh->list_sel)
 			qdos_console_invert(con, 0, row, QDOS_COLS);
@@ -1758,8 +1838,8 @@ static void render(qdos_shell* sh) {
 
 	const size_t depth = qd_interp_depth(sh->interp);
 
-	// Top of stack nearest the input line. Deeper than the rows hold, the top
-	// one goes to saying so instead of to a value.
+	// Top of stack nearest the input line; deeper than the rows hold, the top
+	// one says so instead of holding a value.
 	const size_t visible = (depth <= (size_t)STACK_ROWS) ? depth : (size_t)STACK_ROWS - 1;
 	for (size_t i = 0; i < visible; i++) {
 		qd_interp_value value;
@@ -1772,14 +1852,12 @@ static void render(qdos_shell* sh) {
 		snprintf(label, sizeof(label), "%zu:", i + 1);
 		const int used = qdos_console_puts(con, 0, row, label);
 
-		// The value keeps off the label rather than drawing over it
 		char shown[QD_INTERP_VALUE_TEXT_MAX];
 		format_value(sh, &value, shown, sizeof(shown), (size_t)(QDOS_COLS - used - 1));
 		qdos_console_puts_right_within(con, row, used + 1, shown);
 	}
 
-	// Its own row, and it says how many. Sharing the top row with a value left
-	// the deepest entry looking like part of the marker.
+	// Its own row: sharing one with a value made the entry look like the marker
 	if (depth > visible) {
 		char hidden[QDOS_COLS + 1];
 		snprintf(hidden, sizeof(hidden), "%zu MORE", depth - visible);
@@ -1811,9 +1889,8 @@ static void render(qdos_shell* sh) {
 		}
 	}
 
-	// The keypad's live layer goes after the prompt, which stays in the column
-	// the eye looks to for the mode. It brings its own space: without one it
-	// reads as the first letter of what is being typed.
+	// After the prompt, with a space of its own: without one it reads as the
+	// first letter of what is being typed
 	const char mod = modifier_char(sh);
 	char shown_prompt[PROMPT_LEN + 2] = {prompt[0], prompt[1], '\0', '\0'};
 	int prompt_len = PROMPT_LEN;
@@ -2037,6 +2114,73 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qdos_register_math(interp);
 }
 
+/** @brief A module is C and can fault; the shell is respawned, not resumed */
+typedef struct {
+	const qdos_shell* sh;
+	char* out;
+	size_t cap;
+	bool found;
+} module_walk;
+
+static bool spot_new_module(const char* entry, void* user) {
+	module_walk* walk = (module_walk*)user;
+
+	char name[QDOS_PROGRAM_NAME_MAX];
+	if (!qdos_module_name(entry, name, sizeof(name)))
+		return true;
+	if (qdos_natives_find(&walk->sh->natives, name) != NULL)
+		return true;
+
+	snprintf(walk->out, walk->cap, "%s", name);
+	walk->found = true;
+	return false;
+}
+
+static bool card_has_new_module(const qdos_shell* sh, char* out, size_t cap) {
+	if (sh->hal->store_list == NULL)
+		return false;
+
+	module_walk walk = {.sh = sh, .out = out, .cap = cap, .found = false};
+	sh->hal->store_list(sh->hal, QDOS_SCOPE_INBOX, spot_new_module, &walk);
+	return walk.found;
+}
+
+/**
+ * @brief Read the card again, something having landed on it
+ *
+ * A program can be declared over the top of itself. A module cannot: the
+ * interpreter holds registrations inside one already open, so it is named and
+ * left until a restart.
+ */
+static void reload_card(qdos_shell* sh) {
+	const int found = qdos_programs_restore(sh->hal, QDOS_SCOPE_INBOX, sh->interp);
+
+	// A list on screen is a snapshot, so it has to be taken again
+	if (sh->mode == QDOS_MODE_LIST) {
+		const size_t was = sh->list_sel;
+		list_load(sh);
+
+		const size_t count = list_count(sh);
+		sh->list_sel = (was < count) ? was : (count > 0 ? count - 1 : 0);
+		list_scroll_into_view(sh);
+	}
+
+	char waiting[QDOS_PROGRAM_NAME_MAX];
+	char message[QDOS_COLS + 1];
+
+	if (card_has_new_module(sh, waiting, sizeof(waiting)))
+		snprintf(message, sizeof(message), "RESTART FOR '%.10s'", waiting);
+	else
+		snprintf(message, sizeof(message), "%d FROM THE CARD", found > 0 ? found : 0);
+
+	set_message(sh, message, false);
+}
+
+static void save_session_before_native(void* user) {
+	qdos_shell* sh = (qdos_shell*)user;
+	qdos_storage_save_session(sh->hal, sh->interp);
+}
+
 qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	if (!hal)
 		return NULL;
@@ -2059,6 +2203,15 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	register_natives(sh, sh->interp);
 	qdos_console_init(&sh->con);
 
+	// Every scope is opened before any is registered: a module replaced by a
+	// nearer one is closed, and its words would dangle
+	qdos_natives_bind(hal, sh->con.fb);
+	const bool faulted = qdos_natives_recover(&sh->natives, hal);
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++)
+		qdos_natives_load(&sh->natives, hal, (qdos_store_scope)scope);
+	qdos_natives_register(&sh->natives, sh->interp);
+	qdos_natives_on_call(save_session_before_native, sh);
+
 	// In scope order, so each one shadows the one before it
 	qdos_programs_restore(hal, QDOS_SCOPE_SYSTEM, sh->interp);
 	qdos_programs_restore(hal, QDOS_SCOPE_INBOX, sh->interp);
@@ -2071,13 +2224,22 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0)
 		set_message(sh, "SESSION RESTORED", false);
 
+	if (faulted) {
+		char message[QDOS_COLS + 1];
+		snprintf(message, sizeof(message), "'%.12s' FAULTED", sh->natives.faulted);
+		set_message(sh, message, true);
+	}
+
 	return sh;
 }
 
 void qdos_shell_destroy(qdos_shell* sh) {
 	if (!sh)
 		return;
+
+	// Interpreter first: its registrations point into the modules
 	qd_interp_destroy(sh->interp);
+	qdos_natives_unload(&sh->natives);
 	free(sh);
 }
 
@@ -2104,6 +2266,13 @@ void qdos_shell_run(qdos_shell* sh) {
 				qdos_storage_save_session(sh->hal, sh->interp);
 				return;
 			}
+		}
+
+		// Never while a host has the card: those blocks are not ours to read
+		if (!sh->usb_exported && sh->hal->store_changed != NULL
+				&& sh->hal->store_changed(sh->hal)) {
+			reload_card(sh);
+			dirty = true;
 		}
 
 		const uint32_t now = sh->hal->ticks_ms(sh->hal);

@@ -508,18 +508,19 @@ static void test_gather_marks_all_three_origins(void) {
 	const size_t count = qdos_programs_gather(&hal, entries, 8);
 	CHECK(count == 4);
 
-	// Sorted, so the order is known: both, mine, shipped, uploaded
+	// Nearest scope first, alphabetical inside it: what was written here, then
+	// what came on the card, then what shipped
 	CHECK_STR(entries[0].name, "both");
 	CHECK(entries[0].inbox && entries[0].user && !entries[0].system);
 
 	CHECK_STR(entries[1].name, "mine");
 	CHECK(entries[1].user && !entries[1].inbox && !entries[1].system);
 
-	CHECK_STR(entries[2].name, "shipped");
-	CHECK(entries[2].system && !entries[2].inbox && !entries[2].user);
+	CHECK_STR(entries[2].name, "uploaded");
+	CHECK(entries[2].inbox && !entries[2].user && !entries[2].system);
 
-	CHECK_STR(entries[3].name, "uploaded");
-	CHECK(entries[3].inbox && !entries[3].user && !entries[3].system);
+	CHECK_STR(entries[3].name, "shipped");
+	CHECK(entries[3].system && !entries[3].inbox && !entries[3].user);
 }
 
 /**

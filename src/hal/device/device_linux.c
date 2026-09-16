@@ -18,6 +18,7 @@
 #include <linux/vt.h>
 #include <linux/input.h>
 #include <poll.h>
+#include <sys/inotify.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,9 @@ typedef struct {
 	const char* inbox_dir;
 	int tty_fd;		 ///< The VT whose text output is suspended while we draw
 	bool first_paint;
+
+	int watch_fd; ///< inotify, waited on beside the keypad
+	int watch_id; ///< The card's watch, remade whenever it comes back
 } device_state;
 
 static const char* env_or(const char* name, const char* fallback) {
@@ -60,12 +64,21 @@ static const char* usb_helper(void) {
 	return env_or("QDOS_USB_HELPER", "/usr/bin/qdos-usb");
 }
 
+static void device_watch_inbox(device_state* st);
+
 static int device_init(qdos_hal* hal) {
 	device_state* st = (device_state*)hal->impl;
 
 	st->store_dir = env_or("QDOS_STORE", "/var/lib/qdos");
 	st->system_dir = env_or("QDOS_SYSTEM_STORE", "/usr/share/qdos/programs");
 	st->inbox_dir = env_or("QDOS_INBOX", "/mnt/inbox");
+
+	// The rootfs is read-only and init starts the shell at '/', so a program
+	// writing beside itself writes nowhere. The store's paths are absolute, so
+	// nothing else moves.
+	if (chdir(st->store_dir) != 0) {
+		fprintf(stderr, "qdos: cannot work from %s\n", st->store_dir);
+	}
 
 	// Only offer USB where the helper is installed, so a machine without one
 	// does not show a setting that cannot do anything
@@ -127,6 +140,13 @@ static int device_init(qdos_hal* hal) {
 		ioctl(st->tty_fd, KDSETMODE, KD_GRAPHICS);
 	}
 
+	// Watching rather than looking; see hal->store_changed
+	st->watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (st->watch_fd < 0)
+		fprintf(stderr, "qdos: cannot watch %s: %s\n", st->inbox_dir, strerror(errno));
+	else
+		device_watch_inbox(st);
+
 	st->first_paint = true;
 	st->running = true;
 	return 0;
@@ -149,10 +169,14 @@ static void device_shutdown(qdos_hal* hal) {
 	if (st->fb_fd >= 0)
 		close(st->fb_fd);
 	qdos_keypad_close(st->input_fd);
+	if (st->watch_fd >= 0)
+		close(st->watch_fd);
 
 	st->fb_mem = NULL;
 	st->fb_fd = -1;
 	st->input_fd = -1;
+	st->watch_fd = -1;
+	st->watch_id = -1;
 }
 
 static void device_present(qdos_hal* hal, const uint8_t* fb) {
@@ -200,8 +224,38 @@ static void device_wait(qdos_hal* hal, int timeout_ms) {
 	if (st->input_fd < 0 && timeout_ms < 0)
 		timeout_ms = 1000;
 
-	struct pollfd pfd = {.fd = st->input_fd, .events = POLLIN, .revents = 0};
-	poll(&pfd, 1, timeout_ms);
+	// The card's watch waits alongside the keypad
+	struct pollfd pfd[2] = {
+			{.fd = st->input_fd, .events = POLLIN, .revents = 0},
+			{.fd = st->watch_fd, .events = POLLIN, .revents = 0},
+	};
+	poll(pfd, 2, timeout_ms);
+}
+
+/** @brief Sharing unmounts the inbox and takes the watch with it */
+static void device_watch_inbox(device_state* st) {
+	if (st->watch_fd < 0)
+		return;
+
+	if (st->watch_id >= 0)
+		inotify_rm_watch(st->watch_fd, st->watch_id);
+
+	st->watch_id = inotify_add_watch(
+			st->watch_fd, st->inbox_dir, IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE);
+}
+
+static bool device_store_changed(qdos_hal* hal) {
+	device_state* st = (device_state*)hal->impl;
+	if (st->watch_fd < 0)
+		return false;
+
+	// Drained: an unread queue keeps poll() returning at once
+	char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+	bool changed = false;
+	while (read(st->watch_fd, buf, sizeof(buf)) > 0)
+		changed = true;
+
+	return changed;
 }
 
 static const char* dir_for(device_state* st, qdos_store_scope scope) {
@@ -264,6 +318,12 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
+static bool device_store_path(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+	device_state* st = (device_state*)hal->impl;
+	return store_path(dir_for(st, scope), name, buf, cap);
+}
+
 static qdos_store_result device_store_list(
 		qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
 	device_state* st = (device_state*)hal->impl;
@@ -286,7 +346,7 @@ static qdos_store_result device_store_list(
 
 /** Hand the inbox partition to a host, or take it back. */
 static int device_usb_export(qdos_hal* hal, bool on) {
-	(void)hal;
+	device_state* st = (device_state*)hal->impl;
 
 	const pid_t pid = fork();
 	if (pid < 0)
@@ -301,6 +361,9 @@ static int device_usb_export(qdos_hal* hal, bool on) {
 	if (waitpid(pid, &status, 0) < 0)
 		return -1;
 
+	if (!on)
+		device_watch_inbox(st);
+
 	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
@@ -311,6 +374,8 @@ void qdos_device_hal(qdos_hal* hal) {
 	g_device.fb_fd = -1;
 	g_device.input_fd = -1;
 	g_device.tty_fd = -1;
+	g_device.watch_fd = -1;
+	g_device.watch_id = -1;
 
 	hal->init = device_init;
 	hal->shutdown = device_shutdown;
@@ -322,6 +387,8 @@ void qdos_device_hal(qdos_hal* hal) {
 	hal->store_read = device_store_read;
 	hal->store_write = device_store_write;
 	hal->store_list = device_store_list;
+	hal->store_path = device_store_path;
+	hal->store_changed = device_store_changed;
 	hal->usb_export = device_usb_export; // init() clears it if there is no helper
 	hal->impl = &g_device;
 }

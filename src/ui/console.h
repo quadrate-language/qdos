@@ -43,7 +43,7 @@ int qdos_console_puts(qdos_console* con, int col, int row, const char* text);
 
 void qdos_console_puts_right(qdos_console* con, int row, const char* text);
 
-/** @brief Marks text that did not fit, in its last cell */
+/** @brief Marks text that did not fit */
 #define QDOS_ELIDED '~'
 
 /** @brief Right-aligned, using only the columns from @p from onwards */

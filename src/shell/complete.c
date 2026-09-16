@@ -9,8 +9,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/* ':' among them: `foo::triple` is one name, not two */
 static bool word_char(char c) {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+			|| c == ':';
 }
 
 size_t qdos_complete_prefix_len(const char* input, size_t len) {

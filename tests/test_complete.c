@@ -31,6 +31,12 @@ static void test_prefix_boundaries(void) {
 
 	// ... but a word may contain digits
 	CHECK(prefix_of("a1") == 2);
+
+	// A module's words are scoped by the file they came from, and the whole of
+	// that is the name: stopping at the colons would match against nothing
+	CHECK(prefix_of("demo::hy") == 8);
+	CHECK(prefix_of("1 2 demo::") == 6);
+	CHECK(prefix_of("demo::hypot ") == 0);
 }
 
 static void test_completes_a_builtin(void) {

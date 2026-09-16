@@ -36,6 +36,12 @@ static const uint8_t STORE_MAGIC[3] = {'Q', 'D', 'S'};
 #define PROGRAM_SUFFIX ".qd"
 #define PROGRAM_SUFFIX_LEN 3
 
+/** @brief What a shared object is called, which is what a compiler names one */
+#define MODULE_PREFIX "lib"
+#define MODULE_PREFIX_LEN 3
+#define MODULE_SUFFIX ".so"
+#define MODULE_SUFFIX_LEN 3
+
 static void put_u64(uint8_t* out, uint64_t value) {
 	for (size_t i = 0; i < 8; i++) {
 		out[i] = (uint8_t)((value >> (i * 8)) & 0xFFu);
@@ -198,6 +204,37 @@ bool qdos_program_key(const char* name, char* buf, size_t cap) {
 	return written > 0 && (size_t)written < cap;
 }
 
+bool qdos_module_name(const char* entry, char* out, size_t cap) {
+	if (entry == NULL)
+		return false;
+
+	const size_t len = strlen(entry);
+	if (len <= MODULE_PREFIX_LEN + MODULE_SUFFIX_LEN)
+		return false;
+	if (strncmp(entry, MODULE_PREFIX, MODULE_PREFIX_LEN) != 0)
+		return false;
+	if (strcmp(entry + len - MODULE_SUFFIX_LEN, MODULE_SUFFIX) != 0)
+		return false;
+
+	const size_t stem = len - MODULE_PREFIX_LEN - MODULE_SUFFIX_LEN;
+	if (stem >= cap)
+		return false;
+
+	memcpy(out, entry + MODULE_PREFIX_LEN, stem);
+	out[stem] = '\0';
+
+	// The stem becomes a scope in the vocabulary, so it has to lex as one
+	return valid_program_name(out);
+}
+
+bool qdos_module_key(const char* name, char* buf, size_t cap) {
+	if (!valid_program_name(name))
+		return false;
+
+	const int written = snprintf(buf, cap, "%s%s%s", MODULE_PREFIX, name, MODULE_SUFFIX);
+	return written > 0 && (size_t)written < cap;
+}
+
 qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char* source) {
 	char key[QDOS_PROGRAM_NAME_MAX];
 	if (!qdos_program_key(name, key, sizeof(key)) || !source)
@@ -322,8 +359,22 @@ static bool gather_one(const char* entry, void* userdata) {
 	return true;
 }
 
-static int entry_by_name(const void* a, const void* b) {
-	return strcmp(((const qdos_program_entry*)a)->name, ((const qdos_program_entry*)b)->name);
+/** @brief Nearest first, the same order in which one shadows another */
+static int entry_rank(const qdos_program_entry* entry) {
+	if (entry->user)
+		return 0;
+	if (entry->inbox)
+		return 1;
+	return 2;
+}
+
+/** @brief By scope, then name: the one you want is nearly always your own */
+static int entry_order(const void* a, const void* b) {
+	const qdos_program_entry* first = (const qdos_program_entry*)a;
+	const qdos_program_entry* second = (const qdos_program_entry*)b;
+
+	const int rank = entry_rank(first) - entry_rank(second);
+	return (rank != 0) ? rank : strcmp(first->name, second->name);
 }
 
 size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap) {
@@ -336,7 +387,7 @@ size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap) 
 		hal->store_list(hal, walk.scope, gather_one, &walk);
 	}
 
-	qsort(out, walk.count, sizeof(*out), entry_by_name);
+	qsort(out, walk.count, sizeof(*out), entry_order);
 	return walk.count;
 }
 

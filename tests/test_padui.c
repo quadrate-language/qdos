@@ -609,8 +609,7 @@ static void test_numeric_block(void) {
 	CHECK(qdos_pad_button_at(1, 9)->plain.key == QDOS_KEY_0);
 	CHECK(qdos_pad_button_at(2, 9)->plain.key == QDOS_KEY_DOT);
 
-	// The operators down the right, with Enter at the foot of them: it is
-	// pressed once per value entered, so it sits where the thumb already is
+	// Enter at the foot of the operator column, where the thumb already is
 	static const qdos_key OPS[4] = {QDOS_KEY_DIV, QDOS_KEY_MUL, QDOS_KEY_SUB, QDOS_KEY_ADD};
 	for (int r = 0; r < 4; r++)
 		CHECK(qdos_pad_button_at(4, r + 5)->plain.key == OPS[r]);
@@ -623,8 +622,7 @@ static void test_numeric_block(void) {
 	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
 	CHECK(qdos_pad_button_at(0, 9)->plain.key == QDOS_KEY_CLEAR);
 
-	// Off is the far corner from the way out, and the way out has no shift at
-	// all: ESC is what you press to back out of a shift you did not mean
+	// Off is the far corner from ESC, which is what backs out of a stray shift
 	CHECK(qdos_pad_button_at(4, 0)->symbol.key == QDOS_KEY_POWER);
 	CHECK(qdos_pad_button_at(0, 9)->symbol.label == NULL);
 
@@ -633,14 +631,7 @@ static void test_numeric_block(void) {
 	CHECK(qdos_pad_button_at(0, 7)->symbol.key == QDOS_KEY_RIGHT);
 }
 
-/**
- * Every digit types a digit on every layer.
- *
- * Names have numbers in them, so a locked ALPHA that swallowed the number keys
- * meant leaving the layer part-way through a word -- and it swallowed 4, 5, 7,
- * 8 and 9 while leaving 0 to 3 and 6 alone, which is not a rule anyone could
- * hold in their head.
- */
+/** Every digit types a digit on every layer: names have numbers in them. */
 static void test_digits_survive_every_layer(void) {
 	static const qdos_key DIGITS[] = {QDOS_KEY_0, QDOS_KEY_1, QDOS_KEY_2, QDOS_KEY_3, QDOS_KEY_4,
 			QDOS_KEY_5, QDOS_KEY_6, QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9, QDOS_KEY_DOT};
@@ -685,13 +676,7 @@ static void test_the_alphabet_is_complete(void) {
 		CHECK(seen[i] == 1);
 }
 
-/**
- * The letters cost the symbols they displaced, so those need a shift key.
- *
- * ':' is the piece of Quadrate syntax a name is most often glued to, and '_'
- * is inside the names themselves; both would otherwise need ALPHA turned off
- * part-way through a word, which is the thing this layout is trying to stop.
- */
+/** The letters displaced ':' and '_', which live inside names, onto shift. */
 static void test_what_the_letters_displaced_is_still_reachable(void) {
 	const char* wanted[] = {":", "_"};
 

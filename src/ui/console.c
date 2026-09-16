@@ -78,9 +78,8 @@ void qdos_console_puts_right_within(qdos_console* con, int row, int from, const 
 	const int room = QDOS_COLS - from;
 	const size_t len = strlen(text);
 
-	// Keep the head and say it was cut. The tail is the wrong end to keep of a
-	// number: dropping the leading digits leaves something that still reads as
-	// an answer.
+	// The tail is the wrong end of a number to keep: dropping the leading
+	// digits leaves something that still reads as an answer.
 	if (len > (size_t)room) {
 		char cut[QDOS_COLS + 1];
 		const int keep = room - 1;
