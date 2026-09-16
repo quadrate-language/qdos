@@ -1,13 +1,25 @@
 # Firmware
 
-Two ways to get QDOS onto a Raspberry Pi Zero 2 W. Start with the first.
+Two ways to get QDOS onto a Raspberry Pi. Start with the first.
+
+`QDOS_BOARD` picks the target throughout, defaulting to the **Zero W**:
+
+| `QDOS_BOARD` | board | SoC | cross `QDOS_ARCH` |
+|---|---|---|---|
+| `zerow` (default) | Pi Zero W | BCM2835, ARM1176, ARMv6 | `armv6` |
+| `zero2w` | Pi Zero 2 W | BCM2710A1, Cortex-A53, ARMv8 | `aarch64` |
 
 ## Bring-up: Raspberry Pi OS Lite
 
 ```bash
-./cross/run.sh                                  # build for ARM64
+QDOS_ARCH=aarch64 ./cross/run.sh                # build for ARM64
 ./firmware/stage-to-raspios.sh pi@raspberrypi.local
 ```
+
+Note that `stage-to-raspios.sh` currently stages `build/aarch64/qdos` only, and
+refuses anything that is not an ARM64 binary — so this path reaches a Zero 2 W
+running 64-bit Raspberry Pi OS, not a Zero W. Bringing up the ARMv6 target this
+way means teaching the script to take `build/armv6/qdos` as well.
 
 A normal distro with QDOS on it, started by a systemd unit on tty1. Not firmware
 — but the remaining risk in this project is the panel, the keypad wiring and the
@@ -53,11 +65,28 @@ For `--vnc`, note that most viewers take a *display number*, not a port:
 tries port 11900 and finds nothing. Clients that want a port usually take two
 colons: `localhost::5900`.
 
-Boots the real image on QEMU's `raspi3b`, the closest machine it offers to a
-Zero 2 W: both quad Cortex-A53 on the same Broadcom silicon family. QEMU does
-not emulate the GPU bootloader, so the kernel is loaded directly rather than
-through `bootcode.bin` and `start.elf`; everything above that is the real image,
-including the framebuffer, the SD card and USB input.
+**Emulation runs the `zero2w` target**, on QEMU's `raspi3b` — the closest machine
+it offers to a Zero 2 W, both quad Cortex-A53 on the same Broadcom silicon
+family. QEMU does not emulate the GPU bootloader, so the kernel is loaded
+directly rather than through `bootcode.bin` and `start.elf`; everything above
+that is the real image, including the framebuffer, the SD card and USB input.
+
+The default `zerow` target does **not** boot here. QEMU's `raspi0` does not match
+a Zero W closely enough: `qemu/make-qemu-dtb.sh` patches the device tree far
+enough to get the card enumerated and the partitions read, and then the guest
+freezes with QEMU pegged at 100% — the guest clock stops, so even a plain
+`rootdelay` sleep never returns. `run-qemu.sh` says so and points at the other
+target rather than showing a black screen:
+
+```bash
+QDOS_BOARD=zero2w ./firmware/build-image.sh
+QDOS_BOARD=zero2w ./firmware/run-qemu.sh
+```
+
+The two images share everything but the architecture, kernel config and device
+tree, so booting `zero2w` still exercises the userspace the Zero W will run. The
+ARMv6 build is verified the other way, by `QDOS_ARCH=armv6 ./cross/run.sh`
+running the whole suite under `qemu-arm`.
 
 Worth running before touching hardware. It has already caught three bugs that
 would have been baffling on a real Pi:
@@ -132,8 +161,12 @@ reach the GPU.
 
 ```bash
 ./firmware/build-image.sh
-sudo dd if=~/.cache/qdos-firmware/build/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
+sudo dd if=~/.cache/qdos-firmware/build-zerow/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
+
+Each board builds into its own output tree (`build-zerow`, `build-zero2w`), so
+switching targets never rebuilds the other one — and the path above changes with
+`QDOS_BOARD`.
 
 The first build downloads and compiles a toolchain and a kernel, so expect
 30–60 minutes. Later builds reuse the cache and take minutes.
@@ -192,6 +225,7 @@ on ttyAMA0 for bring-up.
 
 ```
 buildroot/
+  configs/qdos_zerow_defconfig      the default target, ARMv6
   configs/qdos_zero2w_defconfig     derived from Buildroot's raspberrypizero2w_64
   package/quadrate/                 the language libraries, built without LLVM
   package/qdos/                     the calculator
@@ -243,9 +277,11 @@ no changes for either, only the right overlay lines.
 
 ## Status
 
-**The image boots and runs under QEMU.** Kernel to init to QDOS drawing on the
-framebuffer, with USB keyboard input evaluated and displayed — the whole chain,
-on emulated Pi silicon.
+**The `zero2w` image boots and runs under QEMU.** Kernel to init to QDOS drawing
+on the framebuffer, with USB keyboard input evaluated and displayed — the whole
+chain, on emulated Pi silicon. The `zerow` image is the default target and the
+one the hardware will run, but QEMU cannot boot it; it is covered by the ARMv6
+cross-build and test run instead.
 
 Not yet verified on real hardware: the specific SPI panel, the GPIO keypad
 matrix, boot timing and power behaviour. QEMU emulates a generic framebuffer and

@@ -14,7 +14,7 @@
 # The first build downloads and compiles a toolchain and a kernel, so expect
 # 30-60 minutes. Later builds reuse firmware/build and are far quicker.
 #
-# Output: $XDG_CACHE_HOME/qdos-firmware/build/images/sdcard.img
+# Output: $XDG_CACHE_HOME/qdos-firmware/build-$QDOS_BOARD/images/sdcard.img
 #
 # The Buildroot checkout and its output live outside this repository. They are
 # several gigabytes, and Buildroot rsyncs the source tree into its own build

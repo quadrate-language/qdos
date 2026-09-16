@@ -5,119 +5,229 @@
 
 #include "keypad_ui.h"
 
-#include "ui/font16x24.h"
+#include "padfont.h"
+#include "ui/font16x24.h" // for the QDOS_GLYPH_* keycap strings
 
 #include <string.h>
 
+/* One action, on one layer */
 #define KEY(l, k) {(l), (k), NULL}
 #define TXT(l, t) {(l), QDOS_KEY_NONE, (t)}
 #define NONE {NULL, QDOS_KEY_NONE, NULL}
 
+/* One button: the three layers, and whether it is a key or a modifier. The
+ * arguments are brace lists, so they cannot be parenthesised. */
+#define BTN(p, a, s) {p, a, s, QDOS_PAD_PLAIN}
+#define MOD(cap, layer) {KEY(cap, QDOS_KEY_NONE), NONE, NONE, layer}
+
 /*
- * Laid out like a SwissMicros DM42: the enter row, then digits in a 3x3 block
- * with the operators down the right and navigation down the left, sitting at
- * the bottom where a thumb expects them. The menu keys stay under the display.
+ * The shift cap is blank. The colour says what it is, and everything it does is
+ * printed in that same colour above the keys it does it to, so a word on the
+ * key itself would be the one piece of writing on the pad that names a key
+ * rather than an action.
+ */
+#define CAP_ALPHA "ALPHA"
+#define CAP_SYMBOL ""
+
+/*
+ * Laid out the way a scientific calculator is: the entry row, then digits in a
+ * 3x3 block with the operators down the right and navigation down the left,
+ * sitting at the bottom where a thumb expects them. The menu keys stay under
+ * the display.
  *
  * A cap in lower case is exactly the word it stands for, so it can be typed as
  * it is written; a cap in capitals is QDOS's own -- an abbreviation too long to
  * print in full, or a key the language has no name for.
  *
- * Three faces, as a TI-83 has two modifiers rather than one. Plain is a
- * calculator. ALP is the letters, without which no name or string can be typed
- * at all, and it locks, because words are more than one letter long. SYM is
- * Quadrate's syntax, which cannot be reached any other way; it lasts one press
- * and hands back to whichever layer was showing. Words that are neither stay
- * off the keypad entirely -- CAT lists every one of them.
+ * Three faces, because one modifier is not enough for a keypad this size.
+ * Plain is a calculator. ALPHA is the letters, without which no name or string
+ * can be typed at all, and it locks, because words are more than one letter
+ * long. The shift layer is Quadrate's syntax, which cannot be reached any other
+ * way; it lasts one press and hands back to whichever layer was showing. Words
+ * that are neither stay off the keypad entirely -- CAT lists every one.
  */
 static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
-	{{KEY("F1", QDOS_KEY_SOFT1), NONE, NONE},
-			{KEY("F2", QDOS_KEY_SOFT2), NONE, NONE},
-			{KEY("F3", QDOS_KEY_SOFT3), NONE, NONE},
-			{KEY("F4", QDOS_KEY_SOFT4), NONE, NONE},
-			{KEY("F5", QDOS_KEY_SOFT5), NONE, NONE}},
+	/*
+	 * Blank caps. These are the soft keys, and what they do is printed on the
+	 * display directly above them, changing with the mode -- so inscribing them
+	 * would be printing a name that is wrong most of the time.
+	 */
+	{BTN(KEY("", QDOS_KEY_SOFT1), NONE, NONE),
+			BTN(KEY("", QDOS_KEY_SOFT2), NONE, NONE),
+			BTN(KEY("", QDOS_KEY_SOFT3), NONE, NONE),
+			BTN(KEY("", QDOS_KEY_SOFT4), NONE, NONE),
+			BTN(KEY("", QDOS_KEY_SOFT5), NONE, NONE)},
 
-	{{KEY("sin", QDOS_KEY_SIN), TXT("A", "a"), TXT("(", "(")},
-			{KEY("cos", QDOS_KEY_COS), TXT("B", "b"), TXT(")", ")")},
-			{KEY("tan", QDOS_KEY_TAN), TXT("C", "c"), TXT("{", "{")},
-			{KEY("ln", QDOS_KEY_LN), TXT("D", "d"), TXT("}", "}")},
-			{KEY("log", QDOS_KEY_LOG), TXT("E", "e"), TXT("\"", "\"")}},
+	// Reciprocal, root and square, then the logarithms
+	{BTN(KEY("1/x", QDOS_KEY_INV), TXT("A", "a"), TXT("(", "(")),
+			BTN(KEY(QDOS_GLYPH_SQRT, QDOS_KEY_SQRT), TXT("B", "b"), TXT(")", ")")),
+			BTN(KEY("x" QDOS_PAD_GLYPH_SQUARED, QDOS_KEY_SQ), TXT("C", "c"), TXT("{", "{")),
+			BTN(KEY("ln", QDOS_KEY_LN), TXT("D", "d"), TXT("}", "}")),
+			BTN(KEY("log", QDOS_KEY_LOG), TXT("E", "e"), TXT("\"", "\""))},
 
-	{{KEY(QDOS_GLYPH_SQRT, QDOS_KEY_SQRT), TXT("F", "f"), TXT("fn", "fn ")},
-			{KEY("sq", QDOS_KEY_SQ), TXT("G", "g"), TXT("--", " -- ")},
-			{KEY("pow", QDOS_KEY_POW), TXT("H", "h"), TXT("i64", "i64")},
-			{KEY("inv", QDOS_KEY_INV), TXT("I", "i"), TXT("f64", "f64")},
-			{KEY("abs", QDOS_KEY_ABS), TXT("J", "j"), TXT("str", "str")}},
+	// The trigonometry
+	{BTN(KEY("sin", QDOS_KEY_SIN), TXT("F", "f"), TXT("fn", "fn ")),
+			BTN(KEY("cos", QDOS_KEY_COS), TXT("G", "g"), TXT("--", " -- ")),
+			BTN(KEY("tan", QDOS_KEY_TAN), TXT("H", "h"), TXT("i64", "i64")),
+			BTN(KEY("pow", QDOS_KEY_POW), TXT("I", "i"), TXT("f64", "f64")),
+			BTN(KEY("abs", QDOS_KEY_ABS), TXT("J", "j"), TXT("str", "str"))},
 
-	{{KEY("FLR", QDOS_KEY_FLOOR), TXT("K", "k"), TXT("if", "if ")},
-			{KEY("ceil", QDOS_KEY_CEIL), TXT("L", "l"), TXT("else", " else ")},
-			{KEY("RND", QDOS_KEY_ROUND), TXT("M", "m"), TXT("loop", "loop ")},
-			{TXT("SPC", " "), NONE, TXT("BRK", " break ")},
-			{KEY("SYM", QDOS_KEY_NONE), NONE, NONE}},
+	// Rounding and the remainder, with control flow printed above them
+	{BTN(KEY("floor", QDOS_KEY_FLOOR), TXT("K", "k"), TXT("if", "if ")),
+			BTN(KEY("ceil", QDOS_KEY_CEIL), TXT("L", "l"), TXT("else", " else ")),
+			BTN(KEY("round", QDOS_KEY_ROUND), TXT("M", "m"), TXT("loop", "loop ")),
+			BTN(KEY("%", QDOS_KEY_MOD), TXT("N", "n"), TXT("BRK", " break ")),
+			BTN(TXT(QDOS_PAD_GLYPH_SPACE, " "), NONE, TXT(",", ","))},
 
-	// Where the DM42 keeps sto, rcl and roll down
-	{{KEY("dup", QDOS_KEY_DUP), TXT("N", "n"), TXT("nip", " nip ")},
-			{KEY("drop", QDOS_KEY_DROP), TXT("O", "o"), KEY("UNDO", QDOS_KEY_UNDO)},
-			{KEY("over", QDOS_KEY_OVER), TXT("P", "p"), TXT("[", "[")},
-			{KEY("rot", QDOS_KEY_ROT), TXT("Q", "q"), TXT("]", "]")},
-			{KEY("mod", QDOS_KEY_MOD), TXT("R", "r"), TXT("=", "=")}},
+	/*
+	 * The stack, which is Quadrate's own row. The words that shuffle it further
+	 * sit above them, so the whole subject is in one place.
+	 */
+	{BTN(KEY("dup", QDOS_KEY_DUP), TXT("O", "o"), TXT("nip", " nip ")),
+			BTN(KEY("drop", QDOS_KEY_DROP), TXT("P", "p"), KEY("UNDO", QDOS_KEY_UNDO)),
+			BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("roll", " roll ")),
+			BTN(KEY("over", QDOS_KEY_OVER), TXT("R", "r"), TXT("free", " free ")),
+			BTN(KEY("rot", QDOS_KEY_ROT), TXT("S", "s"), TXT("APP", " append "))},
 
-	// enter, x<>y, +/-, e, backspace
-	{{KEY("ENT", QDOS_KEY_ENTER), NONE, TXT("APP", " append ")},
-			{KEY("swap", QDOS_KEY_SWAP), TXT("S", "s"), TXT("roll", " roll ")},
-			{KEY(QDOS_GLYPH_PLUSMINUS, QDOS_KEY_NEG), TXT("T", "t"), TXT("free", " free ")},
-			{KEY("TAB", QDOS_KEY_TAB), TXT("U", "u"), TXT("<", "<")},
-			{KEY("BKS", QDOS_KEY_BACKSPACE), NONE, TXT(">", ">")}},
+	// Entry and editing. ALPHA sits beside enter, being the other thing you
+	// reach for mid-word.
+	{BTN(KEY("ENTER", QDOS_KEY_ENTER), NONE, TXT("=", "=")),
+			MOD(CAP_ALPHA, QDOS_PAD_ALPHA),
+			BTN(KEY(QDOS_GLYPH_PLUSMINUS, QDOS_KEY_NEG), TXT("T", "t"), TXT("[", "[")),
+			BTN(KEY("TAB", QDOS_KEY_TAB), TXT("U", "u"), TXT("]", "]")),
+			BTN(KEY(QDOS_GLYPH_LEFT, QDOS_KEY_BACKSPACE), NONE, TXT(";", ";"))},
 
-	{{KEY(QDOS_GLYPH_UP, QDOS_KEY_UP), NONE, KEY(QDOS_GLYPH_LEFT, QDOS_KEY_LEFT)},
-			{KEY("7", QDOS_KEY_7), TXT("V", "v"), TXT("and", " and ")},
-			{KEY("8", QDOS_KEY_8), TXT("W", "w"), TXT("or", " or ")},
-			{KEY("9", QDOS_KEY_9), TXT("X", "x"), TXT("xor", " xor ")},
-			{KEY(QDOS_GLYPH_DIVIDE, QDOS_KEY_DIV), TXT("Y", "y"), TXT("shl", " shl ")}},
+	{BTN(KEY(QDOS_GLYPH_UP, QDOS_KEY_UP), NONE, KEY(QDOS_GLYPH_LEFT, QDOS_KEY_LEFT)),
+			BTN(KEY("7", QDOS_KEY_7), TXT("V", "v"), TXT("and", " and ")),
+			BTN(KEY("8", QDOS_KEY_8), TXT("W", "w"), TXT("or", " or ")),
+			BTN(KEY("9", QDOS_KEY_9), TXT("X", "x"), TXT("xor", " xor ")),
+			BTN(KEY(QDOS_GLYPH_DIVIDE, QDOS_KEY_DIV), TXT("Y", "y"), TXT("shl", " shl "))},
 
-	{{KEY(QDOS_GLYPH_DOWN, QDOS_KEY_DOWN), NONE, KEY(QDOS_GLYPH_RIGHT, QDOS_KEY_RIGHT)},
-			{KEY("4", QDOS_KEY_4), TXT("Z", "z"), TXT("not", " not ")},
-			{KEY("5", QDOS_KEY_5), TXT("_", "_"), TXT("==", " == ")},
-			{KEY("6", QDOS_KEY_6), NONE, TXT("!=", " != ")},
-			{KEY(QDOS_GLYPH_TIMES, QDOS_KEY_MUL), NONE, TXT(",", ",")}},
+	{BTN(KEY(QDOS_GLYPH_DOWN, QDOS_KEY_DOWN), NONE, KEY(QDOS_GLYPH_RIGHT, QDOS_KEY_RIGHT)),
+			BTN(KEY("4", QDOS_KEY_4), TXT("Z", "z"), TXT("not", " not ")),
+			BTN(KEY("5", QDOS_KEY_5), TXT("_", "_"), TXT("==", " == ")),
+			BTN(KEY("6", QDOS_KEY_6), NONE, TXT("!=", " != ")),
+			BTN(KEY(QDOS_GLYPH_TIMES, QDOS_KEY_MUL), NONE, TXT("<", "<"))},
 
-	{{KEY("ALP", QDOS_KEY_NONE), NONE, NONE},
-			{KEY("1", QDOS_KEY_1), NONE, TXT("<=", " <= ")},
-			{KEY("2", QDOS_KEY_2), NONE, TXT(">=", " >= ")},
-			{KEY("3", QDOS_KEY_3), NONE, TXT(QDOS_GLYPH_PI, "pi ")},
-			{KEY("-", QDOS_KEY_SUB), NONE, TXT("INC", " ++ ")}},
+	// The shift key, in the left column of the numeric block under the thumb,
+	// between the down arrow and the way out
+	{MOD(CAP_SYMBOL, QDOS_PAD_SYMBOL),
+			BTN(KEY("1", QDOS_KEY_1), NONE, TXT(">", ">")),
+			BTN(KEY("2", QDOS_KEY_2), NONE, TXT("<=", " <= ")),
+			BTN(KEY("3", QDOS_KEY_3), NONE, TXT(">=", " >= ")),
+			BTN(KEY("-", QDOS_KEY_SUB), NONE, TXT("INC", " ++ "))},
 
-	// exit, with off on its symbol layer as on the DM42
-	{{KEY("ESC", QDOS_KEY_CLEAR), NONE, KEY("PWR", QDOS_KEY_POWER)},
-			{KEY("0", QDOS_KEY_0), NONE, TXT("len", " len ")},
-			{KEY(".", QDOS_KEY_DOT), NONE, TXT("nth", " nth ")},
-			{TXT(":", ":"), NONE, TXT(";", ";")},
-			{KEY("+", QDOS_KEY_ADD), NONE, TXT("DEC", " -- ")}},
+	// The way out, with off on its shift layer so it cannot be hit by accident
+	{BTN(KEY("ESC", QDOS_KEY_CLEAR), NONE, KEY("PWR", QDOS_KEY_POWER)),
+			BTN(KEY("0", QDOS_KEY_0), NONE, TXT("len", " len ")),
+			BTN(KEY(".", QDOS_KEY_DOT), NONE, TXT("nth", " nth ")),
+			BTN(TXT(":", ":"), NONE, TXT(QDOS_GLYPH_PI, "pi ")),
+			BTN(KEY("+", QDOS_KEY_ADD), NONE, TXT("DEC", " -- "))},
 };
 
 #undef KEY
 #undef TXT
 #undef NONE
 
-static const uint8_t PAD_BG[3] = {0x22, 0x24, 0x22};
-static const uint8_t FACE[3] = {0x45, 0x48, 0x45};
-static const uint8_t FACE_SHIFTED[3] = {0x3A, 0x4E, 0x42};
-static const uint8_t EDGE[3] = {0x5E, 0x62, 0x5E};
-static const uint8_t TEXT[3] = {0xC9, 0xCE, 0xC6};
-static const uint8_t TEXT_DIM[3] = {0x76, 0x7A, 0x74};
+/* ---------------------------------------------------------------------------
+ * Appearance
+ *
+ * The panel above is the hardware and is drawn as the hardware draws it. Below
+ * it is a case, and a case can be made to look like something. The colours are
+ * a neutral dark with a trace of the panel's green in them, so the two read as
+ * one object rather than a screenshot with a toolbar under it.
+ *
+ * Keys are lit from above: a gradient down the face, a highlight on the top
+ * edge, a shade on the bottom, and a shadow cast below. One accent only -- the
+ * yellow shift, which is yellow to match the legends it switches on -- because
+ * a second accent would leave neither of them reading as one.
+ * ------------------------------------------------------------------------- */
+
+/* The shell the whole thing is moulded from, top to bottom */
+static const uint8_t FRAME_TOP[3] = {0x33, 0x36, 0x33};
+static const uint8_t FRAME_BOTTOM[3] = {0x1C, 0x1E, 0x1C};
+
+/* The keywell floor, which sits deeper than the shell around it */
+static const uint8_t CASE_TOP[3] = {0x26, 0x28, 0x26};
+static const uint8_t CASE_BOTTOM[3] = {0x15, 0x16, 0x15};
+
+/* The seam where the case meets the glass, and the chamfer under it */
+static const uint8_t BEZEL_SEAM[3] = {0x08, 0x09, 0x08};
+static const uint8_t BEZEL_LIGHT[3] = {0x3C, 0x3F, 0x3C};
+
+/*
+ * A key face, top to bottom. The range has to be wide enough to see: a couple
+ * of levels across 26 rows is a flat surface with extra arithmetic.
+ */
+static const uint8_t FACE_TOP[3] = {0x5B, 0x5F, 0x5A};
+static const uint8_t FACE_BOTTOM[3] = {0x2F, 0x32, 0x2F};
+
+/* The digits carry the most traffic, so they are the lightest thing here */
+static const uint8_t DIGIT_TOP[3] = {0x6A, 0x6E, 0x68};
+static const uint8_t DIGIT_BOTTOM[3] = {0x3B, 0x3F, 0x3A};
+
+/* The soft row is a menu strip under the display, not a key in the hand */
+static const uint8_t SOFT_TOP[3] = {0x44, 0x48, 0x46};
+static const uint8_t SOFT_BOTTOM[3] = {0x25, 0x28, 0x27};
+
+/* Arithmetic, cooled off so the eye finds the column without being told */
+static const uint8_t OP_TOP[3] = {0x4C, 0x54, 0x5D};
+static const uint8_t OP_BOTTOM[3] = {0x2A, 0x2F, 0x35};
+
+/*
+ * The shift key, and the colour of everything it does.
+ *
+ * Exactly one key on the pad is coloured and it is this one: yellow, blank,
+ * and the same yellow as the second function printed above every key it
+ * reaches.
+ * The colour is the cross-reference -- it says "the yellow writing is what
+ * this key gets you" without a word of explanation.
+ */
+static const uint8_t SHIFT_TOP[3] = {0xF2, 0xC0, 0x30};
+static const uint8_t SHIFT_BOTTOM[3] = {0xB0, 0x86, 0x10};
+static const uint8_t SHIFT_INK[3] = {0xE8, 0xB4, 0x2E};
+static const uint8_t SHIFT_INK_DIM[3] = {0x7A, 0x60, 0x20};
+
+/*
+ * Enter. Raised a little off the plain face and no more. A wider key would say
+ * it better, and a fixed grid has no width to give. It used to be brass, which
+ * cannot stay -- two warm accents and neither reads as one, and the yellow has
+ * a job that a decoration would get in the way of.
+ */
+static const uint8_t ENTER_TOP[3] = {0x6C, 0x70, 0x6B};
+static const uint8_t ENTER_BOTTOM[3] = {0x3C, 0x40, 0x3B};
+
+/* A modifier while its layer is the one showing */
+static const uint8_t LIVE_TOP[3] = {0x37, 0x6C, 0x60};
+static const uint8_t LIVE_BOTTOM[3] = {0x1A, 0x38, 0x31};
+
+/* The name on the case: the panel's own silver, so the two belong together */
+static const uint8_t NAMEPLATE_INK[3] = {0xA6, 0xAC, 0xA4};
+
+static const uint8_t KEYLINE[3] = {0x0D, 0x0E, 0x0D};
+static const uint8_t TEXT[3] = {0xE8, 0xEB, 0xE4};
+static const uint8_t TEXT_DIM[3] = {0x6B, 0x6F, 0x6A};
+
+/* How far the top three rows of the pad are given over to the bezel */
+#define BEZEL_H 3
+
+/* The rim down each side and along the bottom, where the case turns away */
+#define RIM_W 3
+
+/*
+ * Corner rounding, as an inset per row from the nearest end. Drawn by hand
+ * rather than computed: at a radius this small a circle lands a pixel either
+ * side of where it looks right, which is the same reason the font is a bitmap.
+ */
+static const int CORNER[] = {3, 1, 0};
+#define CORNER_ROWS ((int)(sizeof(CORNER) / sizeof(*CORNER)))
 
 bool qdos_pad_modifier(const qdos_pad_button* b, qdos_pad_layer* selects) {
-	if (b == NULL || b->plain.label == NULL)
+	if (b == NULL || b->selects == QDOS_PAD_PLAIN)
 		return false;
 
-	if (strcmp(b->plain.label, "ALP") == 0) {
-		*selects = QDOS_PAD_ALPHA;
-		return true;
-	}
-	if (strcmp(b->plain.label, "SYM") == 0) {
-		*selects = QDOS_PAD_SYMBOL;
-		return true;
-	}
-	return false;
+	*selects = b->selects;
+	return true;
 }
 
 const qdos_pad_action* qdos_pad_action_for(const qdos_pad_button* b, qdos_pad_layer layer) {
@@ -143,71 +253,454 @@ static const qdos_pad_action* face_of(const qdos_pad_button* b, qdos_pad_layer l
 	return qdos_pad_action_for(b, layer);
 }
 
-static void put_pixel(uint8_t* rgb, int stride_px, int x, int y, const uint8_t* c) {
-	if (x < 0 || y < 0 || x >= stride_px)
+/**
+ * @brief Where the pad may draw
+ *
+ * Everything clips to this, so no amount of shadow spread can reach the panel
+ * above or run off the end of the buffer.
+ */
+typedef struct {
+	uint8_t* rgb;
+	int stride; ///< Pixels per row of the target
+	int left;	///< First column the pad owns
+	int right;	///< One past the last
+	int top;	///< First row the pad owns
+	int bottom; ///< One past the last
+} canvas;
+
+static bool inside(const canvas* cv, int x, int y) {
+	return x >= cv->left && x < cv->right && y >= cv->top && y < cv->bottom;
+}
+
+static void px(const canvas* cv, int x, int y, const uint8_t* c) {
+	if (!inside(cv, x, y))
 		return;
-	uint8_t* p = &rgb[((size_t)y * stride_px + x) * 3];
+
+	uint8_t* p = &cv->rgb[((size_t)y * cv->stride + x) * 3];
 	p[0] = c[0];
 	p[1] = c[1];
 	p[2] = c[2];
 }
 
-static void fill(uint8_t* rgb, int stride_px, int x0, int y0, int w, int h, const uint8_t* c) {
-	for (int y = y0; y < y0 + h; y++)
-		for (int x = x0; x < x0 + w; x++)
-			put_pixel(rgb, stride_px, x, y, c);
+/** @brief Darken whatever is already there, which is what a shadow does */
+static void px_shade(const canvas* cv, int x, int y, int percent) {
+	if (!inside(cv, x, y))
+		return;
+
+	uint8_t* p = &cv->rgb[((size_t)y * cv->stride + x) * 3];
+	for (int i = 0; i < 3; i++)
+		p[i] = (uint8_t)(p[i] * percent / 100);
 }
 
-static void label(uint8_t* rgb, int stride_px, int x0, int y0, const char* text, const uint8_t* c) {
-	for (int i = 0; text[i] != '\0'; i++) {
-		for (int gy = 0; gy < QDOS_FONT_H; gy++) {
-			const uint16_t bits = qdos_font_row(text[i], gy);
-			for (int gx = 0; gx < QDOS_FONT_W; gx++) {
-				if (bits & (uint16_t)(1u << gx))
-					put_pixel(rgb, stride_px, x0 + i * QDOS_FONT_W + gx, y0 + gy, c);
-			}
-		}
+/** @brief @p num /@p den of the way from @p a to @p b */
+static void mix(const uint8_t a[3], const uint8_t b[3], int num, int den, uint8_t out[3]) {
+	for (int i = 0; i < 3; i++)
+		out[i] = (uint8_t)(a[i] + (b[i] - a[i]) * num / den);
+}
+
+static void fill(const canvas* cv, int x0, int y0, int w, int h, const uint8_t* c) {
+	for (int y = y0; y < y0 + h; y++)
+		for (int x = x0; x < x0 + w; x++)
+			px(cv, x, y, c);
+}
+
+/** @brief A vertical gradient, which is how a surface says it is lit from above */
+static void gradient(const canvas* cv, int x0, int y0, int w, int h, const uint8_t top[3],
+		const uint8_t bottom[3]) {
+	for (int y = 0; y < h; y++) {
+		uint8_t c[3];
+		mix(top, bottom, y, (h > 1) ? h - 1 : 1, c);
+		fill(cv, x0, y0 + y, w, 1, c);
 	}
 }
 
-void qdos_pad_draw(uint8_t* rgb, int stride_px, int y0, qdos_pad_layer layer) {
-	fill(rgb, stride_px, 0, y0, stride_px, QDOS_PAD_H, PAD_BG);
+/** @brief How far in this row of a rounded rect starts, for corner rounding */
+static int inset_at(int row, int h) {
+	const int from_top = row;
+	const int from_bottom = h - 1 - row;
+	const int nearest = (from_top < from_bottom) ? from_top : from_bottom;
+	return (nearest < CORNER_ROWS) ? CORNER[nearest] : 0;
+}
+
+/** @brief A rounded rectangle, filled with a vertical gradient */
+static void rounded_gradient(const canvas* cv, int x0, int y0, int w, int h, const uint8_t top[3],
+		const uint8_t bottom[3]) {
+	for (int y = 0; y < h; y++) {
+		const int in = inset_at(y, h);
+		uint8_t c[3];
+		mix(top, bottom, y, (h > 1) ? h - 1 : 1, c);
+		fill(cv, x0 + in, y0 + y, w - 2 * in, 1, c);
+	}
+}
+
+static void rounded_outline(const canvas* cv, int x0, int y0, int w, int h, const uint8_t* c) {
+	for (int y = 0; y < h; y++) {
+		const int in = inset_at(y, h);
+		const int above = inset_at(y - 1, h);
+
+		// A row wider than the one above it caps the gap between them
+		if (y == 0 || above > in)
+			fill(cv, x0 + in, y0 + y, w - 2 * in, 1, c);
+
+		const int below = inset_at(y + 1, h);
+		if (y == h - 1 || below > in) {
+			fill(cv, x0 + in, y0 + y, w - 2 * in, 1, c);
+			continue;
+		}
+
+		px(cv, x0 + in, y0 + y, c);
+		px(cv, x0 + w - 1 - in, y0 + y, c);
+	}
+}
+
+static void rounded_shade(const canvas* cv, int x0, int y0, int w, int h, int percent) {
+	for (int y = 0; y < h; y++) {
+		const int in = inset_at(y, h);
+		for (int x = x0 + in; x < x0 + w - in; x++)
+			px_shade(cv, x, y0 + y, percent);
+	}
+}
+
+/** @brief Lay @p c over what is there, @p alpha of 255 of the way */
+static void px_blend(const canvas* cv, int x, int y, const uint8_t* c, int alpha) {
+	if (alpha <= 0 || !inside(cv, x, y))
+		return;
+	if (alpha >= 255) {
+		px(cv, x, y, c);
+		return;
+	}
+
+	uint8_t* p = &cv->rgb[((size_t)y * cv->stride + x) * 3];
+	for (int i = 0; i < 3; i++)
+		p[i] = (uint8_t)((c[i] * alpha + p[i] * (255 - alpha)) / 255);
+}
+
+/**
+ * @brief Set @p text with its pen starting at @p x0 on baseline @p baseline
+ *
+ * The keycap font is antialiased, so each pixel arrives as a coverage value
+ * and is blended rather than written. That is the whole reason a face this
+ * small is readable: at 13px, one bit per pixel would lose the difference
+ * between an 'a' and an 'o'.
+ */
+static void label(const canvas* cv, qdos_padface face, int x0, int baseline, const char* text,
+		const uint8_t* c) {
+	const uint8_t* coverage = qdos_padfont_coverage(face);
+	int pen = x0;
+
+	for (const char* p = text; *p != '\0'; p++) {
+		const qdos_padglyph* g = qdos_padfont_glyph(face, (unsigned char)*p);
+		if (g == NULL)
+			continue;
+
+		for (int gy = 0; gy < g->h; gy++) {
+			for (int gx = 0; gx < g->w; gx++) {
+				px_blend(cv, pen + g->bx + gx, baseline + g->by + gy, c,
+						coverage[g->offset + (size_t)gy * g->w + gx]);
+			}
+		}
+		pen += g->advance;
+	}
+}
+
+/** @brief Which family a key belongs to, which is all its colour says */
+typedef enum {
+	GROUP_PLAIN,
+	GROUP_SOFT,  ///< The menu strip under the display
+	GROUP_DIGIT, ///< Digits and the point
+	GROUP_OP,	 ///< Arithmetic
+	GROUP_ENTER,
+	GROUP_SHIFT ///< The one coloured key on the pad
+} key_group;
+
+static key_group group_of(const qdos_pad_button* b, int row) {
+	if (row == 0)
+		return GROUP_SOFT;
+
+	qdos_pad_layer selects;
+	if (qdos_pad_modifier(b, &selects) && selects == QDOS_PAD_SYMBOL)
+		return GROUP_SHIFT;
+
+	switch (b->plain.key) {
+		case QDOS_KEY_0: case QDOS_KEY_1: case QDOS_KEY_2: case QDOS_KEY_3: case QDOS_KEY_4:
+		case QDOS_KEY_5: case QDOS_KEY_6: case QDOS_KEY_7: case QDOS_KEY_8: case QDOS_KEY_9:
+		case QDOS_KEY_DOT:
+			return GROUP_DIGIT;
+
+		case QDOS_KEY_ADD: case QDOS_KEY_SUB: case QDOS_KEY_MUL: case QDOS_KEY_DIV:
+			return GROUP_OP;
+
+		case QDOS_KEY_ENTER:
+			return GROUP_ENTER;
+
+		default:
+			return GROUP_PLAIN;
+	}
+}
+
+/** @brief How much of the layer's colour a key carries */
+typedef enum {
+	TINT_NONE,
+	TINT_SOFT, ///< This layer gives the key a different meaning
+	TINT_FULL  ///< The modifier that switched the layer on
+} key_tint;
+
+static void face_colours(key_group group, key_tint tint, uint8_t top[3], uint8_t bottom[3]) {
+	const uint8_t *base_top, *base_bottom;
+	switch (group) {
+		case GROUP_SOFT: base_top = SOFT_TOP; base_bottom = SOFT_BOTTOM; break;
+		case GROUP_DIGIT: base_top = DIGIT_TOP; base_bottom = DIGIT_BOTTOM; break;
+		case GROUP_OP: base_top = OP_TOP; base_bottom = OP_BOTTOM; break;
+		case GROUP_ENTER: base_top = ENTER_TOP; base_bottom = ENTER_BOTTOM; break;
+		case GROUP_SHIFT: base_top = SHIFT_TOP; base_bottom = SHIFT_BOTTOM; break;
+		default: base_top = FACE_TOP; base_bottom = FACE_BOTTOM; break;
+	}
+
+	if (tint == TINT_NONE) {
+		memcpy(top, base_top, 3);
+		memcpy(bottom, base_bottom, 3);
+		return;
+	}
+
+	// The shift key is already the colour of the layer it switches on, so
+	// holding it down brightens rather than recolours: turning it teal would
+	// break the one thing its colour is there to say
+	if (group == GROUP_SHIFT) {
+		static const uint8_t WHITE[3] = {0xFF, 0xFF, 0xFF};
+		mix(base_top, WHITE, 1, 3, top);
+		mix(base_bottom, WHITE, 1, 3, bottom);
+		return;
+	}
+
+	// A quarter of the way over for a key the layer re-labels, all the way for
+	// the modifier itself. Tinting everything the layer reaches turns the pad
+	// one colour, which says nothing; what is worth pointing at is the
+	// modifier that is down and the keys whose meaning just changed.
+	const int den = (tint == TINT_FULL) ? 1 : 4;
+	mix(base_top, LIVE_TOP, 1, den, top);
+	mix(base_bottom, LIVE_BOTTOM, 1, den, bottom);
+}
+
+/** @brief The keywell the keys are set into */
+static void draw_case(const canvas* cv) {
+	gradient(cv, cv->left, cv->top + BEZEL_H, QDOS_PAD_W, QDOS_PAD_H - BEZEL_H, CASE_TOP,
+			CASE_BOTTOM);
+
+	// The seam against the glass, then a chamfer catching the light. Without
+	// this the panel looks pasted on rather than set in.
+	fill(cv, cv->left, cv->top, QDOS_PAD_W, 1, BEZEL_SEAM);
+	fill(cv, cv->left, cv->top + 1, QDOS_PAD_W, 1, BEZEL_LIGHT);
+	uint8_t c[3];
+	mix(BEZEL_LIGHT, CASE_TOP, 1, 2, c);
+	fill(cv, cv->left, cv->top + 2, QDOS_PAD_W, 1, c);
+
+	// The keywell floor turning up to meet the case on three sides, so the
+	// outer keys sit in something rather than stopping at an edge
+	for (int i = 0; i < RIM_W; i++) {
+		const int shade = 62 + i * 12;
+		for (int y = cv->top + BEZEL_H; y < cv->bottom; y++) {
+			px_shade(cv, cv->left + i, y, shade);
+			px_shade(cv, cv->left + QDOS_PAD_W - 1 - i, y, shade);
+		}
+		for (int x = cv->left; x < cv->left + QDOS_PAD_W; x++)
+			px_shade(cv, x, cv->bottom - 1 - i, shade);
+	}
+}
+
+/**
+ * @brief One key: shadow beneath, gradient face, bevel, keyline
+ *
+ * @param y Already moved down by QDOS_KEY_TRAVEL if this key is held
+ *
+ * Held, everything about the lighting turns over. A key standing proud casts a
+ * shadow below it and catches the light on its top edge; pressed, it is down in
+ * the well with the case shading its top, so the gradient runs the other way
+ * and the bevel swaps ends. That reversal is what reads as a press -- moving it
+ * two pixels on its own would just look like a misdraw.
+ */
+static void draw_key(const canvas* cv, int x, int y, key_group group, key_tint tint, bool pressed) {
+	if (pressed) {
+		// Down on its own shadow, so what is left is contact, not cast
+		rounded_shade(cv, x, y + 1, QDOS_KEY_W, QDOS_KEY_H, 88);
+	} else {
+		// Two offset shades rather than one, so the edge falls off instead of
+		// stopping. They multiply where they overlap, the darkest part.
+		rounded_shade(cv, x - 1, y + 3, QDOS_KEY_W + 2, QDOS_KEY_H, 84);
+		rounded_shade(cv, x, y + 2, QDOS_KEY_W, QDOS_KEY_H, 66);
+	}
+
+	uint8_t face_top[3], face_bottom[3];
+	face_colours(group, tint, face_top, face_bottom);
+
+	static const uint8_t WHITE[3] = {0xFF, 0xFF, 0xFF};
+	uint8_t grad_top[3], grad_bottom[3], edge_top[3], edge_bottom[3];
+
+	if (pressed) {
+		mix(face_bottom, KEYLINE, 1, 5, grad_top);
+		mix(face_top, KEYLINE, 2, 5, grad_bottom);
+		mix(grad_top, KEYLINE, 1, 2, edge_top);	   // the well's shadow across it
+		mix(grad_bottom, WHITE, 1, 8, edge_bottom); // a faint catch at the foot
+	} else {
+		memcpy(grad_top, face_top, 3);
+		memcpy(grad_bottom, face_bottom, 3);
+		mix(face_top, WHITE, 1, 4, edge_top);
+		mix(face_bottom, KEYLINE, 1, 3, edge_bottom);
+	}
+
+	rounded_outline(cv, x, y, QDOS_KEY_W, QDOS_KEY_H, KEYLINE);
+	rounded_gradient(cv, x + 1, y + 1, QDOS_KEY_W - 2, QDOS_KEY_H - 2, grad_top, grad_bottom);
+
+	const int inset = CORNER[1];
+	fill(cv, x + 1 + inset, y + 1, QDOS_KEY_W - 2 - 2 * inset, 1, edge_top);
+	fill(cv, x + 1 + inset, y + QDOS_KEY_H - 2, QDOS_KEY_W - 2 - 2 * inset, 1, edge_bottom);
+}
+
+void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer layer,
+		const qdos_pad_button* pressed) {
+	const canvas cv = {
+			.rgb = rgb,
+			.stride = stride_px,
+			.left = x0,
+			.right = x0 + QDOS_PAD_W,
+			.top = y0,
+			.bottom = y0 + QDOS_PAD_H,
+	};
+
+	draw_case(&cv);
 
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = &KEYPAD[row][col];
-			const int x = col * QDOS_PAD_BUTTON_W;
-			const int y = y0 + row * QDOS_PAD_BUTTON_H;
+			const bool down = (b == pressed);
+			const int x = x0 + col * QDOS_PAD_BUTTON_W + QDOS_KEY_INSET_X;
+			const int y = y0 + row * QDOS_PAD_BUTTON_H + QDOS_KEY_INSET_TOP
+					+ (down ? QDOS_KEY_TRAVEL : 0);
 
 			qdos_pad_layer selects;
 			const bool is_modifier = qdos_pad_modifier(b, &selects);
 			const qdos_pad_action* shown = face_of(b, layer);
 			const bool live = shown != NULL;
 
-			// The layer's own key is lit, so it is clear what is switched on
-			const bool tinted = (layer != QDOS_PAD_PLAIN) && (is_modifier ? selects == layer : live);
-			const uint8_t* face = tinted ? FACE_SHIFTED : FACE;
+			// The modifier that switched the layer on is lit outright, so what
+			// is switched on is never in doubt. Everything else is tinted only
+			// where this layer actually gave it a different meaning.
+			const bool changed = (layer == QDOS_PAD_ALPHA && b->alpha.label != NULL)
+					|| (layer == QDOS_PAD_SYMBOL && b->symbol.label != NULL);
 
-			fill(rgb, stride_px, x + 2, y + 2, QDOS_PAD_BUTTON_W - 4, QDOS_PAD_BUTTON_H - 4, EDGE);
-			fill(rgb, stride_px, x + 3, y + 3, QDOS_PAD_BUTTON_W - 6, QDOS_PAD_BUTTON_H - 6, face);
+			key_tint tint = TINT_NONE;
+			if (is_modifier && selects == layer)
+				tint = TINT_FULL;
+			else if (changed)
+				tint = TINT_SOFT;
+
+			// The shift legend, printed on the case above the key rather than
+			// on it. Always there, whichever layer is showing: the point of
+			// printing it is to answer "what does shift do here" without
+			// having to press shift and look.
+			if (b->symbol.label != NULL) {
+				const int sw = qdos_padfont_advance(QDOS_PADFACE_SHIFT, b->symbol.label);
+				const int sx = x0 + col * QDOS_PAD_BUTTON_W + (QDOS_PAD_BUTTON_W - sw) / 2;
+				label(&cv, QDOS_PADFACE_SHIFT, sx,
+						y0 + row * QDOS_PAD_BUTTON_H + QDOS_SHIFT_LABEL_BASELINE, b->symbol.label,
+						layer == QDOS_PAD_SYMBOL ? SHIFT_INK : SHIFT_INK_DIM);
+			}
+
+			draw_key(&cv, x, y, group_of(b, row), tint, down);
 
 			const char* text = live ? shown->label : b->plain.label;
 			if (text == NULL)
 				continue;
 
-			const int len = (int)strlen(text);
-			label(rgb, stride_px, x + (QDOS_PAD_BUTTON_W - len * QDOS_FONT_W) / 2,
-					y + (QDOS_PAD_BUTTON_H - QDOS_FONT_H) / 2, text, live ? TEXT : TEXT_DIM);
+			// Centred on the cap box rather than the font's full height, so a
+			// cap with a descender in it sits where the eye expects instead of
+			// riding high to make room below
+			const int width = qdos_padfont_advance(QDOS_PADFACE_CAP, text);
+			const int cap = qdos_padfont_cap_height(QDOS_PADFACE_CAP);
+			label(&cv, QDOS_PADFACE_CAP, x + (QDOS_KEY_W - width) / 2, y + (QDOS_KEY_H + cap) / 2,
+					text, live ? TEXT : TEXT_DIM);
 		}
 	}
 }
 
+/**
+ * @brief The case, drawn around the panel and the keypad
+ *
+ * Lit from the top left, as the keys are: the top and left edges catch the
+ * light, the bottom and right fall away, and a dark line runs immediately
+ * around the glass so the panel reads as inset rather than painted on.
+ */
+void qdos_frame_draw(uint8_t* rgb, int stride_px) {
+	const canvas cv = {
+			.rgb = rgb,
+			.stride = stride_px,
+			.left = 0,
+			.right = QDOS_WINDOW_W,
+			.top = 0,
+			.bottom = QDOS_WINDOW_H,
+	};
+
+	// The recess the panel and the keypad sit in, one pixel larger than both
+	const int rx = QDOS_PANEL_X - 1, ry = QDOS_PANEL_Y - 1;
+	const int rw = QDOS_SCREEN_W + 2, rh = QDOS_SCREEN_H + QDOS_PAD_H + 2;
+
+	// Only the border is ours. The panel is written straight from the
+	// framebuffer and the keypad draws itself, so painting across either would
+	// erase whichever of them ran first.
+	for (int y = 0; y < QDOS_WINDOW_H; y++) {
+		uint8_t c[3];
+		mix(FRAME_TOP, FRAME_BOTTOM, y, QDOS_WINDOW_H - 1, c);
+
+		if (y < ry || y >= ry + rh) {
+			fill(&cv, 0, y, QDOS_WINDOW_W, 1, c);
+			continue;
+		}
+		fill(&cv, 0, y, rx, 1, c);
+		fill(&cv, rx + rw, y, QDOS_WINDOW_W - rx - rw, 1, c);
+	}
+
+	// Lit from the top left, as the keys are: the top and left edges of the
+	// shell catch the light and the other two fall away
+	uint8_t c[3];
+	static const uint8_t WHITE[3] = {0xFF, 0xFF, 0xFF};
+	mix(FRAME_TOP, WHITE, 1, 5, c);
+	fill(&cv, 0, 0, QDOS_WINDOW_W, 1, c);
+	fill(&cv, 0, 0, 1, QDOS_WINDOW_H, c);
+
+	mix(FRAME_BOTTOM, BEZEL_SEAM, 1, 2, c);
+	fill(&cv, 0, QDOS_WINDOW_H - 1, QDOS_WINDOW_W, 1, c);
+	fill(&cv, QDOS_WINDOW_W - 1, 0, 1, QDOS_WINDOW_H, c);
+
+	// A dark line all the way round the recess, so the glass reads as set into
+	// the case rather than printed on it. Every side of it is border, not panel.
+	fill(&cv, rx, ry, rw, 1, BEZEL_SEAM);
+	fill(&cv, rx, ry + rh - 1, rw, 1, BEZEL_SEAM);
+	fill(&cv, rx, ry, 1, rh, BEZEL_SEAM);
+	fill(&cv, rx + rw - 1, ry, 1, rh, BEZEL_SEAM);
+
+	/*
+	 * The name, above the glass and flush with its left edge, so the two line
+	 * up rather than the name floating loose over the middle of the panel.
+	 *
+	 * Centred on the whole of the case above the glass rather than on its own
+	 * band: there is no seam between the band and the border over it, so the
+	 * eye reads all of it as one space and text centred in the band alone sits
+	 * visibly low in it.
+	 *
+	 * Set in the keycap face but a shade duller -- it is printed on the case,
+	 * not moulded into a key, and should not compete with one.
+	 */
+	const int cap = qdos_padfont_cap_height(QDOS_PADFACE_CAP);
+	label(&cv, QDOS_PADFACE_CAP, QDOS_PANEL_X, (QDOS_PANEL_Y - 1 + cap) / 2, QDOS_NAMEPLATE,
+			NAMEPLATE_INK);
+}
+
 const qdos_pad_button* qdos_pad_at(int x, int y) {
-	const int py = y - QDOS_SCREEN_H;
-	if (py < 0 || x < 0 || x >= QDOS_SCREEN_W || py >= QDOS_PAD_H)
+	const int px_ = x - QDOS_PAD_X;
+	const int py = y - QDOS_PAD_Y;
+	if (px_ < 0 || py < 0 || px_ >= QDOS_PAD_W || py >= QDOS_PAD_H)
 		return NULL;
 
-	return &KEYPAD[py / QDOS_PAD_BUTTON_H][x / QDOS_PAD_BUTTON_W];
+	return &KEYPAD[py / QDOS_PAD_BUTTON_H][px_ / QDOS_PAD_BUTTON_W];
 }
 
 const qdos_pad_button* qdos_pad_button_at(int col, int row) {

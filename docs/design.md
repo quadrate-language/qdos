@@ -7,7 +7,9 @@ The OS is C. The shell is [Quadrate](https://quad.r8.rs) — a stack language, o
 device whose natural input model is RPN. The calculator's input language and its
 system language are the same thing.
 
-Target: **Raspberry Pi Zero 2 W** (ARMv8 / Cortex-A53).
+Target: **Raspberry Pi Zero W** (ARMv6 / ARM1176JZF-S at 1 GHz, 512 MB). The
+Zero 2 W (ARMv8 / Cortex-A53) is kept as a second target — see
+[Cross-compiling for the Pi](#cross-compiling-for-the-pi).
 
 ## Architecture
 
@@ -40,12 +42,15 @@ process and LLVM startup:
 | `lib/qd` (LLVM ORC JIT), via `quadrepl` | ~83 ms | `libqd.so` 18 MB + `libLLVM.so` 164 MB, plus `cc`, `nm` and a linker on the device |
 | `lib/interp` | **~7 µs** | `libinterp.a` 452 KB + `librt.a` 376 KB + `libqc.a` 2.4 MB |
 
-About twelve thousand times. A Cortex-A53 at 1 GHz is roughly 8–15× slower than
-the desktop these were measured on, which puts the JIT near a second to evaluate
-`2 3 +` and the interpreter around 100 µs. One of those is a calculator.
+About twelve thousand times. Scaling to the target is an estimate rather than a
+measurement — nothing has been timed on a Pi — but an in-order single-issue
+ARM1176 at 1 GHz is somewhere around 25–50× slower than the desktop these were
+measured on, which puts the JIT at several seconds to evaluate `2 3 +` and the
+interpreter in the low hundreds of microseconds. One of those is a calculator.
 
 The footprint column matters as much as the latency: the JIT path needs a C
-toolchain present at run time, because `qd_build()` spawns one.
+toolchain present at run time, because `qd_build()` spawns one, and a 164 MB
+`libLLVM.so` against the board's 512 MB is its own argument.
 
 ### Errors must not power the machine off
 
@@ -124,9 +129,14 @@ still gets the diagnostic and `_exit(1)`. Quadrate's suite passes: 2060 tests.
 ./cross/run.sh
 ```
 
-Builds a container with an aarch64 toolchain and QEMU, cross-compiles the
-Quadrate libraries and QDOS for Cortex-A53, and **runs every test under
-emulation**. No host packages needed beyond Docker.
+Builds a container with an ARM toolchain and QEMU, cross-compiles the Quadrate
+libraries and QDOS, and **runs every test under emulation**. No host packages
+needed beyond Docker. `QDOS_ARCH` picks the target, defaulting to the Zero W:
+
+| `QDOS_ARCH` | board | flags |
+|---|---|---|
+| `armv6` (default) | Zero W | `-mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard` |
+| `aarch64` | Zero 2 W | `-mcpu=cortex-a53` |
 
 The Quadrate side is configured with `-Dbuild_tools=false`, which drops the
 command-line tools and with them the LLVM requirement. `lib/rt`, `lib/qc` and
@@ -134,11 +144,13 @@ command-line tools and with them the LLVM requirement. `lib/rt`, `lib/qc` and
 
 ### What that proves, and what it does not
 
-Passing under QEMU is a real result: it covers the 64-bit ARM ABI, alignment,
-struct layout, `setjmp`/`longjmp` on a different architecture, and the pixel
-packing. Combined with a native run under `-funsigned-char` (ARM's `char` is
-unsigned where x86's is signed), the portability questions that usually bite are
-answered.
+Passing under QEMU is a real result: it covers the ARM ABI on both targets —
+32-bit hard-float on the Zero W, 64-bit on the Zero 2 W — alignment, struct
+layout, `setjmp`/`longjmp` on a different architecture, and the pixel packing.
+Combined with a native run under `-funsigned-char` (ARM's `char` is unsigned
+where x86's is signed), the portability questions that usually bite are
+answered. The 32-bit target is the one that matters most here: it is where
+pointer and `long` width differ from the desktop.
 
 It does not cover the device interfaces — but those do not need a Pi either,
 because they are kernel-generic. Both are exercised against the real kernel:

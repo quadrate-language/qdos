@@ -6,7 +6,7 @@
 #include "check.h"
 
 #include "../src/hal/sim/keypad_ui.h"
-#include "../src/ui/font16x24.h"
+#include "../src/hal/sim/padfont.h"
 
 #include <stdlib.h>
 
@@ -26,7 +26,11 @@ static void test_every_slot_is_filled(void) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			CHECK(b != NULL);
-			CHECK(b->plain.label != NULL && b->plain.label[0] != '\0');
+
+			// Every button does something on the plain layer, so it has a
+			// label -- though a soft key's is empty, the display naming it
+			// instead. NULL is the one thing it may not be.
+			CHECK(b->plain.label != NULL);
 
 			const qdos_pad_action* layers[2] = {&b->plain, &b->symbol};
 			for (int l = 0; l < 2; l++) {
@@ -46,68 +50,520 @@ static void test_every_slot_is_filled(void) {
 	CHECK(qdos_pad_button_at(0, QDOS_PAD_ROWS) == NULL);
 }
 
+/**
+ * Measured in the font that actually draws them, against the face of the key
+ * rather than the whole cell. Counting characters says nothing once the font
+ * is proportional: 'l' and 'W' are not the same width.
+ */
 static void test_labels_fit_their_button(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			CHECK((int)strlen(b->plain.label) * QDOS_FONT_W <= QDOS_PAD_BUTTON_W);
-			if (b->symbol.label != NULL)
-				CHECK((int)strlen(b->symbol.label) * QDOS_FONT_W <= QDOS_PAD_BUTTON_W);
+			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
+
+			for (int l = 0; l < 3; l++) {
+				if (layers[l]->label == NULL)
+					continue;
+
+				const int w = qdos_padfont_advance(QDOS_PADFACE_CAP, layers[l]->label);
+				if (w > QDOS_KEY_LABEL_W)
+					fprintf(stderr, "  '%s' sets %dpx, key holds %d\n", layers[l]->label, w,
+							QDOS_KEY_LABEL_W);
+				CHECK(w <= QDOS_KEY_LABEL_W);
+
+				// A cap that measures nothing draws nothing, which is only
+				// right for the soft keys
+				CHECK(w > 0 || layers[l]->label[0] == '\0');
+			}
 		}
 	}
 }
 
-static void test_hit_testing(void) {
-	CHECK(qdos_pad_at(10, 0) == NULL);
-	CHECK(qdos_pad_at(10, QDOS_SCREEN_H - 1) == NULL);
-
-	const qdos_pad_button* first = qdos_pad_at(1, QDOS_SCREEN_H + 1);
-	CHECK(first == qdos_pad_button_at(0, 0));
-
-	const qdos_pad_button* last =
-			qdos_pad_at(QDOS_SCREEN_W - 1, QDOS_SCREEN_H + QDOS_PAD_H - 1);
-	CHECK(last == qdos_pad_button_at(QDOS_PAD_COLS - 1, QDOS_PAD_ROWS - 1));
-
-	for (int col = 0; col < QDOS_PAD_COLS; col++) {
-		const int x = col * QDOS_PAD_BUTTON_W + QDOS_PAD_BUTTON_W / 2;
-		CHECK(qdos_pad_at(x, QDOS_SCREEN_H + 5) == qdos_pad_button_at(col, 0));
-	}
+/**
+ * The shift legends fit their cell and clear the key below them.
+ *
+ * They are printed on the case, not on a key, so they have the whole cell to
+ * set in -- but a descender that reaches the key's top edge looks like a
+ * printing fault, and one wider than the cell runs into its neighbour.
+ */
+static void test_shift_legends_fit_above_their_key(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		const int y = QDOS_SCREEN_H + row * QDOS_PAD_BUTTON_H + QDOS_PAD_BUTTON_H / 2;
-		CHECK(qdos_pad_at(5, y) == qdos_pad_button_at(0, row));
-	}
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const char* legend = qdos_pad_button_at(col, row)->symbol.label;
+			if (legend == NULL)
+				continue;
 
-	CHECK(qdos_pad_at(-1, QDOS_SCREEN_H + 5) == NULL);
-	CHECK(qdos_pad_at(QDOS_SCREEN_W, QDOS_SCREEN_H + 5) == NULL);
-	CHECK(qdos_pad_at(5, QDOS_SCREEN_H + QDOS_PAD_H) == NULL);
+			const int w = qdos_padfont_advance(QDOS_PADFACE_SHIFT, legend);
+			if (w > QDOS_PAD_BUTTON_W - 4)
+				fprintf(stderr, "  legend '%s' sets %dpx, cell holds %d\n", legend, w,
+						QDOS_PAD_BUTTON_W - 4);
+			CHECK(w > 0 && w <= QDOS_PAD_BUTTON_W - 4);
+
+			// Every glyph, top and bottom, against the band it has to sit in
+			for (const char* p = legend; *p; p++) {
+				const qdos_padglyph* g = qdos_padfont_glyph(QDOS_PADFACE_SHIFT, (unsigned char)*p);
+				CHECK(g != NULL);
+				if (g == NULL || g->h == 0)
+					continue;
+
+				const int top = QDOS_SHIFT_LABEL_BASELINE + g->by;
+				const int bottom = top + g->h - 1;
+				if (bottom >= QDOS_KEY_INSET_TOP)
+					fprintf(stderr, "  legend '%s' reaches row %d, key starts at %d\n", legend,
+							bottom, QDOS_KEY_INSET_TOP);
+				CHECK(top >= 0);
+				CHECK(bottom < QDOS_KEY_INSET_TOP);
+			}
+		}
+	}
 }
 
+/** A legend belongs to the key under it, so it has to sit nearer that one. */
+static void test_a_legend_sits_nearer_its_own_key(void) {
+	const int cap = qdos_padfont_cap_height(QDOS_PADFACE_SHIFT);
+
+	// Gap from the legend down to its own key, and up to the key above it
+	const int below = QDOS_KEY_INSET_TOP - QDOS_SHIFT_LABEL_BASELINE;
+	const int above = (QDOS_SHIFT_LABEL_BASELINE - cap) + QDOS_KEY_INSET_BOTTOM;
+
+	CHECK(below > 0);
+	CHECK(below < above);
+}
+
+/** Every character a keycap uses has a glyph, or the cap comes out short. */
+static void test_the_font_has_every_keycap_character(void) {
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
+
+			for (int l = 0; l < 3; l++) {
+				const char* label = layers[l]->label;
+				if (label == NULL)
+					continue;
+
+				for (const char* p = label; *p; p++) {
+					const qdos_padglyph* g = qdos_padfont_glyph(QDOS_PADFACE_CAP, (unsigned char)*p);
+					if (g == NULL)
+						fprintf(stderr, "  no glyph for 0x%02x in '%s'\n", (unsigned char)*p, label);
+					CHECK(g != NULL);
+					if (g == NULL)
+						continue;
+
+					// Space is the only one allowed to be blank
+					if (*p != ' ')
+						CHECK(g->w > 0 && g->h > 0);
+					CHECK(g->advance > 0);
+				}
+			}
+		}
+	}
+}
+
+/**
+ * The soft keys carry no inscription, and they are the only ones that do not.
+ *
+ * What they do is printed on the display directly above them and changes with
+ * the mode, so a moulded name would be wrong most of the time. A blank cap
+ * looks like an oversight, which is exactly why it is asserted here.
+ */
+static void test_the_soft_keys_have_blank_caps(void) {
+	static const qdos_key SOFT[QDOS_PAD_COLS] = {QDOS_KEY_SOFT1, QDOS_KEY_SOFT2, QDOS_KEY_SOFT3,
+			QDOS_KEY_SOFT4, QDOS_KEY_SOFT5};
+
+	for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		const qdos_pad_button* b = qdos_pad_button_at(col, 0);
+
+		// Blank, but not absent: it still sends its key
+		CHECK(b->plain.label != NULL);
+		CHECK(b->plain.label[0] == '\0');
+		CHECK(b->plain.key == SOFT[col]);
+		CHECK(qdos_pad_action_for(b, QDOS_PAD_PLAIN) == &b->plain);
+		CHECK(qdos_padfont_advance(QDOS_PADFACE_CAP, b->plain.label) == 0);
+	}
+
+	// The shift key is blank too, for its own reason: its colour says what it
+	// is, and every use of it is printed in that colour above another key.
+	// Between them that is the whole of the blank caps -- anything else blank
+	// is a cap that has gone missing.
+	int blank = 0, blank_soft = 0, blank_shift = 0;
+	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			if (b->plain.label[0] != '\0')
+				continue;
+
+			blank++;
+			if (row == 0)
+				blank_soft++;
+			else if (is_modifier(b, QDOS_PAD_SYMBOL))
+				blank_shift++;
+		}
+	CHECK(blank_soft == QDOS_PAD_COLS);
+	CHECK(blank_shift == 1);
+	CHECK(blank == QDOS_PAD_COLS + 1);
+}
+
+/**
+ * A modifier is known by what it does, not by what it says.
+ *
+ * It used to be told from a key by comparing its cap, which held only while no
+ * two caps matched -- and blanking the shift key put it level with five soft
+ * keys that are blank for an entirely different reason.
+ */
+static void test_a_modifier_is_not_known_by_its_cap(void) {
+	const qdos_pad_button* shift = qdos_pad_button_at(0, 8);
+	const qdos_pad_button* soft = qdos_pad_button_at(0, 0);
+
+	// Same cap, opposite answers
+	CHECK_STR(shift->plain.label, soft->plain.label);
+	CHECK(is_modifier(shift, QDOS_PAD_SYMBOL));
+	CHECK(!is_any_modifier(soft));
+
+	// And a soft key still sends its key rather than switching a layer
+	CHECK(soft->plain.key == QDOS_KEY_SOFT1);
+	CHECK(shift->plain.key == QDOS_KEY_NONE);
+}
+
+/** A blank cap really does leave the key face clear of ink. */
+static void test_a_blank_cap_draws_nothing(void) {
+	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
+	const size_t bytes = (size_t)w * h * 3;
+	uint8_t* buf = calloc(bytes, 1);
+
+	qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN, NULL);
+
+	// The middle of a soft key against the middle of the key below it. A cap
+	// is the brightest thing on a face, so its absence shows in the maximum.
+	int soft_max = 0, labelled_max = 0;
+	for (int y = 4; y < QDOS_KEY_H - 4; y++) {
+		for (int x = 8; x < QDOS_KEY_W - 8; x++) {
+			const int sx = QDOS_PAD_X + QDOS_KEY_INSET_X + x;
+			const size_t soft = ((size_t)(QDOS_PAD_Y + QDOS_KEY_INSET_TOP + y) * w + sx) * 3;
+			const size_t below =
+					((size_t)(QDOS_PAD_Y + QDOS_PAD_BUTTON_H + QDOS_KEY_INSET_TOP + y) * w + sx) * 3;
+
+			if (buf[soft] > soft_max)
+				soft_max = buf[soft];
+			if (buf[below] > labelled_max)
+				labelled_max = buf[below];
+		}
+	}
+
+	// The labelled key reaches the cap's brightness; the blank one stays face
+	CHECK(labelled_max > 200);
+	CHECK(soft_max < 120);
+
+	free(buf);
+}
+
+/**
+ * Window coordinates, so the case border is part of the sum. A click landing
+ * one key out is a worse fault than a keypad that looks plain.
+ */
+static void test_hit_testing(void) {
+	// The panel and the case around it are not the keypad
+	CHECK(qdos_pad_at(10, 0) == NULL);
+	CHECK(qdos_pad_at(10, QDOS_PAD_Y - 1) == NULL);
+	CHECK(qdos_pad_at(QDOS_PAD_X - 1, QDOS_PAD_Y + 5) == NULL);
+	CHECK(qdos_pad_at(QDOS_PAD_X + QDOS_PAD_W, QDOS_PAD_Y + 5) == NULL);
+	CHECK(qdos_pad_at(5, QDOS_PAD_Y + QDOS_PAD_H) == NULL);
+	CHECK(qdos_pad_at(-1, QDOS_PAD_Y + 5) == NULL);
+
+	// The very first and very last pixel of the pad belong to the corner keys
+	CHECK(qdos_pad_at(QDOS_PAD_X, QDOS_PAD_Y) == qdos_pad_button_at(0, 0));
+	CHECK(qdos_pad_at(QDOS_PAD_X + QDOS_PAD_W - 1, QDOS_PAD_Y + QDOS_PAD_H - 1)
+			== qdos_pad_button_at(QDOS_PAD_COLS - 1, QDOS_PAD_ROWS - 1));
+
+	// Every cell, hit at its centre
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const int x = QDOS_PAD_X + col * QDOS_PAD_BUTTON_W + QDOS_PAD_BUTTON_W / 2;
+			const int y = QDOS_PAD_Y + row * QDOS_PAD_BUTTON_H + QDOS_PAD_BUTTON_H / 2;
+			CHECK(qdos_pad_at(x, y) == qdos_pad_button_at(col, row));
+		}
+	}
+
+	// And at both edges of a cell, since a boundary off by one is invisible
+	for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		const int left = QDOS_PAD_X + col * QDOS_PAD_BUTTON_W;
+		CHECK(qdos_pad_at(left, QDOS_PAD_Y + 5) == qdos_pad_button_at(col, 0));
+		CHECK(qdos_pad_at(left + QDOS_PAD_BUTTON_W - 1, QDOS_PAD_Y + 5)
+				== qdos_pad_button_at(col, 0));
+	}
+}
+
+/** The case surrounds the panel on every side, and the panel is still 1:1. */
+static void test_window_geometry(void) {
+	CHECK(QDOS_WINDOW_W == QDOS_SCREEN_W + 2 * QDOS_FRAME);
+
+	// Border, nameplate, glass, keypad, border -- and nothing unaccounted for
+	CHECK(QDOS_WINDOW_H
+			== QDOS_FRAME + QDOS_NAMEPLATE_H + QDOS_SCREEN_H + QDOS_PAD_H + QDOS_FRAME);
+
+	// The name sits above the glass, never on it
+	CHECK(QDOS_NAMEPLATE_H > 0);
+	CHECK(QDOS_PANEL_Y == QDOS_FRAME + QDOS_NAMEPLATE_H);
+
+	// The keypad sits directly under the panel, both inset by the same border
+	CHECK(QDOS_PAD_X == QDOS_PANEL_X);
+	CHECK(QDOS_PAD_Y == QDOS_PANEL_Y + QDOS_SCREEN_H);
+
+	// Nothing overhangs the window
+	CHECK(QDOS_PAD_X + QDOS_PAD_W + QDOS_FRAME == QDOS_WINDOW_W);
+	CHECK(QDOS_PAD_Y + QDOS_PAD_H + QDOS_FRAME == QDOS_WINDOW_H);
+}
+
+/**
+ * Shadows spread and gradients round off, so the drawing has to be clipped
+ * rather than merely careful. Drawn into the middle of a window-sized buffer,
+ * with the margin left blank: anything that leaks shows up as a stray pixel.
+ */
 static void test_draw_stays_in_bounds(void) {
-	const int w = QDOS_SCREEN_W, h = QDOS_PAD_H;
+	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
 	const size_t bytes = (size_t)w * h * 3;
 
-	uint8_t* buf = malloc(bytes + 16);
+	uint8_t* buf = calloc(bytes + 16, 1);
 	memset(buf + bytes, 0xAA, 16); // canary
 
-	qdos_pad_draw(buf, w, 0, QDOS_PAD_PLAIN);
-	qdos_pad_draw(buf, w, 0, QDOS_PAD_ALPHA);
-	qdos_pad_draw(buf, w, 0, QDOS_PAD_SYMBOL);
+	const qdos_pad_layer layers[3] = {QDOS_PAD_PLAIN, QDOS_PAD_ALPHA, QDOS_PAD_SYMBOL};
+	for (int l = 0; l < 3; l++) {
+		memset(buf, 0, bytes);
+		qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, layers[l], NULL);
+
+		int painted = 0, leaked = 0;
+		for (int y = 0; y < h; y++) {
+			for (int x = 0; x < w; x++) {
+				const uint8_t* p = &buf[((size_t)y * w + x) * 3];
+				const bool ink = p[0] || p[1] || p[2];
+				if (!ink)
+					continue;
+
+				const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
+						&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
+				if (in_pad)
+					painted++;
+				else
+					leaked++;
+			}
+		}
+		CHECK(painted > 0);
+		CHECK(leaked == 0);
+	}
 
 	for (int i = 0; i < 16; i++)
 		CHECK(buf[bytes + i] == 0xAA);
 
-	int painted = 0;
-	for (size_t i = 0; i < bytes; i++)
-		if (buf[i] != 0)
-			painted++;
-	CHECK(painted > 0);
+	free(buf);
+}
+
+/**
+ * A held key looks different, and only that key does.
+ *
+ * It is the simulator's only acknowledgement of a click -- there is no key
+ * under the pointer to move on its own -- so it has to be visible, has to be
+ * confined to the one key, and has to stay inside the pad while it sinks.
+ */
+static void test_a_pressed_key_is_drawn_sunk(void) {
+	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
+	const size_t bytes = (size_t)w * h * 3;
+
+	uint8_t* loose = calloc(bytes, 1);
+	uint8_t* held = calloc(bytes + 16, 1);
+	memset(held + bytes, 0xAA, 16);
+
+	// The last row, where a key that sinks has the least room left under it
+	const qdos_pad_button* key = qdos_pad_button_at(2, QDOS_PAD_ROWS - 1);
+	CHECK(key != NULL);
+
+	qdos_pad_draw(loose, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN, NULL);
+	qdos_pad_draw(held, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN, key);
+
+	for (int i = 0; i < 16; i++)
+		CHECK(held[bytes + i] == 0xAA);
+
+	const int cx = QDOS_PAD_X + 2 * QDOS_PAD_BUTTON_W;
+	const int cy = QDOS_PAD_Y + (QDOS_PAD_ROWS - 1) * QDOS_PAD_BUTTON_H;
+
+	int changed_inside = 0, changed_outside = 0, leaked = 0;
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const size_t i = ((size_t)y * w + x) * 3;
+			const bool differs = memcmp(&loose[i], &held[i], 3) != 0;
+
+			const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
+					&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
+			if (!in_pad && (held[i] || held[i + 1] || held[i + 2]))
+				leaked++;
+			if (!differs)
+				continue;
+
+			const bool in_cell = x >= cx && x < cx + QDOS_PAD_BUTTON_W && y >= cy
+					&& y < cy + QDOS_PAD_BUTTON_H;
+			if (in_cell)
+				changed_inside++;
+			else
+				changed_outside++;
+		}
+	}
+
+	CHECK(leaked == 0);
+	CHECK(changed_outside == 0); // pressing one key does not redraw its neighbours
+	CHECK(changed_inside > 100); // and it is a change you could actually see
+
+	free(loose);
+	free(held);
+}
+
+/** Every key can be held, including the ones in the corners. */
+static void test_every_key_can_be_pressed(void) {
+	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
+	const size_t bytes = (size_t)w * h * 3;
+	uint8_t* buf = calloc(bytes + 16, 1);
+	memset(buf + bytes, 0xAA, 16);
+
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			memset(buf, 0, bytes);
+			qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN,
+					qdos_pad_button_at(col, row));
+
+			int leaked = 0;
+			for (int y = 0; y < h; y++)
+				for (int x = 0; x < w; x++) {
+					const size_t i = ((size_t)y * w + x) * 3;
+					const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
+							&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
+					if (!in_pad && (buf[i] || buf[i + 1] || buf[i + 2]))
+						leaked++;
+				}
+			CHECK(leaked == 0);
+		}
+	}
+
+	for (int i = 0; i < 16; i++)
+		CHECK(buf[bytes + i] == 0xAA);
+
+	free(buf);
+}
+
+/** The sink has to fit in the gutter, or the bottom row runs off the pad. */
+static void test_key_travel_fits_the_gutter(void) {
+	CHECK(QDOS_KEY_TRAVEL > 0);
+	CHECK(QDOS_KEY_TRAVEL < QDOS_KEY_INSET_BOTTOM);
+}
+
+/**
+ * The name is printed on the case above the glass, and stays there.
+ *
+ * It is the one piece of writing on the machine that is neither a keycap nor
+ * something the display said, so nothing else would notice if it drifted onto
+ * the panel or off the end of the window.
+ */
+static void test_the_nameplate_is_printed_on_the_case(void) {
+	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
+	uint8_t* buf = calloc((size_t)w * h * 3, 1);
+
+	// Set from the panel's left edge, so it has that much of the width to run
+	// into before it reaches the border on the far side
+	const int width = qdos_padfont_advance(QDOS_PADFACE_CAP, QDOS_NAMEPLATE);
+	CHECK(width > 0);
+	CHECK(QDOS_PANEL_X + width <= QDOS_WINDOW_W - QDOS_FRAME);
+
+	// And its cap has to fit the case above the glass, or it collides with it
+	const int cap = qdos_padfont_cap_height(QDOS_PADFACE_CAP);
+	CHECK(cap < QDOS_PANEL_Y);
+
+	qdos_frame_draw(buf, w);
+
+	// Where the ink actually landed, and how far it is from each end of the
+	// case above the glass. Centred means those two are within a pixel.
+	int top = -1, bottom = -1, left = -1, right = -1;
+	for (int y = 0; y < QDOS_PANEL_Y; y++) {
+		for (int x = 0; x < w; x++) {
+			if (buf[((size_t)y * w + x) * 3] <= 0x90)
+				continue;
+
+			if (top < 0)
+				top = y;
+			bottom = y;
+			if (left < 0 || x < left)
+				left = x;
+			if (x > right)
+				right = x;
+		}
+	}
+
+	CHECK(top >= 0); // the name is there at all
+
+	// Flush with the glass below it, give or take the first glyph's bearing
+	CHECK(left >= QDOS_PANEL_X);
+	CHECK(left <= QDOS_PANEL_X + 2);
+	CHECK(right < QDOS_WINDOW_W - QDOS_FRAME);
+
+	const int above = top;
+	const int below = QDOS_PANEL_Y - 1 - bottom;
+	if (above > below + 2 || below > above + 2)
+		fprintf(stderr, "  nameplate sits %d from the top, %d from the glass\n", above, below);
+	CHECK(above <= below + 2);
+	CHECK(below <= above + 2);
+
+	free(buf);
+}
+
+/**
+ * The case paints the border and nothing else.
+ *
+ * The panel is written straight out of the framebuffer and the keypad draws
+ * itself, so a case that painted across either would erase whichever ran
+ * first -- which it did, and the display came out blank.
+ */
+static void test_frame_paints_only_the_border(void) {
+	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
+	const size_t bytes = (size_t)w * h * 3;
+
+	uint8_t* buf = calloc(bytes + 16, 1);
+	memset(buf + bytes, 0xAA, 16);
+
+	qdos_frame_draw(buf, w);
+
+	for (int i = 0; i < 16; i++)
+		CHECK(buf[bytes + i] == 0xAA);
+
+	int border_blank = 0, panel_painted = 0, pad_painted = 0;
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const uint8_t* p = &buf[((size_t)y * w + x) * 3];
+			const bool ink = p[0] || p[1] || p[2];
+
+			const bool in_panel = x >= QDOS_PANEL_X && x < QDOS_PANEL_X + QDOS_SCREEN_W
+					&& y >= QDOS_PANEL_Y && y < QDOS_PANEL_Y + QDOS_SCREEN_H;
+			const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
+					&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
+
+			if (in_panel && ink)
+				panel_painted++;
+			else if (in_pad && ink)
+				pad_painted++;
+			else if (!in_panel && !in_pad && !ink)
+				border_blank++;
+		}
+	}
+
+	CHECK(panel_painted == 0); // the display is the display's business
+	CHECK(pad_painted == 0);
+	CHECK(border_blank == 0); // and the border is entirely the case's
 
 	free(buf);
 }
 
 static void test_shift_layer(void) {
-	const qdos_pad_button* shift = qdos_pad_button_at(0, 8);
-	CHECK(is_modifier(shift, QDOS_PAD_ALPHA));
+	// Left column of the numeric block, between the down arrow and the way
+	// out, under the thumb
+	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
+
+	// Alpha sits beside enter, the other thing reached for mid-word
+	CHECK(is_modifier(qdos_pad_button_at(1, 5), QDOS_PAD_ALPHA));
 
 	// One key per layer and no more, or the state machine has two masters
 	int alpha = 0, symbol = 0;
@@ -136,11 +592,11 @@ static void test_shift_layer(void) {
 }
 
 /**
- * The DM42 block: navigation down the left, the digits in a 3x3, the operators
- * down the right, and enter at the head of the left column -- all of it at the
- * bottom of the pad, with nothing below the numpad.
+ * The numeric block: navigation down the left, the digits in a 3x3, the
+ * operators down the right, and enter at the head of the left column -- all of
+ * it at the bottom of the pad, with nothing below the numpad.
  */
-static void test_dm42_block(void) {
+static void test_numeric_block(void) {
 	static const qdos_key DIGITS[3][3] = {
 		{QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9},
 		{QDOS_KEY_4, QDOS_KEY_5, QDOS_KEY_6},
@@ -160,13 +616,13 @@ static void test_dm42_block(void) {
 	CHECK(qdos_pad_button_at(0, 5)->plain.key == QDOS_KEY_ENTER);
 	CHECK(qdos_pad_button_at(0, 6)->plain.key == QDOS_KEY_UP);
 	CHECK(qdos_pad_button_at(0, 7)->plain.key == QDOS_KEY_DOWN);
-	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_ALPHA));
+	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
 	CHECK(qdos_pad_button_at(0, 9)->plain.key == QDOS_KEY_CLEAR);
 
 	// Off is shift-exit, so it cannot be hit by accident
 	CHECK(qdos_pad_button_at(0, 9)->symbol.key == QDOS_KEY_POWER);
 
-	// The arrows the DM42 has no room for
+	// The arrows there is no room for on the face
 	CHECK(qdos_pad_button_at(0, 6)->symbol.key == QDOS_KEY_LEFT);
 	CHECK(qdos_pad_button_at(0, 7)->symbol.key == QDOS_KEY_RIGHT);
 }
@@ -201,7 +657,7 @@ static void test_default_layer_is_the_calculator(void) {
 	CHECK(syntax >= 20);
 
 	// The catalog needs no key of its own: it is on the soft row
-	CHECK(is_modifier(qdos_pad_button_at(4, 3), QDOS_PAD_SYMBOL));
+	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
 }
 
 /**
@@ -324,12 +780,63 @@ static void test_cap_case_says_whether_it_is_the_word(void) {
 		}
 }
 
-int main(void) {
+/**
+ * @brief Write the keypad as a PPM, for looking at it
+ *
+ * The pad is drawn without SDL so it can be tested; the same property means it
+ * can be rendered to a file and inspected, which is how it gets designed.
+ */
+static int dump_ppm(const char* path, qdos_pad_layer layer, const qdos_pad_button* pressed) {
+	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
+	uint8_t* buf = calloc((size_t)w * h * 3, 1);
+	if (buf == NULL)
+		return 1;
+
+	qdos_frame_draw(buf, w);
+	qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, layer, pressed);
+
+	FILE* f = fopen(path, "wb");
+	if (f == NULL) {
+		free(buf);
+		return 1;
+	}
+	fprintf(f, "P6\n%d %d\n255\n", w, h);
+	fwrite(buf, 1, (size_t)w * h * 3, f);
+	fclose(f);
+	free(buf);
+	return 0;
+}
+
+int main(int argc, char** argv) {
+	if (argc > 2 && strcmp(argv[1], "--dump") == 0) {
+		const qdos_pad_layer layer = (argc > 3 && strcmp(argv[3], "alpha") == 0)
+				? QDOS_PAD_ALPHA
+				: (argc > 3 && strcmp(argv[3], "symbol") == 0) ? QDOS_PAD_SYMBOL : QDOS_PAD_PLAIN;
+		// A fourth argument sinks one key, so the press can be looked at too
+		const qdos_pad_button* pressed =
+				(argc > 4) ? qdos_pad_button_at(atoi(argv[4]) % QDOS_PAD_COLS,
+						atoi(argv[4]) / QDOS_PAD_COLS)
+						   : NULL;
+		return dump_ppm(argv[2], layer, pressed);
+	}
+
 	test_every_slot_is_filled();
 	test_labels_fit_their_button();
+	test_the_font_has_every_keycap_character();
+	test_shift_legends_fit_above_their_key();
+	test_a_legend_sits_nearer_its_own_key();
+	test_the_soft_keys_have_blank_caps();
+	test_a_modifier_is_not_known_by_its_cap();
+	test_a_blank_cap_draws_nothing();
 	test_hit_testing();
+	test_window_geometry();
+	test_a_pressed_key_is_drawn_sunk();
+	test_every_key_can_be_pressed();
+	test_key_travel_fits_the_gutter();
+	test_the_nameplate_is_printed_on_the_case();
+	test_frame_paints_only_the_border();
 	test_shift_layer();
-	test_dm42_block();
+	test_numeric_block();
 	test_a_space_is_reachable();
 	test_default_layer_is_the_calculator();
 	test_default_layer_reaches_the_calculator();

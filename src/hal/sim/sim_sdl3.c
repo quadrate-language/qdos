@@ -30,8 +30,9 @@ static const uint8_t PANEL_PAPER[3] = {0xC9, 0xCE, 0xC6};
 
 /* --- On-screen keypad ----------------------------------------------------- */
 
-#define WINDOW_W QDOS_SCREEN_W
-#define WINDOW_H (QDOS_SCREEN_H + QDOS_PAD_H)
+/* The case adds a border on every side; see keypad_ui.h for the geometry */
+#define WINDOW_W QDOS_WINDOW_W
+#define WINDOW_H QDOS_WINDOW_H
 
 /**
  * @brief Integer scale from panel pixels to window pixels
@@ -63,6 +64,9 @@ typedef struct {
 	const char* pending; ///< Rest of a text button still to be delivered
 	qdos_pad_layer layer;   ///< Which keypad face is showing
 	qdos_pad_layer locked;  ///< What a one-press layer hands back to
+
+	/** Held down by the mouse, drawn sunk until the button comes back up */
+	const qdos_pad_button* pressed;
 
 	/** Staging buffer: the HAL speaks 8-bit gray, the texture wants RGB. */
 	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
@@ -132,7 +136,8 @@ static void sim_shutdown(qdos_hal* hal) {
 
 /** @brief Redraw the keypad over the last panel image and show it */
 static void push_frame(sim_state* st) {
-	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_SCREEN_H, st->layer);
+	qdos_frame_draw(st->rgb, WINDOW_W);
+	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_PAD_X, QDOS_PAD_Y, st->layer, st->pressed);
 
 	SDL_UpdateTexture(st->texture, NULL, st->rgb, WINDOW_W * 3);
 	SDL_RenderClear(st->renderer);
@@ -143,12 +148,17 @@ static void push_frame(sim_state* st) {
 static void sim_present(qdos_hal* hal, const uint8_t* fb) {
 	sim_state* st = (sim_state*)hal->impl;
 
-	for (size_t i = 0; i < QDOS_SCREEN_W * QDOS_SCREEN_H; i++) {
-		const bool lit = fb[i] < PANEL_THRESHOLD;
-		const uint8_t* c = lit ? PANEL_INK : PANEL_PAPER;
-		st->rgb[i * 3 + 0] = c[0];
-		st->rgb[i * 3 + 1] = c[1];
-		st->rgb[i * 3 + 2] = c[2];
+	// One window pixel per panel pixel, inset by the case. Thresholded exactly
+	// as the kernel does, so a stray mid-grey shows up here and not on glass.
+	for (int y = 0; y < QDOS_SCREEN_H; y++) {
+		for (int x = 0; x < QDOS_SCREEN_W; x++) {
+			const bool lit = fb[(size_t)y * QDOS_SCREEN_W + x] < PANEL_THRESHOLD;
+			const uint8_t* c = lit ? PANEL_INK : PANEL_PAPER;
+			uint8_t* p = &st->rgb[(((size_t)(y + QDOS_PANEL_Y)) * WINDOW_W + x + QDOS_PANEL_X) * 3];
+			p[0] = c[0];
+			p[1] = c[1];
+			p[2] = c[2];
+		}
 	}
 
 	push_frame(st);
@@ -189,11 +199,27 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
+			// Up before down, so a release is never mistaken for a press. The
+			// key sinks on the way down and comes back on the way up, which is
+			// the only acknowledgement the simulator can offer -- on the real
+			// machine there is a key under your finger doing it for you.
+			case SDL_EVENT_MOUSE_BUTTON_UP:
+				if (st->pressed != NULL) {
+					st->pressed = NULL;
+					push_frame(st);
+				}
+				break;
+
 			case SDL_EVENT_MOUSE_BUTTON_DOWN: {
 				const qdos_pad_button* b = qdos_pad_at(
 						(int)event.button.x / st->scale, (int)event.button.y / st->scale);
 				if (b == NULL)
 					break;
+
+				// Shown before the key is acted on, so the press lands even
+				// where the action itself changes nothing on screen
+				st->pressed = b;
+				push_frame(st);
 
 				qdos_pad_layer selects;
 				if (qdos_pad_modifier(b, &selects)) {
