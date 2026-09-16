@@ -31,9 +31,9 @@
 
 /*
  * Laid out the way a scientific calculator is: the entry row, then digits in a
- * 3x3 block with the operators down the right and navigation down the left,
- * sitting at the bottom where a thumb expects them. The menu keys stay under
- * the display.
+ * 3x3 block with the operators down the right, Enter at the foot of them, and
+ * navigation down the left, sitting at the bottom where a thumb expects them.
+ * The menu keys stay under the display.
  *
  * A cap in lower case is exactly the word it stands for, so it can be typed as
  * it is written; a cap in capitals is QDOS's own -- an abbreviation too long to
@@ -52,11 +52,13 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 	 * display directly above them, changing with the mode -- so inscribing them
 	 * would be printing a name that is wrong most of the time.
 	 */
+	// Off lives in the far corner from ESC. It used to be ESC's own shift, and
+	// ESC is the key you reach for to back out of a shift pressed by mistake.
 	{BTN(KEY("", QDOS_KEY_SOFT1), NONE, NONE),
 			BTN(KEY("", QDOS_KEY_SOFT2), NONE, NONE),
 			BTN(KEY("", QDOS_KEY_SOFT3), NONE, NONE),
 			BTN(KEY("", QDOS_KEY_SOFT4), NONE, NONE),
-			BTN(KEY("", QDOS_KEY_SOFT5), NONE, NONE)},
+			BTN(KEY("", QDOS_KEY_SOFT5), NONE, KEY("PWR", QDOS_KEY_POWER))},
 
 	// Reciprocal, root and square, then the logarithms
 	{BTN(KEY("1/x", QDOS_KEY_INV), TXT("A", "a"), TXT("(", "(")),
@@ -90,25 +92,34 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 			BTN(KEY("over", QDOS_KEY_OVER), TXT("R", "r"), KEY("STO", QDOS_KEY_STO)),
 			BTN(KEY("rot", QDOS_KEY_ROT), TXT("S", "s"), KEY("RCL", QDOS_KEY_RCL))},
 
-	// Entry and editing. ALPHA sits beside enter, being the other thing you
-	// reach for mid-word.
-	{BTN(KEY("ENTER", QDOS_KEY_ENTER), NONE, TXT("=", "=")),
+	// Entry and editing. ALPHA sits beside delete, being the other thing you
+	// reach for mid-word. DEL rather than an arrow: the arrows move the cursor,
+	// and one glyph cannot mean both.
+	{BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, TXT(";", ";")),
 			MOD(CAP_ALPHA, QDOS_PAD_ALPHA),
 			BTN(KEY(QDOS_GLYPH_PLUSMINUS, QDOS_KEY_NEG), TXT("T", "t"), TXT("[", "[")),
 			BTN(KEY("TAB", QDOS_KEY_TAB), TXT("U", "u"), TXT("]", "]")),
-			BTN(KEY(QDOS_GLYPH_LEFT, QDOS_KEY_BACKSPACE), NONE, TXT(";", ";"))},
+			BTN(KEY(QDOS_GLYPH_DIVIDE, QDOS_KEY_DIV), TXT("V", "v"), TXT("shl", " shl "))},
 
+	/*
+	 * The digits, and nothing but the digits, on every layer. A name has
+	 * numbers in it -- i64, log10 -- so a locked ALPHA that took the number
+	 * keys away meant leaving the layer to finish the word. The letters that
+	 * used to sit here are down the operator column, which is idle while a
+	 * name is being typed.
+	 */
 	{BTN(KEY(QDOS_GLYPH_UP, QDOS_KEY_UP), NONE, KEY(QDOS_GLYPH_LEFT, QDOS_KEY_LEFT)),
-			BTN(KEY("7", QDOS_KEY_7), TXT("V", "v"), TXT("and", " and ")),
-			BTN(KEY("8", QDOS_KEY_8), TXT("W", "w"), TXT("or", " or ")),
-			BTN(KEY("9", QDOS_KEY_9), TXT("X", "x"), TXT("xor", " xor ")),
-			BTN(KEY(QDOS_GLYPH_DIVIDE, QDOS_KEY_DIV), TXT("Y", "y"), TXT("shl", " shl "))},
+			BTN(KEY("7", QDOS_KEY_7), NONE, TXT("and", " and ")),
+			BTN(KEY("8", QDOS_KEY_8), NONE, TXT("or", " or ")),
+			BTN(KEY("9", QDOS_KEY_9), NONE, TXT("xor", " xor ")),
+			BTN(KEY(QDOS_GLYPH_TIMES, QDOS_KEY_MUL), TXT("W", "w"), TXT("<", "<"))},
 
+	// Underscore on shift-minus, where both keyboards this reads from put it
 	{BTN(KEY(QDOS_GLYPH_DOWN, QDOS_KEY_DOWN), NONE, KEY(QDOS_GLYPH_RIGHT, QDOS_KEY_RIGHT)),
-			BTN(KEY("4", QDOS_KEY_4), TXT("Z", "z"), TXT("not", " not ")),
-			BTN(KEY("5", QDOS_KEY_5), TXT("_", "_"), TXT("==", " == ")),
+			BTN(KEY("4", QDOS_KEY_4), NONE, TXT("not", " not ")),
+			BTN(KEY("5", QDOS_KEY_5), NONE, TXT("==", " == ")),
 			BTN(KEY("6", QDOS_KEY_6), NONE, TXT("!=", " != ")),
-			BTN(KEY(QDOS_GLYPH_TIMES, QDOS_KEY_MUL), NONE, TXT("<", "<"))},
+			BTN(KEY("-", QDOS_KEY_SUB), TXT("X", "x"), TXT("_", "_"))},
 
 	// The shift key, in the left column of the numeric block under the thumb,
 	// between the down arrow and the way out
@@ -116,14 +127,22 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 			BTN(KEY("1", QDOS_KEY_1), NONE, TXT(">", ">")),
 			BTN(KEY("2", QDOS_KEY_2), NONE, TXT("<=", " <= ")),
 			BTN(KEY("3", QDOS_KEY_3), NONE, TXT(">=", " >= ")),
-			BTN(KEY("-", QDOS_KEY_SUB), NONE, TXT("INC", " ++ "))},
+			BTN(KEY("+", QDOS_KEY_ADD), TXT("Y", "y"), TXT("DEC", " -- "))},
 
-	// The way out, with off on its shift layer so it cannot be hit by accident
-	{BTN(KEY("ESC", QDOS_KEY_CLEAR), NONE, KEY("PWR", QDOS_KEY_POWER)),
+	/*
+	 * Enter in the corner under the thumb, at the foot of the operator column,
+	 * where every calculator puts it -- it is pressed once per value entered
+	 * and used to be the furthest key on the pad from the digits.
+	 *
+	 * ':' is a letter on the ALPHA layer, having nowhere else to go, so it is
+	 * also shift-point: where a Swedish keyboard keeps it, and the one piece
+	 * of Quadrate syntax common enough to need reaching without unlocking.
+	 */
+	{BTN(KEY("ESC", QDOS_KEY_CLEAR), NONE, NONE),
 			BTN(KEY("0", QDOS_KEY_0), NONE, TXT("len", " len ")),
-			BTN(KEY(".", QDOS_KEY_DOT), NONE, TXT("nth", " nth ")),
-			BTN(TXT(":", ":"), NONE, TXT(QDOS_GLYPH_PI, "pi ")),
-			BTN(KEY("+", QDOS_KEY_ADD), NONE, TXT("DEC", " -- "))},
+			BTN(KEY(".", QDOS_KEY_DOT), NONE, TXT(":", ":")),
+			BTN(TXT(":", ":"), TXT("Z", "z"), TXT(QDOS_GLYPH_PI, "pi ")),
+			BTN(KEY("ENTER", QDOS_KEY_ENTER), NONE, TXT("=", "="))},
 };
 
 #undef KEY

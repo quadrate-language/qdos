@@ -562,7 +562,7 @@ static void test_shift_layer(void) {
 	// out, under the thumb
 	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
 
-	// Alpha sits beside enter, the other thing reached for mid-word
+	// Alpha sits beside delete, the other thing reached for mid-word
 	CHECK(is_modifier(qdos_pad_button_at(1, 5), QDOS_PAD_ALPHA));
 
 	// One key per layer and no more, or the state machine has two masters
@@ -609,22 +609,102 @@ static void test_numeric_block(void) {
 	CHECK(qdos_pad_button_at(1, 9)->plain.key == QDOS_KEY_0);
 	CHECK(qdos_pad_button_at(2, 9)->plain.key == QDOS_KEY_DOT);
 
+	// The operators down the right, with Enter at the foot of them: it is
+	// pressed once per value entered, so it sits where the thumb already is
 	static const qdos_key OPS[4] = {QDOS_KEY_DIV, QDOS_KEY_MUL, QDOS_KEY_SUB, QDOS_KEY_ADD};
 	for (int r = 0; r < 4; r++)
-		CHECK(qdos_pad_button_at(4, r + 6)->plain.key == OPS[r]);
+		CHECK(qdos_pad_button_at(4, r + 5)->plain.key == OPS[r]);
 
-	CHECK(qdos_pad_button_at(0, 5)->plain.key == QDOS_KEY_ENTER);
+	CHECK(qdos_pad_button_at(4, 9)->plain.key == QDOS_KEY_ENTER);
+
+	CHECK(qdos_pad_button_at(0, 5)->plain.key == QDOS_KEY_BACKSPACE);
 	CHECK(qdos_pad_button_at(0, 6)->plain.key == QDOS_KEY_UP);
 	CHECK(qdos_pad_button_at(0, 7)->plain.key == QDOS_KEY_DOWN);
 	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
 	CHECK(qdos_pad_button_at(0, 9)->plain.key == QDOS_KEY_CLEAR);
 
-	// Off is shift-exit, so it cannot be hit by accident
-	CHECK(qdos_pad_button_at(0, 9)->symbol.key == QDOS_KEY_POWER);
+	// Off is the far corner from the way out, and the way out has no shift at
+	// all: ESC is what you press to back out of a shift you did not mean
+	CHECK(qdos_pad_button_at(4, 0)->symbol.key == QDOS_KEY_POWER);
+	CHECK(qdos_pad_button_at(0, 9)->symbol.label == NULL);
 
 	// The arrows there is no room for on the face
 	CHECK(qdos_pad_button_at(0, 6)->symbol.key == QDOS_KEY_LEFT);
 	CHECK(qdos_pad_button_at(0, 7)->symbol.key == QDOS_KEY_RIGHT);
+}
+
+/**
+ * Every digit types a digit on every layer.
+ *
+ * Names have numbers in them, so a locked ALPHA that swallowed the number keys
+ * meant leaving the layer part-way through a word -- and it swallowed 4, 5, 7,
+ * 8 and 9 while leaving 0 to 3 and 6 alone, which is not a rule anyone could
+ * hold in their head.
+ */
+static void test_digits_survive_every_layer(void) {
+	static const qdos_key DIGITS[] = {QDOS_KEY_0, QDOS_KEY_1, QDOS_KEY_2, QDOS_KEY_3, QDOS_KEY_4,
+			QDOS_KEY_5, QDOS_KEY_6, QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9, QDOS_KEY_DOT};
+
+	int found = 0;
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+
+			bool is_digit = false;
+			for (size_t i = 0; i < sizeof(DIGITS) / sizeof(*DIGITS); i++)
+				is_digit = is_digit || b->plain.key == DIGITS[i];
+			if (!is_digit)
+				continue;
+
+			found++;
+			const qdos_pad_action* alpha = qdos_pad_action_for(b, QDOS_PAD_ALPHA);
+			CHECK(alpha == &b->plain);
+		}
+	}
+	CHECK(found == (int)(sizeof(DIGITS) / sizeof(*DIGITS)));
+}
+
+/** All twenty-six of them, once each, or a name cannot be typed. */
+static void test_the_alphabet_is_complete(void) {
+	int seen[26] = {0};
+
+	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const qdos_pad_action* a = &qdos_pad_button_at(col, row)->alpha;
+			if (a->label == NULL || a->text == NULL)
+				continue;
+
+			// One lower-case letter, typed as it is printed
+			CHECK(strlen(a->text) == 1);
+			const char ch = a->text[0];
+			CHECK(ch >= 'a' && ch <= 'z');
+			seen[ch - 'a']++;
+		}
+
+	for (int i = 0; i < 26; i++)
+		CHECK(seen[i] == 1);
+}
+
+/**
+ * The letters cost the symbols they displaced, so those need a shift key.
+ *
+ * ':' is the piece of Quadrate syntax a name is most often glued to, and '_'
+ * is inside the names themselves; both would otherwise need ALPHA turned off
+ * part-way through a word, which is the thing this layout is trying to stop.
+ */
+static void test_what_the_letters_displaced_is_still_reachable(void) {
+	const char* wanted[] = {":", "_"};
+
+	for (size_t w = 0; w < sizeof(wanted) / sizeof(*wanted); w++) {
+		int found = 0;
+		for (int row = 0; row < QDOS_PAD_ROWS; row++)
+			for (int col = 0; col < QDOS_PAD_COLS; col++) {
+				const qdos_pad_action* s = &qdos_pad_button_at(col, row)->symbol;
+				if (s->text != NULL && strcmp(s->text, wanted[w]) == 0)
+					found++;
+			}
+		CHECK(found == 1);
+	}
 }
 
 /** Without a space key, two numbers typed in a row become one. */
@@ -837,6 +917,9 @@ int main(int argc, char** argv) {
 	test_frame_paints_only_the_border();
 	test_shift_layer();
 	test_numeric_block();
+	test_digits_survive_every_layer();
+	test_the_alphabet_is_complete();
+	test_what_the_letters_displaced_is_still_reachable();
 	test_a_space_is_reachable();
 	test_default_layer_is_the_calculator();
 	test_default_layer_reaches_the_calculator();

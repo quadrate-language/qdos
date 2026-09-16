@@ -124,6 +124,34 @@ used to keep its tail, which on a number means dropping the leading digits and
 leaving something that still reads as an answer; it now moves to exponent form,
 and only text is cut — marked, and from the end.
 
+### Four rules the keypad follows
+
+Fifty keys on three faces, and the layout is decided by what a face must never
+take away from you.
+
+- **The digits are digits on every layer.** A name has numbers in it — `i64`,
+  `f64`, `log10` — so an ALPHA layer that swallowed the number keys meant
+  unlocking part-way through a word. It used to swallow 4, 5, 7, 8 and 9 while
+  leaving 0 to 3 and 6 alone, which is not a rule anyone could hold. The
+  alphabet now runs A–S in reading order and then T to Z down the operator
+  column, which is idle while a name is being typed. That is the whole of the
+  free space: 50 keys, less 12 for navigation and the soft row, less the eleven
+  digits and the space bar, is exactly 26.
+- **What the letters displaced keeps a shift key.** `:` and `_` are inside the
+  names themselves — 91,500 and 39,628 occurrences across the Quadrate tree
+  against 174 semicolons, none of them syntax — so both sit on the shift layer,
+  where a Swedish and a US keyboard respectively already put them. Shift lasts
+  one press and hands back to the locked layer, so neither costs an unlock.
+- **A glyph means one thing.** Backspace was drawn `←` while the shift legend
+  on the up arrow was also `←` for cursor-left. It is `DEL` now.
+- **The two keys nobody wants to press by reflex are apart.** Off was the shift
+  of `ESC`, and `ESC` is exactly the key someone reaches for to back out of a
+  shift they did not mean — so it is the far corner of the pad, above the
+  top-right soft key, and `ESC` has no shift at all. Enter went the other way:
+  it is pressed once per value entered and was the furthest key from the
+  digits, so it is at the foot of the operator column under the thumb, where
+  every calculator puts it.
+
 ### Typing postfix on a keypad laid out for infix
 
 `5 - 3` is not an error in Quadrate. It pushes 5, subtracts that from whatever
