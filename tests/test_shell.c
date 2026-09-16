@@ -13,6 +13,7 @@
 
 #include "qdos_version.h"
 #include "shell/mathwords.h"
+#include "shell/storage.h"
 
 #include <stdlib.h>
 
@@ -28,6 +29,16 @@ typedef struct {
 	size_t stop_after;
 	uint8_t stopped_fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	bool stopped;
+
+	/*
+	 * A clock that stands still unless a test winds it on, so every script that
+	 * is not about the blink sees the cursor exactly where it always was.
+	 */
+	uint32_t ms;	  ///< Fake monotonic clock
+	uint32_t ms_step; ///< What each wait() adds: idling is what passes time
+
+	size_t waits;	   ///< wait() calls so far
+	size_t wait_budget; ///< Passes to keep running for after the script is spent
 } stub_state;
 
 static int stub_init(qdos_hal* hal) {
@@ -74,11 +85,18 @@ static bool stub_poll_key(qdos_hal* hal, qdos_key_event* out) {
 
 static bool stub_running(qdos_hal* hal) {
 	stub_state* st = hal->impl;
-	return st->next < st->count;
+	return st->next < st->count || st->waits < st->wait_budget;
 }
 
-static void stub_idle(qdos_hal* hal) {
-	(void)hal;
+static uint32_t stub_ticks_ms(qdos_hal* hal) {
+	return ((stub_state*)hal->impl)->ms;
+}
+
+static void stub_wait(qdos_hal* hal, int timeout_ms) {
+	(void)timeout_ms;
+	stub_state* st = hal->impl;
+	st->waits++;
+	st->ms += st->ms_step;
 }
 
 /* In-memory storage, enough slots for registers and a saved session. */
@@ -106,6 +124,7 @@ static void store_reset(void) {
 	memset(g_store, 0, sizeof(g_store));
 	g_usb_supported = false;
 	g_usb_shared = false;
+	g_usb_fails = false; // or one failing-gadget test poisons every later one
 	g_usb_calls = 0;
 }
 
@@ -183,6 +202,29 @@ static void seed_inbox(const char* name, const char* source) {
 	seed_scope(QDOS_SCOPE_INBOX, name, source);
 }
 
+/** Put a setting straight into the store, as other firmware might have left it */
+static void seed_setting(const char* key, int64_t number) {
+	qdos_value value;
+	memset(&value, 0, sizeof(value));
+	value.type = QDOS_VALUE_INT;
+	value.i = number;
+
+	uint8_t buf[QDOS_VALUE_ENCODED_MAX];
+	size_t len = 0;
+	CHECK(qdos_value_encode(&value, buf, &len));
+
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used)
+			continue;
+		snprintf(g_store[i].name, sizeof(g_store[i].name), "%s", key);
+		memcpy(g_store[i].data, buf, len);
+		g_store[i].len = len;
+		g_store[i].scope = QDOS_SCOPE_USER;
+		g_store[i].used = true;
+		return;
+	}
+}
+
 static int stub_usb_export(qdos_hal* hal, bool on) {
 	(void)hal;
 	g_usb_calls++;
@@ -200,7 +242,8 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->present = stub_present;
 	hal->poll_key = stub_poll_key;
 	hal->running = stub_running;
-	hal->idle = stub_idle;
+	hal->ticks_ms = stub_ticks_ms;
+	hal->wait = stub_wait;
 	hal->store_read = stub_read;
 	hal->store_write = stub_write;
 	hal->store_list = stub_list;
@@ -217,6 +260,12 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 /* A message takes the input line rather than a row of its own */
 #define ROW_INPUT_LINE (QDOS_ROWS - 2)
 #define ROW_MESSAGE_LINE ROW_INPUT_LINE
+
+/* Settings rows, in the order the page lists them */
+#define ROW_SETTING_ANGLE ROW_CONTENT_FIRST_T
+#define ROW_SETTING_DECIMALS (ROW_CONTENT_FIRST_T + 1)
+#define ROW_SETTING_AUTO_OFF (ROW_CONTENT_FIRST_T + 2)
+#define ROW_SETTING_USB (ROW_CONTENT_FIRST_T + 3)
 
 /** Press one key. */
 static void key(qdos_key_event* script, size_t* n, qdos_key k) {
@@ -342,6 +391,39 @@ static void run_script_capturing(const qdos_key_event* script, size_t count, siz
 /** Run a key script and return the resulting screen. */
 static void run_script(const qdos_key_event* script, size_t count, uint8_t* fb_out) {
 	run_script_capturing(script, count, 0, fb_out, NULL);
+}
+
+/**
+ * @brief Run a script, then keep idling with the clock running
+ * @param step	 Milliseconds each idle pass takes
+ * @param passes Idle passes to allow once the script is spent
+ * @param presents_out Repaints over the whole run, or NULL
+ */
+static size_t run_script_idling(const qdos_key_event* script, size_t count, uint32_t step, size_t passes,
+		uint8_t* fb_out, int* presents_out) {
+	stub_state st;
+	memset(&st, 0, sizeof(st));
+	st.script = script;
+	st.count = count;
+	st.ms_step = step;
+
+	// The script spends one pass per key, so the budget has to cover it first
+	st.wait_budget = count + passes;
+
+	qdos_hal hal;
+	stub_hal(&hal, &st);
+
+	qdos_shell* sh = qdos_shell_create(&hal);
+	CHECK(sh != NULL);
+	qdos_shell_run(sh);
+	qdos_shell_destroy(sh);
+
+	memcpy(fb_out, st.last_fb, (size_t)QDOS_SCREEN_W * QDOS_SCREEN_H);
+	if (presents_out != NULL)
+		*presents_out = st.presents;
+
+	// Short of the budget means the shell stopped of its own accord
+	return st.waits;
 }
 
 /** Does any content row of this screen hold this text? */
@@ -1471,7 +1553,7 @@ static void test_about_returns(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "OFF") != NULL); // the calculator's own soft row
+	CHECK(strstr(row, "INFO") != NULL); // the calculator's own soft row
 }
 
 /** Rotate reaches the third entry, which nothing else on the keypad can. */
@@ -2054,9 +2136,10 @@ static void test_forget_reverts_to_the_card(void) {
 /* Sharing the card over USB                                              */
 /* ---------------------------------------------------------------------- */
 
-/** Move the selection to the USB row, which sits below the other two. */
+/** Move the selection to the USB row, which sits below the other three. */
 static void open_usb_setting(qdos_key_event* script, size_t* n) {
 	key(script, n, QDOS_KEY_SETTINGS);
+	key(script, n, QDOS_KEY_DOWN);
 	key(script, n, QDOS_KEY_DOWN);
 	key(script, n, QDOS_KEY_DOWN);
 }
@@ -2074,13 +2157,13 @@ static void test_usb_is_hidden_without_a_gadget(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	read_row(fb, ROW_SETTING_USB, row, sizeof(row));
 	CHECK(row[0] == '\0');
 	CHECK(g_usb_calls == 0);
 
-	// The selection stopped on DECIMALS, so Enter changed that instead
-	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
-	CHECK(strstr(row, "AUTO") == NULL);
+	// The selection stopped on AUTO OFF, so Enter stepped that instead
+	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
+	CHECK(strstr(row, "30 MIN") != NULL);
 }
 
 /** Where there is a gadget, the row is there and says which way round it is. */
@@ -2100,11 +2183,11 @@ static void test_usb_shares_the_card_and_takes_it_back(void) {
 	run_script_mid(script, n, shared_at, fb, shared);
 
 	char row[QDOS_COLS + 1];
-	read_row(shared, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	read_row(shared, ROW_SETTING_USB, row, sizeof(row));
 	CHECK(strstr(row, "USB") != NULL);
 	CHECK(strstr(row, "SHARED") != NULL);
 
-	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	read_row(fb, ROW_SETTING_USB, row, sizeof(row));
 	CHECK(strstr(row, "OFF") != NULL);
 
 	// Both ways round really reached the backend, and it ended up back with us
@@ -2176,7 +2259,7 @@ static void test_a_failed_usb_switch_is_reported(void) {
 	CHECK(strstr(row, "WOULD NOT SWITCH") != NULL);
 
 	// And the row still reads OFF, because nothing was handed over
-	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	read_row(fb, ROW_SETTING_USB, row, sizeof(row));
 	CHECK(strstr(row, "OFF") != NULL);
 }
 
@@ -2334,7 +2417,7 @@ static void test_settings_change_decimals(void) {
  * The settings page says what it is about to change. Every other test presses
  * through it to check the machine changed, so this is the one that looks at it.
  */
-static void test_settings_page_shows_both_settings(void) {
+static void test_settings_page_lists_the_settings(void) {
 	store_reset();
 
 	qdos_key_event script[8];
@@ -2350,13 +2433,17 @@ static void test_settings_page_shows_both_settings(void) {
 	read_row(page, ROW_HEADER_T, row, sizeof(row));
 	CHECK(strstr(row, "SETTINGS") != NULL);
 
-	read_row(page, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	read_row(page, ROW_SETTING_ANGLE, row, sizeof(row));
 	CHECK(strstr(row, "ANGLE") != NULL);
 	CHECK(strstr(row, "RAD") != NULL); // radians until asked otherwise
 
-	read_row(page, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	read_row(page, ROW_SETTING_DECIMALS, row, sizeof(row));
 	CHECK(strstr(row, "DECIMALS") != NULL);
 	CHECK(strstr(row, "AUTO") != NULL);
+
+	read_row(page, ROW_SETTING_AUTO_OFF, row, sizeof(row));
+	CHECK(strstr(row, "AUTO OFF") != NULL);
+	CHECK(strstr(row, "10 MIN") != NULL); // longer than a calculator's usual five
 
 	// Clear goes back where it came from, rather than leaving the page up
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
@@ -2437,7 +2524,8 @@ static void test_settings_selection_stops_at_the_ends(void) {
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_UP);	// already at the top
 	key(script, &n, QDOS_KEY_DOWN);
-	key(script, &n, QDOS_KEY_DOWN); // already at the bottom
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN); // already at the bottom, with no gadget
 	key(script, &n, QDOS_KEY_ENTER);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2445,13 +2533,16 @@ static void test_settings_selection_stops_at_the_ends(void) {
 
 	char row[QDOS_COLS + 1];
 
-	// Neither press moved off the list, so Enter changed DECIMALS
-	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	// Neither press moved off the list, so Enter changed the last row and the
+	// two above it were left exactly as they were
+	read_row(fb, ROW_SETTING_ANGLE, row, sizeof(row));
 	CHECK(strstr(row, "RAD") != NULL);
 
-	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
-	CHECK(strstr(row, "AUTO") == NULL);
-	CHECK(strstr(row, "0") != NULL);
+	read_row(fb, ROW_SETTING_DECIMALS, row, sizeof(row));
+	CHECK(strstr(row, "AUTO") != NULL);
+
+	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
+	CHECK(strstr(row, "30 MIN") != NULL);
 }
 
 /** A fixed setting is a column to read down, so whole numbers get decimals too. */
@@ -2498,31 +2589,34 @@ static void test_fixed_decimals_leave_strings_alone(void) {
 	CHECK(strstr(row, ".00") == NULL);
 }
 
+/** @brief Run three keys and say whether the shell stopped before reading them all */
+static bool stops_the_shell(qdos_key first) {
+	store_reset();
+
+	stub_state st;
+	memset(&st, 0, sizeof(st));
+	qdos_key_event script[3] = {{first, 0}, {QDOS_KEY_1, 0}, {QDOS_KEY_2, 0}};
+	st.script = script;
+	st.count = 3;
+
+	qdos_hal hal;
+	stub_hal(&hal, &st);
+	qdos_shell* sh = qdos_shell_create(&hal);
+	CHECK(sh != NULL);
+	qdos_shell_run(sh);
+	qdos_shell_destroy(sh);
+
+	return st.next < st.count;
+}
+
 /**
- * OFF is a soft key, so it arrives as SOFT5 and is only the power key once
- * expanded. Testing the power key alone missed that for a long time.
+ * Turning off belongs to PWR alone. The soft row used to carry an OFF that
+ * arrived as SOFT5, one press away from CAT and INFO, which is close company
+ * for the one key on the row that cannot be undone by pressing it again.
  */
-static void test_off_soft_key_stops_the_shell(void) {
-	static const qdos_key WAYS[] = {QDOS_KEY_POWER, QDOS_KEY_SOFT5};
-
-	for (size_t w = 0; w < sizeof(WAYS) / sizeof(*WAYS); w++) {
-		store_reset();
-
-		stub_state st;
-		memset(&st, 0, sizeof(st));
-		qdos_key_event script[3] = {{WAYS[w], 0}, {QDOS_KEY_1, 0}, {QDOS_KEY_2, 0}};
-		st.script = script;
-		st.count = 3;
-
-		qdos_hal hal;
-		stub_hal(&hal, &st);
-		qdos_shell* sh = qdos_shell_create(&hal);
-		CHECK(sh != NULL);
-		qdos_shell_run(sh);
-		qdos_shell_destroy(sh);
-
-		CHECK(st.next < st.count); // it stopped rather than reading on
-	}
+static void test_only_the_power_key_stops_the_shell(void) {
+	CHECK(stops_the_shell(QDOS_KEY_POWER));
+	CHECK(!stops_the_shell(QDOS_KEY_SOFT5));
 }
 
 /** Undo puts back what the last operation consumed. */
@@ -2674,6 +2768,203 @@ static void test_backspace_at_cursor(void) {
 	CHECK(strstr(row, "123") != NULL);
 }
 
+/* Where the caret sits after two digits: past the prompt, past both of them. */
+#define CURSOR_COL 4
+
+/** The cursor goes dark between blinks. */
+static void test_cursor_blinks_off(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "12");
+
+	// A clock that never moves, which is every other script in this file
+	static uint8_t lit[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, lit);
+	CHECK(cell_is(lit, CURSOR_COL, ROW_INPUT_LINE, ' ', true));
+
+	// One idle pass, longer than half a period, and the block has gone
+	static uint8_t dark[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(script, n, 600, 1, dark, NULL);
+	CHECK(cell_is(dark, CURSOR_COL, ROW_INPUT_LINE, ' ', false));
+}
+
+/** Typing puts the cursor back on, so a keypress is never a dark cell. */
+static void test_a_key_lights_the_cursor(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "123"); // an odd number of keys, so the blink parity flips
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(script, n, 600, 0, fb, NULL);
+
+	// The caret has moved one right, and is lit however the toggling fell out
+	CHECK(cell_is(fb, CURSOR_COL + 1, ROW_INPUT_LINE, ' ', true));
+}
+
+/** Left alone, the cursor settles solid and the repainting stops. */
+static void test_cursor_settles_when_left_alone(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "12");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	int presents = 0;
+	run_script_idling(script, n, 600, 60, fb, &presents);
+	CHECK(cell_is(fb, CURSOR_COL, ROW_INPUT_LINE, ' ', true));
+
+	// Twice as long ignored, and not one more repaint. That is the property the
+	// backend needs: nothing to wake up for, so it can wait on the keypad alone.
+	int presents_later = 0;
+	run_script_idling(script, n, 600, 120, fb, &presents_later);
+	CHECK(presents_later == presents);
+}
+
+/** A page with no caret on it never blinks, whatever the clock does. */
+static void test_pages_do_not_blink(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_ABOUT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	int presents = 0;
+	run_script_idling(script, n, 600, 4, fb, &presents);
+
+	int presents_later = 0;
+	run_script_idling(script, n, 600, 8, fb, &presents_later);
+	CHECK(presents_later == presents);
+	CHECK(page_has(fb, "ABOUT") || page_has(fb, "QDOS"));
+}
+
+/**
+ * Settings outlive the machine being off, which for auto-off is the whole
+ * point: the setting that turned it off has to still be there when it returns.
+ *
+ * Angle is deliberately not checked here. It lives in a process-wide global, so
+ * a second shell would read it back whether or not anything was ever stored.
+ */
+static void test_settings_survive_a_power_cycle(void) {
+	store_reset();
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+
+	qdos_key_event first[16];
+	size_t n = 0;
+	key(first, &n, QDOS_KEY_SETTINGS);
+	key(first, &n, QDOS_KEY_DOWN);
+	key(first, &n, QDOS_KEY_ENTER); // DECIMALS: AUTO -> 0
+	key(first, &n, QDOS_KEY_DOWN);
+	key(first, &n, QDOS_KEY_LEFT); // AUTO OFF: 10 MIN -> 5 MIN
+	run_script(first, n, fb);
+
+	// A second shell over the same store, which is what a power cycle is
+	qdos_key_event second[8];
+	n = 0;
+	key(second, &n, QDOS_KEY_SETTINGS);
+	run_script(second, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
+	CHECK(strstr(row, "5 MIN") != NULL);
+
+	read_row(fb, ROW_SETTING_DECIMALS, row, sizeof(row));
+	CHECK(strstr(row, "AUTO") == NULL);
+	CHECK(strstr(row, "0") != NULL);
+}
+
+/** A store written by firmware that knew more settings must not be obeyed. */
+static void test_a_nonsense_setting_is_ignored(void) {
+	store_reset();
+
+	// A timeout index this build has no minute count for
+	seed_setting("settings.autooff", 99);
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
+	CHECK(strstr(row, "10 MIN") != NULL); // the default, not a reading off the end
+}
+
+/** Left alone past the timeout, the machine warns and then turns itself off. */
+static void test_auto_off_warns_then_stops(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "12");
+
+	// Ten-second steps, so a pass lands inside the warning window rather than
+	// stepping straight over it
+	const size_t budget = 80;
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	const size_t waits = run_script_idling(script, n, 10000, budget, fb, NULL);
+
+	// It stopped on its own rather than running out of budget
+	CHECK(waits < n + budget);
+
+	// And the last thing on screen was the warning, not a silent death
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "TURNING OFF") != NULL);
+}
+
+/** Set to NEVER, it sits there however long it is ignored. */
+static void test_auto_off_never_stays_on(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN); // AUTO OFF
+	key(script, &n, QDOS_KEY_LEFT); // 10 MIN -> 5 MIN
+	key(script, &n, QDOS_KEY_LEFT); // 5 MIN -> NEVER
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	int presents = 0;
+
+	// A minute a pass, so this is an hour of being ignored
+	const size_t budget = 60;
+	const size_t waits = run_script_idling(script, n, 60000, budget, fb, &presents);
+
+	CHECK(waits == n + budget); // ran the budget out, so it never turned off
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
+	CHECK(strstr(row, "NEVER") != NULL);
+}
+
+/** A card handed to a PC is not a machine to switch off underneath it. */
+static void test_auto_off_waits_for_the_card(void) {
+	store_reset();
+	g_usb_supported = true;
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	open_usb_setting(script, &n);
+	key(script, &n, QDOS_KEY_ENTER); // hand the inbox over
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	const size_t budget = 60;
+	const size_t waits = run_script_idling(script, n, 60000, budget, fb, NULL);
+
+	CHECK(waits == n + budget);
+	CHECK(g_usb_shared); // still handed over, rather than pulled out from under
+}
+
 /** Soft key labels follow the mode. */
 static void test_soft_labels_follow_mode(void) {
 	store_reset();
@@ -2686,7 +2977,8 @@ static void test_soft_labels_follow_mode(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
 	CHECK(strstr(row, "APPS") != NULL);
-	CHECK(strstr(row, "OFF") != NULL);
+	CHECK(strstr(row, "INFO") != NULL);
+	CHECK(strstr(row, "OFF") == NULL); // turning off is the PWR key's, not a soft key's
 
 	n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
@@ -2783,7 +3075,7 @@ static void test_f1_is_always_the_way_out(void) {
 	key(script, &n, QDOS_KEY_SOFT1);
 	run_script(script, n, fb);
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "OFF") != NULL);
+	CHECK(strstr(row, "INFO") != NULL);
 
 	// Out of the editor, without saving
 	n = 0;
@@ -2792,7 +3084,7 @@ static void test_f1_is_always_the_way_out(void) {
 	key(script, &n, QDOS_KEY_SOFT1);
 	run_script(script, n, fb);
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "OFF") != NULL);
+	CHECK(strstr(row, "INFO") != NULL);
 
 	// Out of line mode
 	n = 0;
@@ -2875,7 +3167,7 @@ int main(void) {
 	test_debug_page_scrolls_to_both_ends();
 	test_debug_page_clears_the_log();
 	test_debug_page_returns();
-	test_settings_page_shows_both_settings();
+	test_settings_page_lists_the_settings();
 	test_settings_marks_the_selection();
 	test_settings_angle_toggles_both_ways();
 	test_settings_decimals_wrap_downwards();
@@ -2885,7 +3177,7 @@ int main(void) {
 	test_fixed_decimals_apply_to_integers();
 	test_fixed_decimals_leave_strings_alone();
 	test_undo_restores_the_stack();
-	test_off_soft_key_stops_the_shell();
+	test_only_the_power_key_stops_the_shell();
 	test_delete_a_program();
 	test_delete_refuses_system();
 	test_division_key_is_not_integer_division();
@@ -2917,5 +3209,14 @@ int main(void) {
 	test_f1_is_always_the_way_out();
 	test_cursor_inserts();
 	test_backspace_at_cursor();
+	test_cursor_blinks_off();
+	test_a_key_lights_the_cursor();
+	test_cursor_settles_when_left_alone();
+	test_pages_do_not_blink();
+	test_settings_survive_a_power_cycle();
+	test_a_nonsense_setting_is_ignored();
+	test_auto_off_warns_then_stops();
+	test_auto_off_never_stays_on();
+	test_auto_off_waits_for_the_card();
 	return check_report("shell");
 }

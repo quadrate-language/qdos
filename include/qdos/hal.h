@@ -136,8 +136,22 @@ struct qdos_hal {
 
 	bool (*running)(qdos_hal* hal);
 
-	/** @brief Yield until roughly the next display refresh */
-	void (*idle)(qdos_hal* hal);
+	/**
+	 * @brief Milliseconds since start, monotonic
+	 *
+	 * Only differences are ever taken, and they are taken unsigned, so the wrap
+	 * at 49 days needs no handling.
+	 */
+	uint32_t (*ticks_ms)(qdos_hal* hal);
+
+	/**
+	 * @brief Yield until a key arrives or the timeout expires
+	 *
+	 * A negative timeout waits for a key and nothing else, which is what a
+	 * calculator left alone should do: no timer, no wakeups, no repaints.
+	 * Returning early is allowed -- the caller re-reads the clock regardless.
+	 */
+	void (*wait)(qdos_hal* hal, int timeout_ms);
 
 	qdos_store_result (*store_read)(
 			qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len);

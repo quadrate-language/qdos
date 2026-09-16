@@ -17,6 +17,7 @@
 #include <linux/kd.h>
 #include <linux/vt.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -184,11 +185,23 @@ static bool device_running(qdos_hal* hal) {
 	return ((device_state*)hal->impl)->running;
 }
 
-static void device_idle(qdos_hal* hal) {
+static uint32_t device_ticks_ms(qdos_hal* hal) {
 	(void)hal;
-	// A real idle would block on the input fd. Battery life depends on it.
-	const struct timespec frame = {.tv_sec = 0, .tv_nsec = 16 * 1000 * 1000};
-	nanosleep(&frame, NULL);
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint32_t)((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
+}
+
+static void device_wait(qdos_hal* hal, int timeout_ms) {
+	device_state* st = (device_state*)hal->impl;
+
+	// poll() ignores a negative fd, so with no keypad an indefinite wait would
+	// never end. Bound it instead and let the loop go round.
+	if (st->input_fd < 0 && timeout_ms < 0)
+		timeout_ms = 1000;
+
+	struct pollfd pfd = {.fd = st->input_fd, .events = POLLIN, .revents = 0};
+	poll(&pfd, 1, timeout_ms);
 }
 
 static const char* dir_for(device_state* st, qdos_store_scope scope) {
@@ -304,7 +317,8 @@ void qdos_device_hal(qdos_hal* hal) {
 	hal->present = device_present;
 	hal->poll_key = device_poll_key;
 	hal->running = device_running;
-	hal->idle = device_idle;
+	hal->ticks_ms = device_ticks_ms;
+	hal->wait = device_wait;
 	hal->store_read = device_store_read;
 	hal->store_write = device_store_write;
 	hal->store_list = device_store_list;

@@ -333,9 +333,18 @@ static bool sim_running(qdos_hal* hal) {
 	return ((sim_state*)hal->impl)->running;
 }
 
-static void sim_idle(qdos_hal* hal) {
+static uint32_t sim_ticks_ms(qdos_hal* hal) {
 	(void)hal;
-	SDL_Delay(16);
+	return (uint32_t)SDL_GetTicks();
+}
+
+static void sim_wait(qdos_hal* hal, int timeout_ms) {
+	(void)hal;
+	// A NULL event leaves it on the queue, so sim_poll_key still sees it.
+	if (timeout_ms < 0)
+		SDL_WaitEvent(NULL);
+	else
+		SDL_WaitEventTimeout(NULL, timeout_ms);
 }
 
 /**
@@ -437,7 +446,8 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->present = sim_present;
 	hal->poll_key = sim_poll_key;
 	hal->running = sim_running;
-	hal->idle = sim_idle;
+	hal->ticks_ms = sim_ticks_ms;
+	hal->wait = sim_wait;
 	hal->store_read = sim_store_read;
 	hal->store_write = sim_store_write;
 	hal->store_list = sim_store_list;

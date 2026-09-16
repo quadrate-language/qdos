@@ -60,6 +60,35 @@
 
 #define STACK_ROWS (ROW_CONTENT_LAST - ROW_STACK_FIRST + 1)
 
+/*
+ * Half a blink period, so the cursor comes and goes once a second. The panel
+ * is a Sharp Memory LCD: it holds its image unpowered and costs only what is
+ * clocked into it, and the driver is already sending it a VCOM message every
+ * second, so two frames a second sit alongside traffic the machine has anyway.
+ */
+#define CURSOR_BLINK_MS 500
+
+/*
+ * How long the cursor keeps blinking after the last key. Past this the machine
+ * has been left alone rather than thought about, so the cursor goes solid --
+ * still saying where you are -- and the loop stops waking to toggle it. That is
+ * what lets qdos_shell_run() wait on the keypad with no timer at all.
+ */
+#define CURSOR_SETTLE_MS 10000
+
+/*
+ * Minutes of inactivity before the machine turns itself off, nought being
+ * never. Calculators normally use five; this starts longer because no boot has
+ * been timed on the hardware yet, and a machine that switches off more eagerly
+ * than it comes back is worse than one that simply stays on.
+ */
+static const int AUTO_OFF_MINUTES[] = {0, 5, 10, 30, 60};
+#define AUTO_OFF_COUNT (sizeof(AUTO_OFF_MINUTES) / sizeof(AUTO_OFF_MINUTES[0]))
+#define AUTO_OFF_DEFAULT 2
+
+/** Long enough to read the warning and reach for a key. */
+#define AUTO_OFF_WARN_MS 10000
+
 /** Prompts. The character says which mode the keypad is in. */
 #define PROMPT "> "
 #define LINE_PROMPT ": "
@@ -83,6 +112,7 @@ typedef enum {
 typedef enum {
 	SETTING_ANGLE = 0,
 	SETTING_DECIMALS,
+	SETTING_AUTO_OFF,
 	SETTING_USB, ///< Last, so leaving it out is only a smaller count
 	SETTING__COUNT
 } qdos_setting;
@@ -133,7 +163,35 @@ struct qdos_shell {
 
 	char message[QDOS_COLS + 1]; ///< Error or status under the stack
 	bool message_is_error;
+
+	bool cursor_on; ///< Which half of the blink the cursor is in
+
+	size_t auto_off;  ///< Index into AUTO_OFF_MINUTES
+	bool off_warned;  ///< The warning is already on screen
 };
+
+/** @brief How long the machine may sit idle, in ms; nought means never */
+static uint32_t auto_off_ms(const qdos_shell* sh) {
+	// Nothing to come back to a half-finished transfer for, so a shared card
+	// keeps the machine awake however long it is left.
+	if (sh->usb_exported)
+		return 0;
+
+	return (uint32_t)AUTO_OFF_MINUTES[sh->auto_off] * 60u * 1000u;
+}
+
+/** @brief Is there a cursor on screen, and therefore something to blink? */
+static bool has_cursor(const qdos_shell* sh) {
+	if (sh->mode == QDOS_MODE_EDIT)
+		return true;
+
+	// Everywhere else the caret is on the input row, which a message takes
+	// over. The pages -- list, settings, debug, about -- have no caret at all.
+	if (sh->mode == QDOS_MODE_CALC || sh->mode == QDOS_MODE_LINE)
+		return sh->message[0] == '\0';
+
+	return false;
+}
 
 /** @brief Append text to the input line, silently ignoring overflow */
 static void input_append(qdos_shell* sh, const char* text) {
@@ -300,8 +358,10 @@ typedef struct {
 } soft_key;
 
 static const soft_key SOFT[7][SOFT_KEYS] = {
+	// Turning off is the PWR key's job, not a soft key's: it is the one action
+	// on the row that cannot be undone by pressing it again.
 	[QDOS_MODE_CALC] = {{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
-			{"INFO", QDOS_KEY_ABOUT}, {"OFF", QDOS_KEY_POWER}},
+			{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_NONE}},
 	[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
 			{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_NONE}},
 	// down then up, so the pair sits like vim's j and k
@@ -1028,6 +1088,96 @@ static void toggle_usb(qdos_shell* sh) {
 	set_message(sh, message, false);
 }
 
+/*
+ * One entry per setting rather than one record holding all of them, so adding a
+ * setting cannot make the others unreadable: a key nobody writes reads as absent
+ * and keeps its default. They carry no ".qd", so the vocabulary never lists them.
+ */
+#define SETTINGS_KEY_ANGLE "settings.angle"
+#define SETTINGS_KEY_DECIMALS "settings.decimals"
+#define SETTINGS_KEY_AUTO_OFF "settings.autooff"
+
+static void save_setting(qdos_shell* sh, const char* key, int64_t number) {
+	qdos_value value;
+	memset(&value, 0, sizeof(value));
+	value.type = QDOS_VALUE_INT;
+	value.i = number;
+
+	// Nowhere to report a failed write to, and refusing to change the setting on
+	// screen because of it would be worse than forgetting it on the next boot.
+	qdos_storage_save(sh->hal, key, &value);
+}
+
+/** @brief Read one saved setting, leaving @p out alone when there is none */
+static void load_setting(qdos_shell* sh, const char* key, int64_t* out) {
+	qdos_value value;
+	if (qdos_storage_load(sh->hal, key, &value) == QDOS_STORE_OK && value.type == QDOS_VALUE_INT)
+		*out = value.i;
+}
+
+/** @brief Write the settings out, which is done the moment one changes */
+static void save_settings(qdos_shell* sh) {
+	save_setting(sh, SETTINGS_KEY_ANGLE, qdos_math_degrees() ? 1 : 0);
+	save_setting(sh, SETTINGS_KEY_DECIMALS, sh->decimals);
+	save_setting(sh, SETTINGS_KEY_AUTO_OFF, (int64_t)sh->auto_off);
+}
+
+/**
+ * @brief Put back what was saved, keeping the default where nothing was
+ *
+ * Every value is checked against what this build accepts. A store written by
+ * other firmware must not be able to leave the machine unreadable, or turning
+ * off at a timeout this build has no name for.
+ */
+static void restore_settings(qdos_shell* sh) {
+	int64_t degrees = qdos_math_degrees() ? 1 : 0;
+	load_setting(sh, SETTINGS_KEY_ANGLE, &degrees);
+	qdos_math_set_degrees(degrees != 0);
+
+	int64_t decimals = sh->decimals;
+	load_setting(sh, SETTINGS_KEY_DECIMALS, &decimals);
+	if (decimals >= DECIMALS_AUTO && decimals <= DECIMALS_MAX)
+		sh->decimals = (int)decimals;
+
+	int64_t auto_off = (int64_t)sh->auto_off;
+	load_setting(sh, SETTINGS_KEY_AUTO_OFF, &auto_off);
+	if (auto_off >= 0 && auto_off < (int64_t)AUTO_OFF_COUNT)
+		sh->auto_off = (size_t)auto_off;
+}
+
+/**
+ * @brief Change the selected setting
+ * @param dir +1 to step forwards, -1 back. The two toggles read the same either
+ *            way, which is why both arrows reach them.
+ */
+static void setting_step(qdos_shell* sh, int dir) {
+	switch (sh->setting_sel) {
+		case SETTING_ANGLE:
+			qdos_math_set_degrees(!qdos_math_degrees());
+			break;
+
+		case SETTING_USB:
+			toggle_usb(sh);
+			break;
+
+		case SETTING_AUTO_OFF:
+			sh->auto_off = (sh->auto_off + (dir > 0 ? 1 : AUTO_OFF_COUNT - 1)) % AUTO_OFF_COUNT;
+			break;
+
+		default:
+			if (dir > 0)
+				sh->decimals = (sh->decimals >= DECIMALS_MAX) ? DECIMALS_AUTO : sh->decimals + 1;
+			else
+				sh->decimals = (sh->decimals <= DECIMALS_AUTO) ? DECIMALS_MAX : sh->decimals - 1;
+			break;
+	}
+
+	// Written now rather than on the way out, because pulling the battery is a
+	// normal way to turn a calculator off. USB is live state, not a preference.
+	if (sh->setting_sel != SETTING_USB)
+		save_settings(sh);
+}
+
 static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 	switch (ev->key) {
 		case QDOS_KEY_UP:
@@ -1042,23 +1192,11 @@ static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 		case QDOS_KEY_ENTER:
 		case QDOS_KEY_RIGHT:
-			if (sh->setting_sel == SETTING_ANGLE) {
-				qdos_math_set_degrees(!qdos_math_degrees());
-			} else if (sh->setting_sel == SETTING_USB) {
-				toggle_usb(sh);
-			} else {
-				sh->decimals = (sh->decimals >= DECIMALS_MAX) ? DECIMALS_AUTO : sh->decimals + 1;
-			}
+			setting_step(sh, +1);
 			break;
 
 		case QDOS_KEY_LEFT:
-			if (sh->setting_sel == SETTING_ANGLE) {
-				qdos_math_set_degrees(!qdos_math_degrees());
-			} else if (sh->setting_sel == SETTING_USB) {
-				toggle_usb(sh);
-			} else {
-				sh->decimals = (sh->decimals <= DECIMALS_AUTO) ? DECIMALS_MAX : sh->decimals - 1;
-			}
+			setting_step(sh, -1);
 			break;
 
 		case QDOS_KEY_CLEAR:
@@ -1184,7 +1322,7 @@ static void render_edit(qdos_shell* sh, qdos_console* con) {
 			qdos_console_putc(con, (int)c, row, ch == '\t' ? ' ' : ch);
 		}
 
-		if (sh->ed_top + i == line)
+		if (sh->ed_top + i == line && sh->cursor_on)
 			qdos_console_invert(con, (int)(col - left), row, 1);
 	}
 
@@ -1221,6 +1359,14 @@ static void decimals_text(const qdos_shell* sh, char* out, size_t cap) {
 		snprintf(out, cap, "%d", sh->decimals);
 }
 
+static void auto_off_text(const qdos_shell* sh, char* out, size_t cap) {
+	const int minutes = AUTO_OFF_MINUTES[sh->auto_off];
+	if (minutes == 0)
+		snprintf(out, cap, "NEVER");
+	else
+		snprintf(out, cap, "%d MIN", minutes);
+}
+
 static void render_settings(qdos_shell* sh, qdos_console* con) {
 	qdos_console_puts(con, 0, ROW_HEADER, "SETTINGS");
 	qdos_console_rule(con, ROW_HEADER);
@@ -1228,8 +1374,12 @@ static void render_settings(qdos_shell* sh, qdos_console* con) {
 	char value[16];
 	decimals_text(sh, value, sizeof(value));
 
-	static const char* const NAMES[SETTING__COUNT] = {"ANGLE", "DECIMALS", "USB"};
-	const char* values[SETTING__COUNT] = {angle_text(), value, sh->usb_exported ? "SHARED" : "OFF"};
+	char off[16];
+	auto_off_text(sh, off, sizeof(off));
+
+	static const char* const NAMES[SETTING__COUNT] = {"ANGLE", "DECIMALS", "AUTO OFF", "USB"};
+	const char* values[SETTING__COUNT] = {
+			angle_text(), value, off, sh->usb_exported ? "SHARED" : "OFF"};
 
 	for (size_t i = 0; i < setting_count(sh); i++) {
 		const int row = ROW_CONTENT_FIRST + (int)i;
@@ -1412,7 +1562,8 @@ static void render(qdos_shell* sh) {
 	const size_t start = (caret > (size_t)room) ? caret - (size_t)room : 0;
 
 	qdos_console_puts(con, PROMPT_LEN, ROW_INPUT, text + start);
-	qdos_console_invert(con, PROMPT_LEN + (int)(caret - start), ROW_INPUT, 1);
+	if (sh->cursor_on)
+		qdos_console_invert(con, PROMPT_LEN + (int)(caret - start), ROW_INPUT, 1);
 
 	sh->hal->present(sh->hal, con->fb);
 }
@@ -1630,6 +1781,9 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 
 	sh->hal = hal;
 	sh->decimals = DECIMALS_AUTO; // calloc would otherwise mean nought decimals
+	sh->cursor_on = true;		  // nor a cursor that starts out invisible
+	sh->auto_off = AUTO_OFF_DEFAULT;
+	restore_settings(sh); // over the defaults just set, where anything was saved
 	register_natives(sh, sh->interp);
 	qdos_console_init(&sh->con);
 
@@ -1661,6 +1815,9 @@ void qdos_shell_run(qdos_shell* sh) {
 
 	render(sh);
 
+	uint32_t last_key = sh->hal->ticks_ms(sh->hal);
+	uint32_t last_blink = last_key;
+
 	while (sh->hal->running(sh->hal)) {
 		qdos_key_event ev;
 		bool dirty = false;
@@ -1669,18 +1826,78 @@ void qdos_shell_run(qdos_shell* sh) {
 			handle_key(sh, &ev);
 			dirty = true;
 
-			// Checked after handling, because OFF arrives as a soft key and is
-			// only the power key once expanded
+			// Checked after handling rather than on the key, so however the
+			// press arrives it is the handler that decides this is an off
 			if (sh->powering_off) {
 				qdos_storage_save_session(sh->hal, sh->interp);
 				return;
 			}
 		}
 
-		if (dirty)
-			render(sh);
+		const uint32_t now = sh->hal->ticks_ms(sh->hal);
 
-		sh->hal->idle(sh->hal);
+		if (dirty) {
+			// Typing is never the moment to be showing a dark cursor, so a key
+			// puts it back on and starts the period again.
+			last_key = now;
+			last_blink = now;
+			sh->cursor_on = true;
+			sh->off_warned = false;
+			render(sh);
+		}
+
+		const uint32_t idle_ms = now - last_key;
+
+		// Nobody has touched it in a while: settle to a steady cursor, which
+		// still says where you are but needs no further repaints.
+		const bool settled = idle_ms >= CURSOR_SETTLE_MS;
+
+		if (settled && !sh->cursor_on) {
+			sh->cursor_on = true;
+			render(sh);
+		} else if (!settled && has_cursor(sh) && (now - last_blink) >= CURSOR_BLINK_MS) {
+			last_blink = now;
+			sh->cursor_on = !sh->cursor_on;
+			render(sh);
+		}
+
+		// Put down rather than paused: say so, then turn the machine off. The
+		// session is saved on the way out, so it comes back as it was left.
+		const uint32_t off_after = auto_off_ms(sh);
+		if (off_after > 0) {
+			if (idle_ms >= off_after) {
+				qdos_storage_save_session(sh->hal, sh->interp);
+				return;
+			}
+
+			if (!sh->off_warned && idle_ms >= off_after - AUTO_OFF_WARN_MS) {
+				sh->off_warned = true;
+				set_message(sh, "TURNING OFF", false);
+				render(sh);
+			}
+		}
+
+		// Draining the keys is how a backend learns it is being shut down, and
+		// the wait below has no timer to come back on. Check before sleeping on
+		// a machine that has already stopped.
+		if (!sh->hal->running(sh->hal))
+			break;
+
+		// How long until something is due: the next blink, the warning, or the
+		// power-off. Nothing due means waiting on the keypad and nothing else,
+		// which is what a calculator sitting on a desk should be doing.
+		int timeout = -1;
+		if (!settled && has_cursor(sh)) {
+			const uint32_t since = now - last_blink;
+			timeout = (since >= CURSOR_BLINK_MS) ? 0 : (int)(CURSOR_BLINK_MS - since);
+		}
+		if (off_after > 0) {
+			const uint32_t due = sh->off_warned ? off_after : off_after - AUTO_OFF_WARN_MS;
+			const int until = (idle_ms >= due) ? 0 : (int)(due - idle_ms);
+			if (timeout < 0 || until < timeout)
+				timeout = until;
+		}
+		sh->hal->wait(sh->hal, timeout);
 	}
 
 	qdos_storage_save_session(sh->hal, sh->interp);

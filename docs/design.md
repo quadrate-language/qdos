@@ -88,6 +88,14 @@ The stack is saved on power-off and restored on start. That is what makes the
 machine feel instant-on despite a real boot: the seconds spent booting are not
 also seconds spent re-entering values.
 
+Settings go the same way, one entry each (`settings.angle`, `settings.decimals`,
+`settings.autooff`) rather than one record holding all three, so adding a setting
+cannot make the others unreadable — a key nobody has written reads as absent and
+keeps its default. They are written the moment a setting changes rather than on
+the way out, because pulling the battery is a normal way to turn a calculator
+off. Each is range-checked on the way back in: a store written by other firmware
+must not be able to select a timeout this build has no name for.
+
 This is the one piece of `lib/qd`'s API that was worth having here, and it is
 much cheaper interpreted. In a compiled pipeline a registered function needs a
 generated C stub linked so `dlopen` can resolve the symbol — that is precisely
@@ -103,6 +111,40 @@ map while walking the tree.
 
 Nothing compiles on the device. The rootfs is the C kernel plus 208 KB of runtime
 plus the interpreter.
+
+### Doing nothing, cheaply
+
+The shell loop sleeps on the keypad rather than polling it: `hal->wait()` is a
+`poll()` on the evdev fd, with a timeout only when something is actually due.
+Nothing is due most of the time, so the timeout is usually infinite and an idle
+calculator costs no CPU at all — measured at zero jiffies over three seconds in
+the simulator, against sixty-two wakeups a second before.
+
+The cursor blinks at 1 Hz while you are typing and goes solid ten seconds after
+the last key. That is not a power decision so much as what it buys: a cursor
+that blinks forever is a timer that fires forever, and settling is what lets the
+wait go back to having no timeout. The blink itself is close to free — the Sharp
+panel holds its image unpowered and costs only what is clocked into it, and the
+driver is already sending a VCOM message every second in software VCOM mode.
+
+Auto-off is the only thing here that saves real power, because the Pi Zero W has
+no usable suspend: blanking the display would save microwatts against an SoC
+floor of something like half a watt. After ten minutes idle (a setting; `NEVER`,
+5, 10, 30 or 60) the machine warns for ten seconds and then saves the session and
+stops. A card handed to a PC over USB holds it awake — there is nothing to come
+back to a half-finished transfer for.
+
+**This does not yet turn anything off.** Two things are missing, both outside the
+shell:
+
+| | what is missing |
+|---|---|
+| **The rootfs** | `inittab` has `tty1::respawn:/usr/bin/qdos --device`, so the shell exiting restarts it. Until that changes, both the PWR key and auto-off are a reboot of the app, not a power-off. |
+| **The board** | `poweroff` halts the SoC but nothing cuts the rail, so a halted Pi still draws current. Actually being off needs a soft-latch circuit the firmware can trigger — and until one exists, making PWR halt the machine would leave no way back except pulling the battery. |
+
+Ten minutes is a guess, and deliberately longer than the five most calculators
+use: the timeout should be a function of how long a boot takes, and no boot has
+been timed. See [Running on hardware](#running-on-hardware).
 
 ## Changes to Quadrate
 
@@ -174,7 +216,7 @@ What remains genuinely unverified:
 |---|---|
 | **The panel itself** | An `fbtft` SPI panel has never been driven. Geometry handling is proven against a real framebuffer, but not against *that* one. |
 | **The physical keypad** | Matrix wiring and the device tree overlay that turns it into an evdev node. |
-| **Boot and power** | Nothing has been booted, timed, or measured. This is where the Pi is genuinely required. |
+| **Boot and power** | Nothing has been booted, timed, or measured. This is where the Pi is genuinely required — and boot time is what should set the auto-off timeout, so that setting is a guess until it is. |
 
 ### Panel and keypad choices this backend assumes
 
