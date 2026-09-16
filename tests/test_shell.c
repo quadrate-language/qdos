@@ -120,12 +120,18 @@ static bool g_usb_shared;
 static bool g_usb_fails; ///< A gadget that refuses to switch
 static int g_usb_calls;
 
+/* A keypad with more than one face, which only some backends have */
+static qdos_keypad_mod g_modifier;
+static bool g_has_modifier;
+
 static void store_reset(void) {
 	memset(g_store, 0, sizeof(g_store));
 	g_usb_supported = false;
 	g_usb_shared = false;
 	g_usb_fails = false; // or one failing-gadget test poisons every later one
 	g_usb_calls = 0;
+	g_modifier = QDOS_MOD_NONE;
+	g_has_modifier = false;
 }
 
 static qdos_store_result stub_read(
@@ -235,12 +241,18 @@ static int stub_usb_export(qdos_hal* hal, bool on) {
 	return 0;
 }
 
+static qdos_keypad_mod stub_modifier(qdos_hal* hal) {
+	(void)hal;
+	return g_modifier;
+}
+
 static void stub_hal(qdos_hal* hal, stub_state* st) {
 	memset(hal, 0, sizeof(*hal));
 	hal->init = stub_init;
 	hal->shutdown = stub_shutdown;
 	hal->present = stub_present;
 	hal->poll_key = stub_poll_key;
+	hal->modifier = g_has_modifier ? stub_modifier : NULL;
 	hal->running = stub_running;
 	hal->ticks_ms = stub_ticks_ms;
 	hal->wait = stub_wait;
@@ -1284,6 +1296,51 @@ static void test_edit_check_reports_error(void) {
 }
 
 /**
+ * A body that parses can still name something that is not a word. The
+ * interpreter would only notice when the word is called, so the check says it
+ * here instead.
+ */
+static void test_edit_check_finds_an_undefined_word(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"boom\" edit");
+	type_partial(script, &n, "ok");
+	key(script, &n, QDOS_KEY_CHECK);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "'ok' NOT DEFINED") != NULL);
+	CHECK(strstr(row, "COMPILES") == NULL);
+	CHECK(cell_is(fb, 0, ROW_MESSAGE_LINE, row[0], true)); // inverted, so flagged
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "boom") != NULL);
+}
+
+/** A body that only calls words that exist still passes. */
+static void test_edit_check_accepts_a_known_word(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"fine\" edit");
+	type_partial(script, &n, "1 dup +");
+	key(script, &n, QDOS_KEY_CHECK);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "COMPILES") != NULL);
+}
+
+/**
  * A check installs nothing. Saving the same edit would leave the word callable,
  * so the absent 42 is the difference between the two.
  */
@@ -1643,6 +1700,11 @@ static void test_fatal_runtime_errors_are_survivable(void) {
 		qdos_key_event script[64];
 		size_t n = 0;
 		type_line(script, &n, DEADLY[i]);
+
+		// The line that failed is still there to be corrected, so it is thrown
+		// away and the mode left before the next one is typed
+		key(script, &n, QDOS_KEY_CLEAR);
+		key(script, &n, QDOS_KEY_CLEAR);
 		type_line(script, &n, "1 2 +"); // and it still works afterwards
 
 		static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1921,20 +1983,35 @@ static void test_the_stack_reaches_the_reclaimed_row(void) {
 	CHECK(strstr(row, "1:") != NULL);
 }
 
-/** Deeper than that still says so rather than quietly dropping the rest. */
+/**
+ * Deeper than that says how many are hidden, on a row of its own.
+ *
+ * Sharing the top row with a value left the deepest entry drawn beside the
+ * marker with its own label overwritten, so it read as part of it.
+ */
 static void test_a_deeper_stack_still_marks_itself(void) {
 	store_reset();
 
 	qdos_key_event script[64];
 	size_t n = 0;
-	type_line(script, &n, "1 2 3 4 5 6 7 8 9");
+	type_line(script, &n, "1 2 3 4 5 6 7 8 9 10");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
+	// Ten deep, seven rows of values, so three are not on screen
 	char row[QDOS_COLS + 1];
 	read_row(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "...") != NULL);
+	CHECK(strstr(row, "3 MORE") != NULL);
+
+	// The row under it is a numbered value, not something the marker ate
+	read_row(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "7:") != NULL);
+	CHECK(strstr(row, "4") != NULL);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL);
+	CHECK(strstr(row, "10") != NULL);
 }
 
 /**
@@ -2710,13 +2787,342 @@ static void test_space_separates_numbers(void) {
 	CHECK(strstr(row, "15") != NULL); // 78 + would have been an error
 }
 
-/** clr leaves without writing. */
+/**
+ * A line that would not evaluate stays on the input for correction.
+ *
+ * Retyping is the expensive part here: there are no letters on the keypad, so
+ * every word costs a layer switch before it costs a keystroke.
+ */
+static void test_a_failed_line_is_kept(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "1 2 zzz");
+	key(script, &n, QDOS_KEY_RIGHT); // any key takes the line back off the message
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, n - 1, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL);
+
+	// The next key shows the line again, still holding what was typed
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == ':');
+	CHECK(strstr(row, "1 2 zzz") != NULL);
+}
+
+/** And the way to be rid of it is the key that says CLR while it is there. */
+static void test_clear_empties_the_line_before_leaving(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "1 2 zzz");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, n, fb, mid);
+
+	// Empty, and still in line mode
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == ':');
+	CHECK(strstr(row, "zzz") == NULL);
+
+	// The label says which of its two jobs is next
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "ESC") != NULL);
+}
+
+/** Infix is valid Quadrate that means something else, so it is refused. */
+static void test_infix_is_refused_with_the_postfix(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "5 - 3");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "5 3 -") != NULL);
+
+	// Nothing was evaluated, so nothing reached the stack
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") == NULL);
+}
+
+/** Unspaced too, which is two numbers rather than one wrong answer. */
+static void test_unspaced_infix_is_refused(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "5-3");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "5 3 -") != NULL);
+}
+
+/** Postfix, and a negative number, go through untouched. */
+static void test_the_hint_leaves_real_lines_alone(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "5 3 -");
+	type_line(script, &n, "-4");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "-4") != NULL);
+
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "2") != NULL);
+}
+
+/** Emptying the stack is the largest thing CLR does, so it is undoable. */
+static void test_clearing_the_stack_can_be_undone(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_CLEAR); // nothing part-typed, so this is the stack
+	key(script, &n, QDOS_KEY_UNDO);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL);
+	CHECK(strstr(row, "3") != NULL);
+
+	read_row(fb, ROW_TOP_VALUE - 2, row, sizeof(row));
+	CHECK(strstr(row, "3:") != NULL);
+	CHECK(strstr(row, "1") != NULL);
+}
+
+/**
+ * A number too wide for its row goes to exponent form.
+ *
+ * Cutting it would leave something that still reads as an answer, and there is
+ * no end of a number that is safe to drop.
+ */
+static void test_a_wide_number_keeps_its_magnitude(void) {
+	store_reset();
+	seed_setting("settings.decimals", 9); // nine places of 1e24 fits nowhere
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "1000000.0 dup * dup *");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "e+") != NULL);
+	CHECK(strstr(row, "1:") != NULL); // and it did not draw over the label
+}
+
+/** A string that will not fit keeps its head, with the cut marked. */
+static void test_a_wide_string_is_marked_where_it_was_cut(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"abcdefghijklmnopqrstuvwxyz\"");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "abcde") != NULL);
+	CHECK(strchr(row, QDOS_ELIDED) != NULL);
+	CHECK(row[0] == '1' && row[1] == ':');
+}
+
+/** STO and RCL take the digit after them, as the key marked STO always has. */
+static void test_sto_and_rcl_from_the_calculator(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_STO);
+	key(script, &n, QDOS_KEY_7);
+	key(script, &n, QDOS_KEY_CLEAR); // the stack, since the entry is spent
+	key(script, &n, QDOS_KEY_RCL);
+	key(script, &n, QDOS_KEY_7);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+}
+
+/** The press asks which register, so the digit is not taken for a number. */
+static void test_sto_asks_which_register(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_STO);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "STO") != NULL);
+	CHECK(strstr(row, "0-9") != NULL);
+}
+
+/** Anything but a digit takes it back, rather than storing somewhere random. */
+static void test_a_register_press_can_be_cancelled(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_STO);
+	key(script, &n, QDOS_KEY_DUP); // not a digit
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "CANCELLED") != NULL);
+
+	// 42 went on the stack when STO was pressed, and dup did not run
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** Leaving the calculator gives up waiting, rather than eating a later digit. */
+static void test_a_register_press_does_not_outlive_the_calculator(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_STO);
+	key(script, &n, QDOS_KEY_LIST); // off to a page instead of answering
+	key(script, &n, QDOS_KEY_CLEAR);
+	digits(script, &n, "7"); // a number, not a register
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+	CHECK(strstr(row, "STORED") == NULL);
+}
+
+/**
+ * The angle soft key is the setting, and pressing it turns it over.
+ *
+ * It is the one setting that silently changes an answer, so the label doing
+ * double duty as the annunciator is most of the point.
+ */
+static void test_the_angle_soft_key_shows_and_toggles(void) {
+	store_reset();
+	// The angle lives in mathwords, which outlives one shell, so say where to
+	// start rather than inheriting it from whichever test ran last
+	seed_setting("settings.angle", 0);
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT5);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "DEG") != NULL); // radians to start with, so now degrees
+
+	// And it is the setting itself, not a mode of its own
+	store_reset();
+	seed_setting("settings.angle", 0);
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT5);
+	key(script, &n, QDOS_KEY_SETTINGS);
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_SETTING_ANGLE, row, sizeof(row));
+	CHECK(strstr(row, "DEG") != NULL);
+}
+
+/** Which face the keypad is on shows beside the cursor, since a cap cannot. */
+static void test_the_prompt_shows_the_keypad_layer(void) {
+	store_reset();
+	g_has_modifier = true;
+	g_modifier = QDOS_MOD_ALPHA;
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(NULL, 0, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == '>' && row[1] == 'A');
+
+	// With a space of its own, or it reads as the first letter of the line
+	qdos_key_event script[8];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "sq");
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strncmp(row, ":A sq", 5) == 0);
+
+	// A keypad with one face says nothing and takes no room
+	store_reset();
+	run_script(NULL, 0, fb);
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == '>' && row[1] != 'A');
+}
+
+/** Leaving without writing, once it has asked. */
 static void test_edit_discards(void) {
 	store_reset();
 
 	qdos_key_event script[200];
 	size_t n = 0;
 	type_line(script, &n, "\"gone\" edit");
+	type_partial(script, &n, "x"); // something to lose
+	key(script, &n, QDOS_KEY_CLEAR);
 	key(script, &n, QDOS_KEY_CLEAR);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2725,6 +3131,54 @@ static void test_edit_discards(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(strstr(row, "NOT SAVED") != NULL);
+}
+
+/**
+ * The first press asks, because the editor holds the only copy.
+ *
+ * This is the leftmost soft key, which everywhere else in the shell is the way
+ * out of a page that costs nothing to leave.
+ */
+static void test_edit_asks_before_losing_work(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"typed\" edit");
+	type_partial(script, &n, "1 2 +");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Still in the editor, with the text and the question both on screen
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "ESC AGAIN") != NULL);
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "typed") != NULL);
+	CHECK(page_has(fb, "1 2 +"));
+}
+
+/** Nothing typed is nothing to lose, so it just leaves. */
+static void test_an_untouched_editor_leaves_at_once(void) {
+	store_reset();
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "\"fresh\" edit");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "ESC AGAIN") == NULL);
+
+	// Back at the calculator: the prompt is on the input line
+	CHECK(row[0] == '>');
 }
 
 /** Arrows move the cursor, so text can be inserted rather than only appended. */
@@ -3201,6 +3655,8 @@ int main(void) {
 	test_neg_then_arithmetic();
 	test_edit_check_reports_ok();
 	test_edit_check_reports_error();
+	test_edit_check_finds_an_undefined_word();
+	test_edit_check_accepts_a_known_word();
 	test_check_leaves_session_alone();
 	test_soft_labels_follow_mode();
 	test_soft_key_opens_apps();
@@ -3218,5 +3674,21 @@ int main(void) {
 	test_auto_off_warns_then_stops();
 	test_auto_off_never_stays_on();
 	test_auto_off_waits_for_the_card();
+	test_a_failed_line_is_kept();
+	test_clear_empties_the_line_before_leaving();
+	test_infix_is_refused_with_the_postfix();
+	test_unspaced_infix_is_refused();
+	test_the_hint_leaves_real_lines_alone();
+	test_clearing_the_stack_can_be_undone();
+	test_a_wide_number_keeps_its_magnitude();
+	test_a_wide_string_is_marked_where_it_was_cut();
+	test_sto_and_rcl_from_the_calculator();
+	test_sto_asks_which_register();
+	test_a_register_press_can_be_cancelled();
+	test_a_register_press_does_not_outlive_the_calculator();
+	test_the_angle_soft_key_shows_and_toggles();
+	test_the_prompt_shows_the_keypad_layer();
+	test_edit_asks_before_losing_work();
+	test_an_untouched_editor_leaves_at_once();
 	return check_report("shell");
 }

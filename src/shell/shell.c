@@ -11,6 +11,7 @@
 #include "complete.h"
 #include "editor.h"
 #include "guarded.h"
+#include "lint.h"
 #include "mathwords.h"
 
 #include "qdos_version.h"
@@ -153,8 +154,12 @@ struct qdos_shell {
 	size_t undo_depth;
 	bool undo_ready;
 	bool delete_armed;  ///< One press of backspace has already asked
+	bool drop_armed;	///< One press of ESC has already asked, in the editor
 	bool powering_off;  ///< Set by the power key, acted on by the run loop
 	bool usb_exported;  ///< The inbox is currently a PC's to write to
+
+	/** Waiting for the digit that says which register; see handle_calc_key() */
+	enum { REGISTER_IDLE = 0, REGISTER_STORING, REGISTER_RECALLING } register_wait;
 
 	qdos_editor ed;
 	size_t ed_top; ///< First visible line
@@ -178,6 +183,23 @@ static uint32_t auto_off_ms(const qdos_shell* sh) {
 		return 0;
 
 	return (uint32_t)AUTO_OFF_MINUTES[sh->auto_off] * 60u * 1000u;
+}
+
+/**
+ * @brief One character for the keypad face the next press will come from
+ *
+ * A keycap does not light up, so nothing on the machine says ALPHA is still
+ * locked. A keypad with one face reports none, and costs no space.
+ */
+static char modifier_char(const qdos_shell* sh) {
+	if (sh->hal->modifier == NULL)
+		return '\0';
+
+	switch (sh->hal->modifier(sh->hal)) {
+		case QDOS_MOD_ALPHA: return 'A';
+		case QDOS_MOD_SYMBOL: return '#';
+		default: return '\0';
+	}
 }
 
 /** @brief Is there a cursor on screen, and therefore something to blink? */
@@ -276,22 +298,33 @@ static size_t log_held(const qdos_shell* sh) {
 }
 
 /**
- * @brief A value as the settings say to show it
+ * @brief A value as the settings say to show it, in @p room columns
  *
  * The interpreter renders a float to as many digits as it takes, which is
- * fifteen more often than anyone wants.
+ * fifteen more often than anyone wants. Too wide for the row, a number goes to
+ * exponent form: there is no end of one that is safe to drop.
  */
-static void format_value(const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap) {
+static void format_value(
+		const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap, size_t room) {
 	const bool number = value->type == QD_INTERP_VALUE_INT || value->type == QD_INTERP_VALUE_FLOAT;
+	const double shown = (value->type == QD_INTERP_VALUE_INT) ? (double)value->i : value->f;
+
 	if (sh->decimals == DECIMALS_AUTO || !number) {
 		snprintf(out, cap, "%s", value->text);
-		return;
+	} else {
+		// A fixed number of decimals is a column to read down, so whole numbers
+		// get them too rather than jumping about
+		snprintf(out, cap, "%.*f", sh->decimals, shown);
 	}
 
-	// A fixed number of decimals is a column to read down, so whole numbers
-	// get them too rather than jumping about
-	const double shown = (value->type == QD_INTERP_VALUE_INT) ? (double)value->i : value->f;
-	snprintf(out, cap, "%.*f", sh->decimals, shown);
+	if (!number || strlen(out) <= room)
+		return;
+
+	for (int digits = 9; digits >= 0; digits--) {
+		snprintf(out, cap, "%.*e", digits, shown);
+		if (strlen(out) <= room)
+			return;
+	}
 }
 
 static void set_message(qdos_shell* sh, const char* text, bool is_error) {
@@ -359,15 +392,18 @@ typedef struct {
 
 static const soft_key SOFT[7][SOFT_KEYS] = {
 	// Turning off is the PWR key's job, not a soft key's: it is the one action
-	// on the row that cannot be undone by pressing it again.
-	[QDOS_MODE_CALC] = {{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
-			{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_NONE}},
+	// on the row that cannot be undone by pressing it again. The last slot is
+	// the angle, whose label is the setting rather than a name for it.
+	[QDOS_MODE_CALC] ={{"CLR", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
+			{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_ANGLE}},
 	[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
-			{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_NONE}},
+			{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_ANGLE}},
 	// down then up, so the pair sits like vim's j and k
 	[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
 			{"PICK", QDOS_KEY_ENTER}, {"EDIT", QDOS_KEY_OPEN}},
-	[QDOS_MODE_EDIT] = {{"DROP", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
+	// ESC, as everywhere else. DROP is a word on the keypad that empties the
+	// stack, and it was not doing that here.
+	[QDOS_MODE_EDIT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
 			{"", QDOS_KEY_NONE}, {"SAVE", QDOS_KEY_SAVE}},
 	[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"SET", QDOS_KEY_SETTINGS},
 			{"LOG", QDOS_KEY_DEBUG}, {"", QDOS_KEY_NONE}},
@@ -377,9 +413,20 @@ static const soft_key SOFT[7][SOFT_KEYS] = {
 			{"CLR", QDOS_KEY_BACKSPACE}, {"SET", QDOS_KEY_SETTINGS}},
 };
 
+static const char* angle_text(void);
+
 static void render_soft(qdos_shell* sh, qdos_console* con) {
 	for (int i = 0; i < SOFT_KEYS; i++) {
 		const char* label = SOFT[sh->mode][i].label;
+
+		// This one says what it is rather than what it does
+		if (SOFT[sh->mode][i].key == QDOS_KEY_ANGLE)
+			label = angle_text();
+
+		// And this one has two jobs, so it names whichever is next
+		if (sh->mode == QDOS_MODE_LINE && SOFT[sh->mode][i].key == QDOS_KEY_CLEAR)
+			label = (sh->input_len > 0) ? "CLR" : "ESC";
+
 		if (label[0] == '\0')
 			continue;
 
@@ -450,10 +497,104 @@ static void undo_restore(qdos_shell* sh) {
 	set_message(sh, "UNDONE", false);
 }
 
+static bool infix_operator(char ch) {
+	return ch == '+' || ch == '-' || ch == '*' || ch == '/';
+}
+
+/** @brief Is the whole of this the way a number is written? */
+static bool infix_number(const char* text, size_t len) {
+	bool digit = false;
+	bool point = false;
+
+	for (size_t i = 0; i < len; i++) {
+		if (text[i] >= '0' && text[i] <= '9') {
+			digit = true;
+		} else if (text[i] == '.' && !point) {
+			point = true;
+		} else if (text[i] != '-' || i != 0) {
+			return false;
+		}
+	}
+	return digit;
+}
+
+/**
+ * @brief Catch a line written the way it is said aloud
+ *
+ * `5 - 3` and `5-3` are both valid Quadrate, neither is an error, and neither
+ * of them is two. The shape is narrow on purpose: a number, an operator, a
+ * number, and nothing else on the line. See docs/design.md.
+ *
+ * @return true when @p out holds what to say instead
+ */
+static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
+	const char* token[4];
+	size_t token_len[4];
+	size_t count = 0;
+
+	for (size_t i = 0; i < len;) {
+		while (i < len && line[i] == ' ')
+			i++;
+		if (i >= len)
+			break;
+		if (count == 4)
+			return false; // more on the line than this mistake is made of
+		token[count] = line + i;
+		while (i < len && line[i] != ' ')
+			i++;
+		token_len[count] = (size_t)(line + i - token[count]);
+		count++;
+	}
+
+	const char* left = NULL;
+	const char* right = NULL;
+	size_t left_len = 0;
+	size_t right_len = 0;
+	char op = 0;
+
+	if (count == 3 && token_len[1] == 1 && infix_operator(token[1][0])) {
+		left = token[0];
+		left_len = token_len[0];
+		right = token[2];
+		right_len = token_len[2];
+		op = token[1][0];
+	} else if (count == 1) {
+		// Unspaced, where the operator is inside the one token. Never the first
+		// character, which is a sign rather than an operator.
+		for (size_t i = 1; i + 1 < token_len[0]; i++) {
+			if (!infix_operator(token[0][i]))
+				continue;
+			left = token[0];
+			left_len = i;
+			right = token[0] + i + 1;
+			right_len = token_len[0] - i - 1;
+			op = token[0][i];
+			break;
+		}
+	}
+
+	if (op == 0 || !infix_number(left, left_len) || !infix_number(right, right_len))
+		return false;
+
+	// Their own numbers, the right way round, is the whole of the explanation
+	const int shown = 6;
+	snprintf(out, cap, "RPN: TRY %.*s %.*s %c", (int)(left_len < (size_t)shown ? left_len : (size_t)shown),
+			left, (int)(right_len < (size_t)shown ? right_len : (size_t)shown), right, op);
+	return true;
+}
+
 /** @brief Evaluate the input line and report the outcome */
 static void submit(qdos_shell* sh) {
 	if (sh->input_len == 0)
 		return;
+
+	// Infix is valid Quadrate that means something else, so it is caught here
+	// rather than left to fail: nothing on the stack has moved yet.
+	char hint[QDOS_COLS + 1];
+	if (infix_hint(sh->input, sh->input_len, hint, sizeof(hint))) {
+		set_message(sh, hint, true);
+		return;
+	}
 
 	// A word may take over the screen, and then the line and the message it
 	// left are its business, not ours
@@ -465,6 +606,11 @@ static void submit(qdos_shell* sh) {
 			persist_declaration(sh);
 	} else {
 		set_message(sh, qdos_guarded_error(sh->interp), true);
+
+		// The line stays, to be corrected rather than typed again. Retyping it
+		// is the expensive part on a keypad with no letters of its own.
+		if (sh->mode == before)
+			return;
 	}
 
 	// What a program printed outranks whatever the shell had to say
@@ -602,7 +748,44 @@ static void entry_negate(qdos_shell* sh) {
 	}
 }
 
+/**
+ * @brief Finish a register press: the digit says which one
+ *
+ * Nought to nine, which is what a key marked STO has ever reached. The other
+ * ninety are still there behind `sto` and `rcl` typed out in full.
+ */
+static bool register_digit(qdos_shell* sh, const qdos_key_event* ev) {
+	if (sh->register_wait == REGISTER_IDLE)
+		return false;
+
+	const bool storing = (sh->register_wait == REGISTER_STORING);
+	sh->register_wait = REGISTER_IDLE;
+
+	if (ev->key < QDOS_KEY_0 || ev->key > QDOS_KEY_9) {
+		set_message(sh, "CANCELLED", false);
+		return true;
+	}
+
+	char line[16];
+	snprintf(line, sizeof(line), "%d %s", (int)(ev->key - QDOS_KEY_0), storing ? "sto" : "rcl");
+
+	undo_snapshot(sh);
+	if (!qdos_guarded_eval(sh->interp, line)) {
+		set_message(sh, qdos_guarded_error(sh->interp), true);
+		return true;
+	}
+
+	char message[QDOS_COLS + 1];
+	snprintf(message, sizeof(message), "%s %d", storing ? "STORED" : "RECALLED",
+			(int)(ev->key - QDOS_KEY_0));
+	set_message(sh, message, false);
+	return true;
+}
+
 static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
+	if (register_digit(sh, ev))
+		return;
+
 	const char* word = function_word(ev->key);
 	if (word != NULL) {
 		apply_word(sh, word);
@@ -633,6 +816,16 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_NEG: entry_negate(sh); break;
 		case QDOS_KEY_UNDO: undo_restore(sh); break;
 
+		// The pending number goes on the stack first, or the register would be
+		// given whatever was under what is being typed
+		case QDOS_KEY_STO:
+		case QDOS_KEY_RCL:
+			if (!entry_commit(sh))
+				break;
+			sh->register_wait = (ev->key == QDOS_KEY_STO) ? REGISTER_STORING : REGISTER_RECALLING;
+			set_message(sh, ev->key == QDOS_KEY_STO ? "STO: WHICH? 0-9" : "RCL: WHICH? 0-9", false);
+			break;
+
 		// Bare Enter duplicates: how an RPN calculator squares a number.
 		case QDOS_KEY_ENTER:
 			if (sh->entry_len > 0) {
@@ -654,6 +847,9 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 			if (sh->entry_len > 0) {
 				entry_clear(sh);
 			} else {
+				// Emptying the stack is the largest thing this key does and the
+				// only one it used to do unrecoverably
+				undo_snapshot(sh);
 				qdos_guarded_eval(sh->interp, "clear");
 				set_message(sh, "STACK CLEARED", false);
 			}
@@ -704,6 +900,10 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		case QDOS_KEY_SWAP: input_append(sh, "swap"); break;
 		case QDOS_KEY_NEG: input_append(sh, " neg "); break;
 
+		// Typed out, because here the register number is part of the line
+		case QDOS_KEY_STO: input_append(sh, " sto "); break;
+		case QDOS_KEY_RCL: input_append(sh, " rcl "); break;
+
 		case QDOS_KEY_CHAR:
 			if (ev->ch) {
 				const char text[2] = {ev->ch, '\0'};
@@ -737,8 +937,13 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 				sh->input_cursor++;
 			break;
 
+		// The line first, the mode second, as CLR does in the calculator. A line
+		// that survives a failed eval needs somewhere to be thrown away.
 		case QDOS_KEY_CLEAR:
-			leave_line_mode(sh);
+			if (sh->input_len > 0)
+				input_clear(sh);
+			else
+				leave_line_mode(sh);
 			break;
 
 		default:
@@ -940,6 +1145,10 @@ static void register_natives(qdos_shell* sh, qd_interp* interp);
  *
  * A scratch interpreter, because eval also runs whatever is at top level and
  * declares what parses -- neither belongs in the session until a save.
+ *
+ * Parsing alone is not much of an answer: declaring a word does not resolve
+ * the names in its body, so the lint reads the body afterwards and says what
+ * calling it would have said. See src/shell/lint.h.
  */
 static void check_program(qdos_shell* sh) {
 	qd_interp* scratch = qd_interp_create(STACK_SIZE);
@@ -955,25 +1164,41 @@ static void check_program(qdos_shell* sh) {
 		qdos_programs_restore(sh->hal, (qdos_store_scope)scope, scratch);
 
 	char message[80];
-	const bool ok = qdos_guarded_eval(scratch, sh->ed.text);
-	if (ok)
-		snprintf(message, sizeof(message), "'%.12s' COMPILES", sh->ed.name);
-	else
+	bool bad = !qdos_guarded_eval(scratch, sh->ed.text);
+	if (bad)
 		snprintf(message, sizeof(message), "%s", qdos_guarded_error(scratch));
+	else if (qdos_lint_program(scratch, sh->ed.text, message, sizeof(message)))
+		bad = true; // the lint wrote the message
+	else
+		snprintf(message, sizeof(message), "'%.12s' COMPILES", sh->ed.name);
 
 	qd_interp_destroy(scratch);
-	set_message(sh, message, !ok);
+	set_message(sh, message, bad);
+}
+
+/** @brief Type a word into the editor, spaced off whatever is around it */
+static void edit_insert_word(qdos_shell* sh, const char* word) {
+	qdos_editor_insert(&sh->ed, ' ');
+	for (const char* c = word; *c; c++)
+		qdos_editor_insert(&sh->ed, *c);
+	qdos_editor_insert(&sh->ed, ' ');
+	edit_scroll_into_view(sh);
 }
 
 static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
+	if (ev->key != QDOS_KEY_CLEAR)
+		sh->drop_armed = false;
+
 	const char* word = function_word(ev->key);
 	if (word != NULL) {
-		qdos_editor_insert(&sh->ed, ' ');
-		for (const char* c = word; *c; c++)
-			qdos_editor_insert(&sh->ed, *c);
-		qdos_editor_insert(&sh->ed, ' ');
-		edit_scroll_into_view(sh);
+		edit_insert_word(sh, word);
 		return;
+	}
+
+	switch (ev->key) {
+		case QDOS_KEY_STO: edit_insert_word(sh, "sto"); return;
+		case QDOS_KEY_RCL: edit_insert_word(sh, "rcl"); return;
+		default: break;
 	}
 
 	switch (ev->key) {
@@ -1014,8 +1239,16 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 		}
 
 		case QDOS_KEY_CLEAR:
+			// Asking once, because the editor holds the only copy of what has
+			// been typed. Untouched text has nothing to lose, so it just leaves.
+			if (sh->ed.dirty && !sh->drop_armed) {
+				sh->drop_armed = true;
+				set_message(sh, "ESC AGAIN: LOSE EDITS", false);
+				break;
+			}
+			sh->drop_armed = false;
 			sh->mode = QDOS_MODE_CALC;
-			set_message(sh, "NOT SAVED", false);
+			set_message(sh, sh->ed.dirty ? "NOT SAVED" : "", false);
 			break;
 
 		default:
@@ -1238,6 +1471,11 @@ static void handle_debug_key(qdos_shell* sh, const qdos_key_event* ev) {
 }
 
 static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
+	// Only the calculator asks which register, so an excursion anywhere else
+	// gives up waiting for the digit rather than eating a later one
+	if (sh->mode != QDOS_MODE_CALC)
+		sh->register_wait = REGISTER_IDLE;
+
 	if (ev->key == QDOS_KEY_LIST && sh->mode != QDOS_MODE_LIST) {
 		list_open(sh);
 		return;
@@ -1250,6 +1488,14 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 	if (ev->key == QDOS_KEY_POWER) {
 		sh->powering_off = true;
+		return;
+	}
+
+	// Wherever it is pressed from: the soft label reads back as the new setting,
+	// so nothing else has to be said
+	if (ev->key == QDOS_KEY_ANGLE) {
+		qdos_math_set_degrees(!qdos_math_degrees());
+		save_settings(sh);
 		return;
 	}
 
@@ -1300,8 +1546,15 @@ static void render_edit(qdos_shell* sh, qdos_console* con) {
 	size_t line, col;
 	qdos_editor_where(&sh->ed, &line, &col);
 
+	// Alongside the position, because the editor is where a locked ALPHA layer
+	// is easiest to leave on and hardest to notice
+	const char mod = modifier_char(sh);
 	char header[QDOS_COLS + 1];
-	snprintf(header, sizeof(header), "%zu:%zu", line + 1, col + 1);
+	if (mod != '\0')
+		snprintf(header, sizeof(header), "%c %zu:%zu", mod, line + 1, col + 1);
+	else
+		snprintf(header, sizeof(header), "%zu:%zu", line + 1, col + 1);
+
 	qdos_console_puts(con, 0, ROW_HEADER, sh->ed.name);
 	qdos_console_puts_right(con, ROW_HEADER, header);
 	qdos_console_rule(con, ROW_HEADER);
@@ -1505,8 +1758,9 @@ static void render(qdos_shell* sh) {
 
 	const size_t depth = qd_interp_depth(sh->interp);
 
-	// Top of stack nearest the input line.
-	const size_t visible = (depth < STACK_ROWS) ? depth : (size_t)STACK_ROWS;
+	// Top of stack nearest the input line. Deeper than the rows hold, the top
+	// one goes to saying so instead of to a value.
+	const size_t visible = (depth <= (size_t)STACK_ROWS) ? depth : (size_t)STACK_ROWS - 1;
 	for (size_t i = 0; i < visible; i++) {
 		qd_interp_value value;
 		if (!qd_interp_peek(sh->interp, i, &value))
@@ -1516,15 +1770,21 @@ static void render(qdos_shell* sh) {
 
 		char label[16];
 		snprintf(label, sizeof(label), "%zu:", i + 1);
-		qdos_console_puts(con, 0, row, label);
+		const int used = qdos_console_puts(con, 0, row, label);
 
+		// The value keeps off the label rather than drawing over it
 		char shown[QD_INTERP_VALUE_TEXT_MAX];
-		format_value(sh, &value, shown, sizeof(shown));
-		qdos_console_puts_right(con, row, shown);
+		format_value(sh, &value, shown, sizeof(shown), (size_t)(QDOS_COLS - used - 1));
+		qdos_console_puts_right_within(con, row, used + 1, shown);
 	}
 
-	if (depth > (size_t)STACK_ROWS)
-		qdos_console_puts(con, 0, ROW_STACK_FIRST, "...");
+	// Its own row, and it says how many. Sharing the top row with a value left
+	// the deepest entry looking like part of the marker.
+	if (depth > visible) {
+		char hidden[QDOS_COLS + 1];
+		snprintf(hidden, sizeof(hidden), "%zu MORE", depth - visible);
+		qdos_console_puts(con, 0, ROW_STACK_FIRST, hidden);
+	}
 
 	qdos_console_rule(con, ROW_CONTENT_LAST);
 	render_soft(sh, con);
@@ -1551,9 +1811,21 @@ static void render(qdos_shell* sh) {
 		}
 	}
 
-	qdos_console_puts(con, 0, ROW_INPUT, prompt);
+	// The keypad's live layer goes after the prompt, which stays in the column
+	// the eye looks to for the mode. It brings its own space: without one it
+	// reads as the first letter of what is being typed.
+	const char mod = modifier_char(sh);
+	char shown_prompt[PROMPT_LEN + 2] = {prompt[0], prompt[1], '\0', '\0'};
+	int prompt_len = PROMPT_LEN;
+	if (mod != '\0') {
+		shown_prompt[1] = mod;
+		shown_prompt[2] = ' ';
+		prompt_len = PROMPT_LEN + 1;
+	}
 
-	const int room = QDOS_COLS - PROMPT_LEN - 1; // reserve a cell for the cursor
+	qdos_console_puts(con, 0, ROW_INPUT, shown_prompt);
+
+	const int room = QDOS_COLS - prompt_len - 1; // reserve a cell for the cursor
 
 	// Scroll so the cursor stays on screen, rather than always showing the tail
 	size_t caret = line_mode ? sh->input_cursor - (size_t)(text - sh->input) : len;
@@ -1561,9 +1833,9 @@ static void render(qdos_shell* sh) {
 		caret = len;
 	const size_t start = (caret > (size_t)room) ? caret - (size_t)room : 0;
 
-	qdos_console_puts(con, PROMPT_LEN, ROW_INPUT, text + start);
+	qdos_console_puts(con, prompt_len, ROW_INPUT, text + start);
 	if (sh->cursor_on)
-		qdos_console_invert(con, PROMPT_LEN + (int)(caret - start), ROW_INPUT, 1);
+		qdos_console_invert(con, prompt_len + (int)(caret - start), ROW_INPUT, 1);
 
 	sh->hal->present(sh->hal, con->fb);
 }

@@ -20,6 +20,7 @@ typedef struct {
 	size_t len;
 	size_t cursor;
 	char name[QDOS_PROGRAM_NAME_MAX];
+	bool dirty; ///< Edited since it was opened, and so worth asking about
 } qdos_editor;
 
 /** @brief Start editing. A NULL source opens a template for a new program. */

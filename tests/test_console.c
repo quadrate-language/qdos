@@ -89,6 +89,62 @@ static void test_puts_right(void) {
 	CHECK(ink_pixels(&con, 0, 0) == 0);			   // nothing at the left edge
 }
 
+/** Does this cell hold this character? */
+static bool cell_holds(const qdos_console* con, int col, int row, char ch) {
+	for (int y = 0; y < QDOS_CELL_H; y++) {
+		const uint16_t bits = qdos_font_row(ch, y);
+		for (int x = 0; x < QDOS_CELL_W; x++) {
+			const size_t i = (size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + col * QDOS_CELL_W + x;
+			if ((con->fb[i] == con->ink) != ((bits & (1u << x)) != 0))
+				return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * Too long to fit keeps the head, and says it was cut.
+ *
+ * It used to keep the tail, which on a number means dropping the leading digits
+ * and leaving something that still reads as an answer.
+ */
+static void test_puts_right_keeps_the_head(void) {
+	qdos_console con;
+	qdos_console_init(&con);
+
+	char wide[QDOS_COLS + 8];
+	memset(wide, 'a', sizeof(wide));
+	wide[0] = 'H';
+	wide[sizeof(wide) - 1] = '\0';
+
+	qdos_console_puts_right(&con, 0, wide);
+	CHECK(cell_holds(&con, 0, 0, 'H'));
+	CHECK(cell_holds(&con, QDOS_COLS - 1, 0, QDOS_ELIDED));
+}
+
+/** Within a narrower run, so a value keeps off the label beside it. */
+static void test_puts_right_within(void) {
+	qdos_console con;
+	qdos_console_init(&con);
+
+	qdos_console_puts_right_within(&con, 0, 3, "42");
+	CHECK(cell_holds(&con, QDOS_COLS - 1, 0, '2'));
+	CHECK(ink_pixels(&con, 0, 0) == 0);
+
+	// Twenty-five characters no longer fit, because three columns are spoken for
+	char wide[QDOS_COLS + 1];
+	memset(wide, 'a', QDOS_COLS);
+	wide[0] = 'H';
+	wide[QDOS_COLS] = '\0';
+
+	qdos_console_init(&con);
+	qdos_console_puts_right_within(&con, 0, 3, wide);
+	CHECK(ink_pixels(&con, 0, 0) == 0); // the first three cells are untouched
+	CHECK(ink_pixels(&con, 2, 0) == 0);
+	CHECK(cell_holds(&con, 3, 0, 'H'));
+	CHECK(cell_holds(&con, QDOS_COLS - 1, 0, QDOS_ELIDED));
+}
+
 static void test_invert(void) {
 	qdos_console con;
 	qdos_console_init(&con);
@@ -271,6 +327,8 @@ int main(int argc, char** argv) {
 	test_putc_out_of_bounds();
 	test_puts_clips();
 	test_puts_right();
+	test_puts_right_keeps_the_head();
+	test_puts_right_within();
 	test_invert();
 	test_rule();
 	test_splash();

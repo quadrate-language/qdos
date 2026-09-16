@@ -53,6 +53,12 @@ test_mathwords = executable('test_mathwords', 'test_mathwords.c',
 		link_language: 'cpp')
 test('mathwords', test_mathwords)
 
+test_lint = executable('test_lint', 'test_lint.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('lint', test_lint)
+
 test_guarded = executable('test_guarded', 'test_guarded.c',
 		include_directories: qdos_inc,
 		dependencies: [qdos_core_dep],

@@ -71,17 +71,30 @@ int qdos_console_puts(qdos_console* con, int col, int row, const char* text) {
 	return drawn;
 }
 
-void qdos_console_puts_right(qdos_console* con, int row, const char* text) {
-	if (!con || !text)
+void qdos_console_puts_right_within(qdos_console* con, int row, int from, const char* text) {
+	if (!con || !text || from < 0 || from >= QDOS_COLS)
 		return;
 
+	const int room = QDOS_COLS - from;
 	const size_t len = strlen(text);
-	if (len >= QDOS_COLS) {
-		// Keep the tail: that is where the recent characters are.
-		qdos_console_puts(con, 0, row, text + (len - QDOS_COLS));
+
+	// Keep the head and say it was cut. The tail is the wrong end to keep of a
+	// number: dropping the leading digits leaves something that still reads as
+	// an answer.
+	if (len > (size_t)room) {
+		char cut[QDOS_COLS + 1];
+		const int keep = room - 1;
+		memcpy(cut, text, (size_t)keep);
+		cut[keep] = QDOS_ELIDED;
+		cut[room] = '\0';
+		qdos_console_puts(con, from, row, cut);
 		return;
 	}
 	qdos_console_puts(con, QDOS_COLS - (int)len, row, text);
+}
+
+void qdos_console_puts_right(qdos_console* con, int row, const char* text) {
+	qdos_console_puts_right_within(con, row, 0, text);
 }
 
 void qdos_console_invert(qdos_console* con, int col, int row, int count) {

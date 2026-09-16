@@ -45,6 +45,7 @@ void qdos_editor_insert(qdos_editor* ed, char ch) {
 	ed->cursor++;
 	ed->len++;
 	ed->text[ed->len] = '\0';
+	ed->dirty = true;
 }
 
 void qdos_editor_backspace(qdos_editor* ed) {
@@ -55,6 +56,7 @@ void qdos_editor_backspace(qdos_editor* ed) {
 	ed->cursor--;
 	ed->len--;
 	ed->text[ed->len] = '\0';
+	ed->dirty = true;
 }
 
 void qdos_editor_move(qdos_editor* ed, int dx, int dy) {

@@ -80,14 +80,15 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 			BTN(TXT(QDOS_PAD_GLYPH_SPACE, " "), NONE, TXT(",", ","))},
 
 	/*
-	 * The stack, which is Quadrate's own row. The words that shuffle it further
-	 * sit above them, so the whole subject is in one place.
+	 * The stack, which is Quadrate's own row. Above it, in yellow, is what else
+	 * can be done to the stack: shuffling, undoing, and the registers it is put
+	 * away in. STO and RCL take the digit after them.
 	 */
 	{BTN(KEY("dup", QDOS_KEY_DUP), TXT("O", "o"), TXT("nip", " nip ")),
 			BTN(KEY("drop", QDOS_KEY_DROP), TXT("P", "p"), KEY("UNDO", QDOS_KEY_UNDO)),
 			BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("roll", " roll ")),
-			BTN(KEY("over", QDOS_KEY_OVER), TXT("R", "r"), TXT("free", " free ")),
-			BTN(KEY("rot", QDOS_KEY_ROT), TXT("S", "s"), TXT("APP", " append "))},
+			BTN(KEY("over", QDOS_KEY_OVER), TXT("R", "r"), KEY("STO", QDOS_KEY_STO)),
+			BTN(KEY("rot", QDOS_KEY_ROT), TXT("S", "s"), KEY("RCL", QDOS_KEY_RCL))},
 
 	// Entry and editing. ALPHA sits beside enter, being the other thing you
 	// reach for mid-word.

@@ -43,6 +43,12 @@ int qdos_console_puts(qdos_console* con, int col, int row, const char* text);
 
 void qdos_console_puts_right(qdos_console* con, int row, const char* text);
 
+/** @brief Marks text that did not fit, in its last cell */
+#define QDOS_ELIDED '~'
+
+/** @brief Right-aligned, using only the columns from @p from onwards */
+void qdos_console_puts_right_within(qdos_console* con, int row, int from, const char* text);
+
 /** @brief Invert cells, for the cursor and for errors */
 void qdos_console_invert(qdos_console* con, int col, int row, int count);
 

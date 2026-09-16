@@ -329,6 +329,14 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 	return false;
 }
 
+static qdos_keypad_mod sim_modifier(qdos_hal* hal) {
+	switch (((sim_state*)hal->impl)->layer) {
+		case QDOS_PAD_ALPHA: return QDOS_MOD_ALPHA;
+		case QDOS_PAD_SYMBOL: return QDOS_MOD_SYMBOL;
+		default: return QDOS_MOD_NONE;
+	}
+}
+
 static bool sim_running(qdos_hal* hal) {
 	return ((sim_state*)hal->impl)->running;
 }
@@ -445,6 +453,7 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->shutdown = sim_shutdown;
 	hal->present = sim_present;
 	hal->poll_key = sim_poll_key;
+	hal->modifier = sim_modifier;
 	hal->running = sim_running;
 	hal->ticks_ms = sim_ticks_ms;
 	hal->wait = sim_wait;

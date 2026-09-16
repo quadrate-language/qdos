@@ -75,6 +75,9 @@ typedef enum {
 	QDOS_KEY_SETTINGS,
 	QDOS_KEY_DEBUG,    ///< The log of what has been said
 	QDOS_KEY_UNDO,
+	QDOS_KEY_ANGLE, ///< Degrees or radians, the one setting that changes answers
+	QDOS_KEY_STO,	///< Store x in a register; the next digit says which
+	QDOS_KEY_RCL,	///< Recall one
 
 	/* Soft keys, labelled on screen because their meaning follows the mode */
 	QDOS_KEY_SOFT1,
@@ -95,6 +98,19 @@ typedef struct {
 	qdos_key key; ///< Logical key
 	char ch;	  ///< ASCII character for QDOS_KEY_CHAR, otherwise 0
 } qdos_key_event;
+
+/**
+ * @brief Which face of the keypad the next press will come from
+ *
+ * The shell cannot know this -- the layer lives in whatever is reading keys --
+ * and the user cannot see it either, because a keycap does not light up. So the
+ * backend says, and the display shows it beside the cursor.
+ */
+typedef enum {
+	QDOS_MOD_NONE = 0,
+	QDOS_MOD_ALPHA,	 ///< Letters, locked until it is pressed again
+	QDOS_MOD_SYMBOL	 ///< Quadrate's syntax, for one press
+} qdos_keypad_mod;
 
 typedef enum {
 	QDOS_STORE_OK = 0,		  ///< Success
@@ -133,6 +149,9 @@ struct qdos_hal {
 	void (*present)(qdos_hal* hal, const uint8_t* fb);
 
 	bool (*poll_key)(qdos_hal* hal, qdos_key_event* out);
+
+	/** @brief Which keypad face is live. NULL where the keypad has only one. */
+	qdos_keypad_mod (*modifier)(qdos_hal* hal);
 
 	bool (*running)(qdos_hal* hal);
 

@@ -102,6 +102,43 @@ generated C stub linked so `dlopen` can resolve the symbol — that is precisely
 why `qd_build()` spawns `cc`, `nm` and a linker. Interpreted, it is a lookup in a
 map while walking the tree.
 
+### What the display has to say that the keypad cannot
+
+A calculator's keys are moulded, not lit, so nothing on the machine can show
+what a key will do *next* — whether ALPHA is still locked, or whether `sin` is
+about to take degrees. Both are states that quietly change the meaning of the
+next press, and both used to live only in a menu two pages deep.
+
+- **The angle** is the fifth soft key in both calculator and line mode, labelled
+  `DEG` or `RAD`. The label is the setting and pressing it turns it over, so the
+  annunciator and the control are the same five characters. The settings page
+  still lists it; they are one setting, not two.
+- **The keypad's live face** comes from the backend, through `hal->modifier`,
+  because the shell cannot know it: the layer belongs to whatever is reading
+  keys. It shows as one character after the prompt, and a keypad with a single
+  face reports `QDOS_MOD_NONE` and costs nothing. The simulator also tints the
+  modifier key, which is the part real hardware cannot do.
+
+Numbers get the same treatment from the other side. A value too wide for its row
+used to keep its tail, which on a number means dropping the leading digits and
+leaving something that still reads as an answer; it now moves to exponent form,
+and only text is cut — marked, and from the end.
+
+### Typing postfix on a keypad laid out for infix
+
+`5 - 3` is not an error in Quadrate. It pushes 5, subtracts that from whatever
+the stack was already holding, and pushes 3. `5-3` is two numbers. Neither
+reports anything, and the keypad makes both of them the easiest thing to type,
+so the shell recognises the shape — a number, an operator, a number, nothing
+else — and answers with the user's own numbers the right way round rather than
+running it. The check is deliberately narrow: three tokens or one, and every
+other line goes through untouched.
+
+The other half of that is not throwing the line away. A line that fails to
+evaluate keeps its text, because the stack it half-moved is visible above it and
+the typing is what cost something. `Escape` is the way to be rid of it, and only
+leaves the mode once there is nothing left on the line.
+
 ### Two tiers
 
 | tier | executed by | cost |

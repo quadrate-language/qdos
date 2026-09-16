@@ -124,6 +124,26 @@ static void test_full_buffer_is_refused(void) {
 	CHECK(ed.text[ed.len] == '\0');
 }
 
+/** Opening is not editing, so a buffer nobody touched has nothing to lose. */
+static void test_dirty_follows_the_edits(void) {
+	qdos_editor ed;
+	qdos_editor_open(&ed, "x", "fn x( -- ) { }");
+	CHECK(!ed.dirty);
+
+	qdos_editor_move(&ed, 1, 0);
+	CHECK(!ed.dirty); // looking about is not editing either
+
+	qdos_editor_insert(&ed, 'z');
+	CHECK(ed.dirty);
+
+	// A template is the editor's own writing, not the user's
+	qdos_editor_open(&ed, "fresh", NULL);
+	CHECK(!ed.dirty);
+
+	qdos_editor_backspace(&ed);
+	CHECK(ed.dirty);
+}
+
 int main(void) {
 	test_open_existing();
 	test_open_new_has_a_template();
@@ -132,5 +152,6 @@ int main(void) {
 	test_vertical_movement_keeps_column();
 	test_movement_stops_at_the_ends();
 	test_full_buffer_is_refused();
+	test_dirty_follows_the_edits();
 	return check_report("editor");
 }
