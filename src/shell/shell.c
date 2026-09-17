@@ -2095,6 +2095,39 @@ static int native_edit(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+/**
+ * `qdos::key` - ( -- key:i64 ch:i64 got:i64) the next keypress, if there is one
+ *
+ * For a program that has taken the screen. The shell is waiting inside the
+ * call, so the keypad is the program's until it returns.
+ */
+static int native_key(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+
+	qdos_key_event event;
+	if (!sh->hal->poll_key(sh->hal, &event)) {
+		qd_push_i(ctx, 0);
+		qd_push_i(ctx, 0);
+		return qd_push_i(ctx, 0);
+	}
+
+	qd_push_i(ctx, (int64_t)event.key);
+	qd_push_i(ctx, (int64_t)event.ch);
+	return qd_push_i(ctx, 1);
+}
+
+/** `qdos::running` - ( -- r:i64) false once the machine is stopping */
+static int native_running(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	return qd_push_i(ctx, sh->hal->running(sh->hal) ? 1 : 0);
+}
+
+/** `qdos::ticks` - ( -- ms:i64) */
+static int native_ticks(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	return qd_push_i(ctx, (int64_t)sh->hal->ticks_ms(sh->hal));
+}
+
 /** `cls` - ( -- ) clear the message line */
 static int native_cls(qd_context* ctx, void* userdata) {
 	(void)ctx;
@@ -2111,6 +2144,11 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "forget", "(name:str -- )", native_forget, sh);
 	qd_interp_register(interp, "edit", "(name:str -- )", native_edit, sh);
 	qd_interp_register(interp, "cls", "( -- )", native_cls, sh);
+
+	// The machine itself, for a program that has taken the screen
+	qd_interp_register(interp, "qdos::key", "( -- key:i64 ch:i64 got:i64)", native_key, sh);
+	qd_interp_register(interp, "qdos::running", "( -- r:i64)", native_running, sh);
+	qd_interp_register(interp, "qdos::ticks", "( -- ms:i64)", native_ticks, sh);
 	qdos_register_math(interp);
 }
 

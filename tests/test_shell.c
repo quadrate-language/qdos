@@ -3538,6 +3538,40 @@ static void test_the_card_is_not_read_while_it_is_shared(void) {
 	CHECK(strstr(row, "FROM THE CARD") == NULL);
 }
 
+/** A program can ask the machine about itself, which is how one takes over. */
+static void test_a_program_can_ask_the_machine(void) {
+	store_reset();
+	seed_system("alive", "fn alive( -- r:i64) { qdos::running }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "alive");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1") != NULL);
+}
+
+/** And take a keypress, there being none waiting in a scripted run. */
+static void test_a_program_can_take_a_key(void) {
+	store_reset();
+	seed_system("gotkey", "fn gotkey( -- r:i64) { qdos::key drop drop }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "gotkey");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL);
+}
+
 /** Leaving without writing, once it has asked. */
 static void test_edit_discards(void) {
 	store_reset();
@@ -4122,6 +4156,8 @@ int main(void) {
 	test_the_list_shows_a_program_without_colons();
 	test_picking_a_program_types_its_name();
 	test_a_program_owns_the_screen_while_it_runs();
+	test_a_program_can_ask_the_machine();
+	test_a_program_can_take_a_key();
 	test_a_program_arriving_on_the_card_is_picked_up();
 	test_a_program_arriving_is_callable();
 	test_a_module_arriving_asks_for_a_restart();
