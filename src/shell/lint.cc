@@ -47,6 +47,10 @@ namespace {
 		case Type::DEFER_STATEMENT:
 			return "DEFER";
 
+		// The language has `while` again; the interpreter runs `loop` only
+		case Type::WHILE_STATEMENT:
+			return "WHILE";
+
 		// Methods come through here too: a receiver needs the struct it binds
 		// to, which is the thing above
 		case Type::STRUCT_DECLARATION:

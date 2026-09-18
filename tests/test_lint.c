@@ -174,6 +174,11 @@ static void test_what_the_interpreter_cannot_run_is_reported(void) {
 	// And it really is only a check-time find: declaring it succeeded above
 	CHECK(!qd_interp_eval(interp, "t"));
 
+	// `while` parses again since the compiler readded it, and still does not run
+	CHECK(lint(interp, "fn w( -- ) {\n\t0 -> i\n\ti 5 < while {\n\t\ti 1 + -> i\n\t}\n}", message, sizeof(message)));
+	CHECK_STR(message, "L3: WHILE NOT SUPPORTED");
+	CHECK(!qd_interp_eval(interp, "w"));
+
 	qd_interp_destroy(interp);
 }
 
