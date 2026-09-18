@@ -900,6 +900,72 @@ static void test_session_survives_power_cycle(void) {
 	CHECK(strstr(row, "84") != NULL); // 42 restored, then doubled
 }
 
+/*
+ * An array is a pointer, and a pointer renders as the address it holds -- a
+ * different number every run, and nothing to anyone reading it. Written out
+ * instead, for as long as the row holds it.
+ */
+static void test_an_array_shows_its_elements(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "[1 2 3]");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "[1 2 3]") != NULL);
+	CHECK(strstr(row, "0x") == NULL); // not the address it used to be
+}
+
+/** Too wide for the row, so its shape is what is left worth saying */
+static void test_a_wide_array_shows_its_shape(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "[100000 200000 300000 400000]");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "[4 i64]") != NULL);
+}
+
+/*
+ * There is no encoding for an array, so the save stops below it. A stack that
+ * comes back shorter than it was left has to say so: the alternative is a value
+ * quietly becoming a number nobody entered.
+ */
+static void test_a_lost_stack_says_so(void) {
+	store_reset();
+
+	qdos_key_event first[128];
+	size_t n = 0;
+	type_line(first, &n, "7");
+	type_line(first, &n, "[1 2 3]");
+	key(first, &n, QDOS_KEY_POWER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(first, n, fb);
+
+	// A fresh shell with no keys at all, so the boot message is still up
+	run_script(NULL, 0, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "LOST FROM STACK") != NULL);
+
+	// What was below it is still there
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+}
+
 /**
  */
 static void test_open_line_continues(void) {
@@ -4245,6 +4311,9 @@ int main(void) {
 	test_store_a_string();
 	test_control_flow_in_line_mode();
 	test_session_survives_power_cycle();
+	test_an_array_shows_its_elements();
+	test_a_wide_array_shows_its_shape();
+	test_a_lost_stack_says_so();
 	test_a_declared_word_is_not_written_to_the_card();
 	test_forget_outlives_the_reboot();
 	test_tab_completes_a_word();

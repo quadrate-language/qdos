@@ -46,16 +46,15 @@ namespace {
 		switch (type) {
 		case Type::DEFER_STATEMENT:
 			return "DEFER";
+
+		// Methods come through here too: a receiver needs the struct it binds
+		// to, which is the thing above
 		case Type::STRUCT_DECLARATION:
 		case Type::STRUCT_FIELD:
 		case Type::STRUCT_CONSTRUCTION:
 		case Type::FIELD_ACCESS:
 		case Type::FIELD_SET:
 			return "STRUCTS";
-
-		// A literal and `nth` are interpreted; the bracket form is not
-		case Type::ARRAY_INDEX:
-			return "ARRAYS";
 
 		case Type::GLOBAL_VAR_DECLARATION:
 			return "GLOBALS";

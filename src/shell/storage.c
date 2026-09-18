@@ -29,6 +29,9 @@ static const uint8_t STORE_MAGIC[3] = {'Q', 'D', 'S'};
 /** @brief Entry holding the saved stack */
 #define SESSION_KEY "session"
 
+/** @brief How many values the last save had no encoding for; absent means none */
+#define SESSION_LOST_KEY "session.lost"
+
 /** @brief Most stack values a saved session carries */
 #define SESSION_MAX 64
 
@@ -546,13 +549,60 @@ static bool session_key(size_t index, char* buf, size_t cap) {
 	return written > 0 && (size_t)written < cap;
 }
 
+/**
+ * @brief One stack element as a value the store can hold
+ *
+ * False where there is none. A pointer is an address into this run's heap --
+ * an array is the one a user can now make -- and it means nothing once the
+ * machine has been off. Writing a placeholder would bring it back as a number
+ * nobody entered, which is worse than not bringing it back at all.
+ */
+static bool session_encode(const qd_stack_element_t* from, qdos_value* value) {
+	memset(value, 0, sizeof(*value));
+
+	switch (from->type) {
+	case QD_STACK_TYPE_INT:
+		value->type = QDOS_VALUE_INT;
+		value->i = from->value.i;
+		return true;
+	case QD_STACK_TYPE_FLOAT:
+		value->type = QDOS_VALUE_FLOAT;
+		value->f = from->value.f;
+		return true;
+	case QD_STACK_TYPE_STR: {
+		const char* text = (from->value.s != NULL) ? qd_string_data(from->value.s) : NULL;
+		value->type = QDOS_VALUE_STRING;
+		snprintf(value->s, sizeof(value->s), "%s", (text != NULL) ? text : "");
+		return true;
+	}
+	case QD_STACK_TYPE_PTR:
+		return false;
+	}
+	return false;
+}
+
 qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp) {
 	if (hal == NULL || interp == NULL) {
 		return QDOS_STORE_IO_ERROR;
 	}
 
 	const size_t depth = qd_interp_depth(interp);
-	const size_t saved = (depth < SESSION_MAX) ? depth : SESSION_MAX;
+	const size_t wanted = (depth < SESSION_MAX) ? depth : SESSION_MAX;
+
+	// Raw, not qd_interp_peek: that renders strings quoted for display.
+	const qd_stack* st = qd_interp_context(interp)->st;
+
+	// Stopped at the first value with no encoding rather than skipping it:
+	// what sits above one would come back at the wrong depth, and a stack read
+	// off by one is not a restored session.
+	size_t saved = wanted;
+	for (size_t i = 0; i < wanted; i++) {
+		qdos_value probe;
+		if (!session_encode(&st->data[i], &probe)) {
+			saved = i;
+			break;
+		}
+	}
 
 	qdos_value count;
 	memset(&count, 0, sizeof(count));
@@ -563,35 +613,10 @@ qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp) {
 		return header;
 	}
 
-	// Raw, not qd_interp_peek: that renders strings quoted for display.
-	const qd_stack* st = qd_interp_context(interp)->st;
-
 	// Written bottom-first so restoring pushes in the same order
 	for (size_t i = 0; i < saved; i++) {
-		const qd_stack_element_t* from = &st->data[i];
-
 		qdos_value value;
-		memset(&value, 0, sizeof(value));
-		switch (from->type) {
-		case QD_STACK_TYPE_INT:
-			value.type = QDOS_VALUE_INT;
-			value.i = from->value.i;
-			break;
-		case QD_STACK_TYPE_FLOAT:
-			value.type = QDOS_VALUE_FLOAT;
-			value.f = from->value.f;
-			break;
-		case QD_STACK_TYPE_STR: {
-			const char* text = (from->value.s != NULL) ? qd_string_data(from->value.s) : NULL;
-			value.type = QDOS_VALUE_STRING;
-			snprintf(value.s, sizeof(value.s), "%s", (text != NULL) ? text : "");
-			break;
-		}
-		case QD_STACK_TYPE_PTR:
-			// A pointer means nothing after a power cycle
-			value.type = QDOS_VALUE_EMPTY;
-			break;
-		}
+		session_encode(&st->data[i], &value); // checked above
 
 		char key[32];
 		if (!session_key(i, key, sizeof(key))) {
@@ -602,7 +627,27 @@ qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp) {
 			return result;
 		}
 	}
+
+	// Left behind, for the next start to own up to. Absent means nothing was,
+	// the way an unwritten setting means its default.
+	if (saved < wanted) {
+		qdos_value lost;
+		memset(&lost, 0, sizeof(lost));
+		lost.type = QDOS_VALUE_INT;
+		lost.i = (int64_t)(wanted - saved);
+		qdos_storage_save(hal, SESSION_LOST_KEY, &lost);
+	} else {
+		qdos_storage_erase(hal, SESSION_LOST_KEY);
+	}
 	return QDOS_STORE_OK;
+}
+
+size_t qdos_storage_session_lost(qdos_hal* hal) {
+	qdos_value value;
+	if (hal == NULL || qdos_storage_load(hal, SESSION_LOST_KEY, &value) != QDOS_STORE_OK) {
+		return 0;
+	}
+	return (value.type == QDOS_VALUE_INT && value.i > 0) ? (size_t)value.i : 0;
 }
 
 qdos_store_result qdos_storage_restore_session(qdos_hal* hal, qd_interp* interp) {
@@ -642,8 +687,10 @@ qdos_store_result qdos_storage_restore_session(qdos_hal* hal, qd_interp* interp)
 			qd_push_s(ctx, value.s);
 			break;
 		case QDOS_VALUE_EMPTY:
-			qd_push_i(ctx, 0);
-			break;
+			// A session written by firmware that stored a placeholder where a
+			// pointer had been. Stop rather than push the nought it decodes to:
+			// everything above it was saved at a depth that no longer holds.
+			return QDOS_STORE_OK;
 		}
 	}
 	return QDOS_STORE_OK;

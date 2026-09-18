@@ -326,6 +326,98 @@ static void test_empty_session_roundtrips(void) {
 	qd_interp_destroy(interp);
 }
 
+/*
+ * An array is a pointer into the heap of the run that made it, and there is no
+ * encoding for one. Saving stops there: what is above it was saved at a depth
+ * that will not hold, and a value that comes back as a nought nobody entered is
+ * worse than one that does not come back.
+ */
+static void test_session_stops_at_a_value_it_cannot_encode(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	qd_interp* before = qd_interp_create(256);
+	CHECK(qd_interp_eval(before, "10 20 [1 2 3] 30"));
+	CHECK(qd_interp_depth(before) == 4);
+	CHECK(qdos_storage_save_session(&hal, before) == QDOS_STORE_OK);
+	qd_interp_destroy(before);
+
+	// Two below the array kept, the array and everything above it dropped
+	CHECK(qdos_storage_session_lost(&hal) == 2);
+
+	qd_interp* after = qd_interp_create(256);
+	CHECK(qdos_storage_restore_session(&hal, after) == QDOS_STORE_OK);
+	CHECK(qd_interp_depth(after) == 2);
+
+	qd_interp_value value;
+	CHECK(qd_interp_peek(after, 0, &value));
+	CHECK(value.type == QD_INTERP_VALUE_INT && value.i == 20);
+	CHECK(qd_interp_peek(after, 1, &value));
+	CHECK(value.type == QD_INTERP_VALUE_INT && value.i == 10);
+	qd_interp_destroy(after);
+}
+
+/** A stack that encodes whole leaves nothing behind to report */
+static void test_a_whole_session_loses_nothing(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	qd_interp* interp = qd_interp_create(256);
+	CHECK(qd_interp_eval(interp, "1 2 3"));
+	CHECK(qdos_storage_save_session(&hal, interp) == QDOS_STORE_OK);
+	CHECK(qdos_storage_session_lost(&hal) == 0);
+	qd_interp_destroy(interp);
+}
+
+/** And the mark is cleared once a clean stack is written over a lossy one */
+static void test_saving_again_clears_the_mark(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	qd_interp* lossy = qd_interp_create(256);
+	CHECK(qd_interp_eval(lossy, "1 [2 3]"));
+	CHECK(qdos_storage_save_session(&hal, lossy) == QDOS_STORE_OK);
+	CHECK(qdos_storage_session_lost(&hal) == 1);
+	qd_interp_destroy(lossy);
+
+	qd_interp* clean = qd_interp_create(256);
+	CHECK(qd_interp_eval(clean, "7 8"));
+	CHECK(qdos_storage_save_session(&hal, clean) == QDOS_STORE_OK);
+	CHECK(qdos_storage_session_lost(&hal) == 0);
+	qd_interp_destroy(clean);
+}
+
+/*
+ * Firmware before this wrote a placeholder where a pointer had been, and it
+ * decodes to an empty value. Restoring stops rather than pushing the nought it
+ * would otherwise become.
+ */
+static void test_an_old_placeholder_stops_the_restore(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	qdos_value count = {.type = QDOS_VALUE_INT, .i = 3};
+	CHECK(qdos_storage_save(&hal, "session", &count) == QDOS_STORE_OK);
+
+	const qdos_value slots[3] = {
+			{.type = QDOS_VALUE_INT, .i = 11},
+			{.type = QDOS_VALUE_EMPTY},
+			{.type = QDOS_VALUE_INT, .i = 33},
+	};
+	CHECK(qdos_storage_save(&hal, "session00", &slots[0]) == QDOS_STORE_OK);
+	CHECK(qdos_storage_save(&hal, "session01", &slots[1]) == QDOS_STORE_OK);
+	CHECK(qdos_storage_save(&hal, "session02", &slots[2]) == QDOS_STORE_OK);
+
+	qd_interp* interp = qd_interp_create(256);
+	CHECK(qdos_storage_restore_session(&hal, interp) == QDOS_STORE_OK);
+	CHECK(qd_interp_depth(interp) == 1); // not 3, and no nought
+
+	qd_interp_value value;
+	CHECK(qd_interp_peek(interp, 0, &value));
+	CHECK(value.type == QD_INTERP_VALUE_INT && value.i == 11);
+	qd_interp_destroy(interp);
+}
+
 static void test_program_keys(void) {
 	char key[QDOS_PROGRAM_NAME_MAX];
 
@@ -610,6 +702,10 @@ int main(void) {
 	test_session_survives_a_restart();
 	test_no_session_is_not_an_error();
 	test_empty_session_roundtrips();
+	test_session_stops_at_a_value_it_cannot_encode();
+	test_a_whole_session_loses_nothing();
+	test_saving_again_clears_the_mark();
+	test_an_old_placeholder_stops_the_restore();
 	test_program_keys();
 	test_program_save_load_erase();
 	test_programs_survive_a_restart();

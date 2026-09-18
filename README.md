@@ -207,8 +207,9 @@ branch that is never taken waits there until the day it is. After declaring the
 editor's text into a throwaway interpreter, `check` walks the body the same way
 the interpreter walks it and reports the first thing it would refuse — a word
 that is not in the vocabulary, or a construct the interpreter has no answer for
-(`defer`, structs, imports; the language has them, this tier does not). One
-finding at a time, because there is one line to say it on.
+(`defer`, structs and their methods, anonymous functions, imports; the language
+has them, this tier does not). One finding at a time, because there is one line
+to say it on.
 
 That list shortens as the interpreter grows, and shortening it is not optional:
 naming a construct the machine now runs costs the user a program that would

@@ -6,6 +6,7 @@
 #include <qdos/shell.h>
 
 #include <quadrate/interp/interp.h>
+#include <quadrate/rt/array.h>
 
 #include "../ui/console.h"
 #include "complete.h"
@@ -360,6 +361,87 @@ static void format_value(const qdos_shell* sh, const qd_interp_value* value, cha
 			return;
 		}
 	}
+}
+
+static const char* array_type_name(qd_array_type type) {
+	switch (type) {
+	case QD_ARRAY_TYPE_INT:
+		return "i64";
+	case QD_ARRAY_TYPE_FLOAT:
+		return "f64";
+	case QD_ARRAY_TYPE_STR:
+		return "str";
+	case QD_ARRAY_TYPE_PTR:
+		return "ptr";
+	case QD_ARRAY_TYPE_ANY:
+		return "any";
+	}
+	return "?";
+}
+
+/**
+ * @brief An array written out, rather than as the address it is
+ *
+ * qd_interp_peek renders a pointer as its address, which says nothing on a
+ * calculator and is a different number every run. The raw element is the only
+ * way to the array behind it.
+ *
+ * @param index Depth from the top, counted the way qd_interp_peek counts
+ * @param room Columns the row has left
+ * @return false where that element is not an array, leaving @p out untouched
+ */
+static bool format_array(const qdos_shell* sh, size_t index, char* out, size_t cap, size_t room) {
+	const qd_stack* st = qd_interp_context(sh->interp)->st;
+	if (cap < 8 || index >= (size_t)st->size) {
+		return false;
+	}
+
+	const qd_stack_element_t* element = &st->data[st->size - 1 - index];
+	if (element->type != QD_STACK_TYPE_PTR || !qd_array_is_valid(element->value.p)) {
+		return false;
+	}
+
+	const qd_array_t* array = (const qd_array_t*)element->value.p;
+	const size_t length = qd_array_length(array);
+
+	size_t used = 0;
+	out[used++] = '[';
+
+	for (size_t i = 0; i < length; i++) {
+		char item[32];
+		int64_t whole = 0;
+		double real = 0.0;
+
+		if (array->elemType == QD_ARRAY_TYPE_INT && qd_array_get_int(array, i, &whole) == 0) {
+			snprintf(item, sizeof(item), "%lld", (long long)whole);
+		} else if (array->elemType == QD_ARRAY_TYPE_FLOAT && qd_array_get_float(array, i, &real) == 0) {
+			snprintf(item, sizeof(item), "%g", real);
+		} else {
+			// A string, or an array of its own: a structure needing a row it
+			// is not going to get here
+			snprintf(item, sizeof(item), "..");
+		}
+
+		const size_t width = strlen(item) + ((i > 0) ? 1 : 0);
+		if (used + width + 2 > cap) {
+			break;
+		}
+		if (i > 0) {
+			out[used++] = ' ';
+		}
+		memcpy(out + used, item, strlen(item));
+		used += strlen(item);
+	}
+
+	out[used++] = ']';
+	out[used] = '\0';
+
+	// Wider than the row: what shape it is, which is what a row this size can
+	// usefully say about it
+	if (used > room) {
+		snprintf(out, cap, "[%zu %s]", length, array_type_name(array->elemType));
+	}
+	return true;
 }
 
 static void set_message(qdos_shell* sh, const char* text, bool is_error) {
@@ -2222,7 +2304,10 @@ static void render(qdos_shell* sh) {
 		const int used = qdos_console_puts(con, 0, row, label);
 
 		char shown[QD_INTERP_VALUE_TEXT_MAX];
-		format_value(sh, &value, shown, sizeof(shown), (size_t)(QDOS_COLS - used - 1));
+		const size_t room = (size_t)(QDOS_COLS - used - 1);
+		if (!format_array(sh, i, shown, sizeof(shown), room)) {
+			format_value(sh, &value, shown, sizeof(shown), room);
+		}
 		qdos_console_puts_right_within(con, row, used + 1, shown);
 	}
 
@@ -2656,7 +2741,14 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	// leaves the message line empty. Only a restored stack is worth a word,
 	// because the numbers above the prompt would otherwise be unexplained.
 	const qdos_store_result restored = qdos_storage_restore_session(hal, sh->interp);
-	if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
+	const size_t lost = qdos_storage_session_lost(hal);
+	if (lost > 0) {
+		// Saying how many is the whole of it: the values are gone either way,
+		// and a stack shorter than it was left is otherwise unexplained.
+		char message[QDOS_COLS + 1];
+		snprintf(message, sizeof(message), "%u LOST FROM STACK", (unsigned)((lost > 99) ? 99 : lost));
+		set_message(sh, message, true);
+	} else if (restored == QDOS_STORE_OK && qd_interp_depth(sh->interp) > 0) {
 		set_message(sh, "SESSION RESTORED", false);
 	}
 

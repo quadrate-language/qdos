@@ -137,6 +137,17 @@ bool qdos_program_is_readonly(qdos_hal* hal, const char* name);
 qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp);
 
 /**
+ * @brief How many values the last save had no encoding for
+ *
+ * A pointer -- an array, most likely -- is an address into the run that made
+ * it, so saving stops there rather than writing a placeholder that would come
+ * back as a number. This is what it left behind, for the next start to say.
+ *
+ * @return 0 where nothing was lost
+ */
+size_t qdos_storage_session_lost(qdos_hal* hal);
+
+/**
  * @brief Push a saved stack back onto the interpreter
  * @return NOT_FOUND when there is no saved session, which is a first boot
  */
