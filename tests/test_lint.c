@@ -39,10 +39,9 @@ static void test_the_shipped_programs_are_clean(void) {
 			"\t0\n"
 			"\tloop {\n"
 			"\t\tdup 1 + dup *\n"
-			"\t\t2 pick > if { break }\n"
+			"\t\tn > if { break }\n"
 			"\t\t1 +\n"
 			"\t}\n"
-			"\tswap drop\n"
 			"}",
 			message, sizeof(message)));
 	CHECK_STR(message, "");
@@ -50,7 +49,7 @@ static void test_the_shipped_programs_are_clean(void) {
 	CHECK(!lint(interp,
 			"// Pythagoras.\n"
 			"fn hyp(a:i64 b:i64 -- r:i64) {\n"
-			"\tdup * swap dup * + isqrt\n"
+			"\ta a * b b * + isqrt\n"
 			"}",
 			message, sizeof(message)));
 
@@ -169,11 +168,37 @@ static void test_what_the_interpreter_cannot_run_is_reported(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(lint(interp, "fn t(x:i64 -- r:i64) {\n\t-> y\n\ty\n}", message, sizeof(message)));
-	CHECK_STR(message, "L2: LOCALS NOT SUPPORTED");
+	CHECK(lint(interp, "fn t( -- ) {\n\tdefer {\n\t\t1 drop\n\t}\n}", message, sizeof(message)));
+	CHECK_STR(message, "L2: DEFER NOT SUPPORTED");
 
 	// And it really is only a check-time find: declaring it succeeded above
-	CHECK(!qd_interp_eval(interp, "0 t"));
+	CHECK(!qd_interp_eval(interp, "t"));
+
+	qd_interp_destroy(interp);
+}
+
+/**
+ * What the interpreter learns, the check has to stop refusing.
+ *
+ * A stale list here is worse than no list: it turns a program that runs into
+ * one the machine says no to, and there is no way past it from the keypad.
+ */
+static void test_what_the_interpreter_now_runs_is_not_a_find(void) {
+	qd_interp* interp = fresh();
+	char message[80];
+
+	// A named parameter, which is how a word reads its arguments
+	CHECK(!lint(interp, "fn p(a:i64 -- r:i64) { a a + }", message, sizeof(message)));
+
+	CHECK(!lint(interp, "fn l(a:i64 -- r:i64) { a -> x x x + }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn fo( -- r:i64) { 0 0 5 1 for i { i + } }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn sw(a:i64 -- r:i64) { a switch { 1 { 10 } _ { 20 } } }", message,
+			sizeof(message)));
+	CHECK(!lint(interp, "fn re(a:i64 -- r:i64) { a 0 > if { 1 return } 2 }", message, sizeof(message)));
+	CHECK(!lint(interp, "const K = 7\nfn co( -- r:i64) { K }", message, sizeof(message)));
+	CHECK(!lint(interp, "enum C { Red, Blue }\nfn en( -- r:i64) { C::Blue }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn ca( -- r:f64) { 3 cast<f64> }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn ar( -- r:i64) { [1 2 3] -> a a 1 nth }", message, sizeof(message)));
 
 	qd_interp_destroy(interp);
 }
@@ -217,6 +242,7 @@ int main(void) {
 	test_both_arms_of_an_if_are_read();
 	test_a_signature_is_not_read_as_words();
 	test_what_the_interpreter_cannot_run_is_reported();
+	test_what_the_interpreter_now_runs_is_not_a_find();
 	test_unparsable_text_is_left_alone();
 	test_the_empty_cases();
 	return check_report("lint");

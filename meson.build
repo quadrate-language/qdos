@@ -107,6 +107,7 @@ qdos_core = static_library('qdos_core',
 			'src/ui/splash.c',
 			'src/hal/device/framebuffer.c',
 			'src/hal/device/keypad.c',
+			'src/hal/storename.c',
 		],
 		include_directories: qdos_inc,
 		dependencies: [quadrate_dep, dl_dep])

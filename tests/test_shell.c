@@ -186,11 +186,52 @@ static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, s
 	return QDOS_STORE_OK;
 }
 
-static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
+/**
+ * The store is flat, so a folder is whatever stands before a '/' in a name.
+ * Listing the card reports each one once with the mark on it; listing a folder
+ * reports what is under it, bare.
+ */
+static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
+		qdos_store_visit visit, void* user) {
 	(void)hal;
+
+	char seen[STORE_SLOTS][QDOS_PROGRAM_NAME_MAX];
+	size_t seen_count = 0;
+
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used && g_store[i].scope == scope && !visit(g_store[i].name, user))
-			break;
+		if (!g_store[i].used || g_store[i].scope != scope)
+			continue;
+
+		const char* name = g_store[i].name;
+		const char* slash = strchr(name, '/');
+
+		if (folder != NULL) {
+			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0
+					|| folder[slash - name] != '\0')
+				continue;
+			if (!visit(slash + 1, user))
+				return QDOS_STORE_OK;
+			continue;
+		}
+
+		if (slash == NULL) {
+			if (!visit(name, user))
+				return QDOS_STORE_OK;
+			continue;
+		}
+
+		char dir[QDOS_PROGRAM_NAME_MAX];
+		snprintf(dir, sizeof(dir), "%.*s/", (int)(slash - name), name);
+
+		bool already = false;
+		for (size_t s = 0; s < seen_count; s++)
+			already = already || strcmp(seen[s], dir) == 0;
+		if (already)
+			continue;
+
+		snprintf(seen[seen_count++], QDOS_PROGRAM_NAME_MAX, "%s", dir);
+		if (!visit(dir, user))
+			return QDOS_STORE_OK;
 	}
 	return QDOS_STORE_OK;
 }
@@ -207,6 +248,22 @@ static void seed_raw(qdos_store_scope scope, const char* file, const char* bytes
 		g_store[i].used = true;
 		return;
 	}
+}
+
+/** Whether anything is on the card under this name, in any scope */
+static bool stored(const char* file) {
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used && strcmp(g_store[i].name, file) == 0 && g_store[i].len > 0)
+			return true;
+	}
+	return false;
+}
+
+/** An app: a folder with an entry point in it, as an upload would arrive */
+static void seed_app(qdos_store_scope scope, const char* name, const char* source) {
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	snprintf(key, sizeof(key), "%s/" QDOS_APP_MAIN, name);
+	seed_raw(scope, key, source);
 }
 
 /** Put a program in one of the read-only stores */
@@ -824,7 +881,7 @@ static void test_open_line_continues(void) {
 	qdos_key_event script[128];
 	size_t n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
-	for (const char* p = "fn sq(x:i64 -- r:i64) {"; *p; p++)
+	for (const char* p = "fn sq(x:i64 -- r:i64) { x"; *p; p++)
 		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
 	key(script, &n, QDOS_KEY_ENTER); // open: continues
 	for (const char* p = "dup *"; *p; p++)
@@ -925,7 +982,7 @@ static void test_forget_a_word(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	type_line(script, &n, "fn sqr(x:i64 -- r:i64) { dup * }");
+	type_line(script, &n, "fn sqr(x:i64 -- r:i64) { x x * }");
 	type_line(script, &n, "7 sqr");
 	type_line(script, &n, "\"sqr\" forget");
 	type_line(script, &n, "clear 7 sqr");
@@ -954,29 +1011,37 @@ static void test_forget_unknown(void) {
 	CHECK(strstr(row, "IS NOT DECLARED") != NULL);
 }
 
-/** A declared word is written to the store and comes back after a reboot. */
-static void test_program_survives_power_cycle(void) {
+/**
+ * A word written on the line is memory only: it is usable at once and gone at
+ * the next boot. The card holds programs, which are put there by `edit` or by
+ * uploading them, and scratch work at the prompt is not that.
+ */
+static void test_a_declared_word_is_not_written_to_the_card(void) {
 	store_reset();
 
 	qdos_key_event first[160];
 	size_t n = 0;
-	type_line(first, &n, "fn sq(x:i64 -- r:i64) { dup * }");
+	type_line(first, &n, "fn answer( -- r:i64) { 42 }");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(first, n, fb);
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strstr(row, "SAVED") != NULL);
+	CHECK(strstr(row, "SAVED") == NULL);
+	CHECK(strstr(row, "DECLARED") != NULL);
 
-	// A fresh shell, as after a reboot: the word is there without redeclaring
+	// Nothing on the card, and so nothing in APPS
+	CHECK(!stored("answer.qd"));
+
+	// A fresh shell, as after a reboot: the word went with the power
 	qdos_key_event second[64];
 	n = 0;
-	type_line(second, &n, "clear 7 sq");
+	type_line(second, &n, "answer");
 	run_script(second, n, fb);
 
-	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
-	CHECK(strstr(row, "49") != NULL);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL);
 }
 
 /** Forgetting a word also drops it from the store. */
@@ -985,7 +1050,7 @@ static void test_forget_outlives_the_reboot(void) {
 
 	qdos_key_event first[160];
 	size_t n = 0;
-	type_line(first, &n, "fn sqr(x:i64 -- r:i64) { dup * }");
+	type_line(first, &n, "fn sqr(x:i64 -- r:i64) { x x * }");
 	type_line(first, &n, "\"sqr\" forget");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1066,7 +1131,7 @@ static void test_pixels_are_unambiguous(void) {
 
 	qdos_key_event script[200];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * }");
+	type_line(script, &n, "fn sq(x:i64 -- r:i64) { x dup * }");
 	type_more(script, &n, "7 sq");
 	type_more(script, &n, "1 0 /"); // an error, so the inverted path is drawn too
 
@@ -1105,10 +1170,10 @@ static void test_list_browses_words(void) {
 static void test_list_shows_apps_and_origin(void) {
 	store_reset();
 	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+	seed_scope(QDOS_SCOPE_USER, "mine", "fn mine( -- r:i64) { 1 }");
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	type_line(script, &n, "fn mine( -- r:i64) { 1 }");
 	key(script, &n, QDOS_KEY_LIST);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1127,6 +1192,113 @@ static void test_list_shows_apps_and_origin(void) {
 	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
 	CHECK(strstr(row, "hyp") != NULL);
 	CHECK(strstr(row, "SYS") != NULL);
+}
+
+/**
+ * A folder on the card is an app, listed under the folder's name.
+ *
+ * What is inside it belongs to it: main.qd is the entry point and is not a
+ * program of its own, so the row says `doom` and there is one of it.
+ */
+static void test_an_app_folder_is_listed_under_its_own_name(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "doom", "fn main( -- ) { }");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "/1") != NULL);
+
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "doom") != NULL);
+	CHECK(strstr(row, "main") == NULL);
+	CHECK(strstr(row, "CARD") != NULL);
+}
+
+/** Typing an app's name runs its main. */
+static void test_an_app_runs_its_entry_point(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "greet", "fn main( -- ) { \"HI FROM MAIN\" print }");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "greet");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "HI FROM MAIN") != NULL);
+}
+
+/**
+ * Every app calls its entry point `main`, so two of them have to be able to
+ * without meeting. Each runs in an interpreter of its own.
+ */
+static void test_two_apps_may_both_have_a_main(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "one", "fn main( -- ) { \"I AM ONE\" print }");
+	seed_app(QDOS_SCOPE_INBOX, "two", "fn main( -- ) { \"I AM TWO\" print }");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	char row[QDOS_COLS + 1];
+
+	qdos_key_event first[64];
+	size_t n = 0;
+	type_line(first, &n, "one");
+	run_script(first, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "I AM ONE") != NULL);
+
+	qdos_key_event second[64];
+	n = 0;
+	type_line(second, &n, "two");
+	run_script(second, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "I AM TWO") != NULL);
+}
+
+/** An app's helpers are its own: `main` is not a word at the prompt. */
+static void test_an_app_leaves_nothing_behind(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "quiet", "fn helper( -- ) { }\nfn main( -- ) { helper }");
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "quiet");
+	type_line(script, &n, "helper");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL);
+}
+
+/** Editing an app opens its main.qd, and saving writes back into the folder. */
+static void test_editing_an_app_writes_into_its_folder(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "tweak", "fn main( -- ) { }");
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "\"tweak\" edit");
+	key(script, &n, QDOS_KEY_SAVE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Into the folder, not beside it
+	CHECK(stored("tweak/" QDOS_APP_MAIN));
+	CHECK(!stored("tweak.qd"));
 }
 
 /** Tab widens from the installed programs to the catalog. */
@@ -1569,7 +1741,7 @@ static void test_user_word_shadows_builtin(void) {
 
 	qdos_key_event script[200];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * 1000 + }");
+	type_line(script, &n, "fn sq(x:i64 -- r:i64) { x dup * 1000 + }");
 	type_line(script, &n, "7 sq");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1580,7 +1752,7 @@ static void test_user_word_shadows_builtin(void) {
 	CHECK(strstr(row, "1049") != NULL);
 
 	n = 0;
-	type_line(script, &n, "fn sq(x:i64 -- r:i64) { dup * 1000 + }");
+	type_line(script, &n, "fn sq(x:i64 -- r:i64) { x dup * 1000 + }");
 	type_line(script, &n, "\"sq\" forget");
 	type_line(script, &n, "clear 7 sq");
 	run_script(script, n, fb);
@@ -2114,7 +2286,7 @@ static void test_a_restored_session_is_announced(void) {
 /** What lands on the card is a word, without anything being pressed. */
 static void test_an_uploaded_program_is_a_word(void) {
 	store_reset();
-	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { 3 * }");
+	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { x 3 * }");
 
 	qdos_key_event script[64];
 	size_t n = 0;
@@ -2136,12 +2308,14 @@ static void test_an_uploaded_program_is_a_word(void) {
  */
 static void test_an_edit_outlives_the_upload_it_replaced(void) {
 	store_reset();
-	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { 3 * }");
+	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { x 3 * }");
+
+	// What saving an edit leaves behind: a copy of your own over the upload
+	seed_scope(QDOS_SCOPE_USER, "triple", "fn triple(x:i64 -- r:i64) { x 30 * }");
 
 	qdos_key_event script[256];
 	size_t n = 0;
-	type_line(script, &n, "fn triple(x:i64 -- r:i64) { 30 * }"); // the user's own
-	type_more(script, &n, "2 triple");
+	type_line(script, &n, "2 triple");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -2186,10 +2360,10 @@ static void test_the_list_marks_an_uploaded_program(void) {
 static void test_the_list_stars_an_override_of_the_card(void) {
 	store_reset();
 	seed_inbox("both", "fn both( -- r:i64) { 1 }");
+	seed_scope(QDOS_SCOPE_USER, "both", "fn both( -- r:i64) { 2 }");
 
 	qdos_key_event script[256];
 	size_t n = 0;
-	type_line(script, &n, "fn both( -- r:i64) { 2 }");
 	key(script, &n, QDOS_KEY_LIST);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2239,11 +2413,11 @@ static void test_dropping_an_uploaded_program_is_refused(void) {
 /** Forgetting an override of an upload brings the card's copy back. */
 static void test_forget_reverts_to_the_card(void) {
 	store_reset();
-	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { 3 * }");
+	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { x 3 * }");
 
 	qdos_key_event script[256];
 	size_t n = 0;
-	type_line(script, &n, "fn triple(x:i64 -- r:i64) { 30 * }");
+	type_line(script, &n, "fn triple(x:i64 -- r:i64) { x 30 * }");
 	type_more(script, &n, "\"triple\" forget");
 	type_more(script, &n, "2 triple");
 
@@ -2770,10 +2944,10 @@ static void test_undo_restores_the_stack(void) {
 static void test_delete_a_program(void) {
 	store_reset();
 	seed_system("shipped", "fn shipped( -- ){}");
+	seed_scope(QDOS_SCOPE_USER, "mine", "fn mine( -- ) { 1 }");
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	type_line(script, &n, "fn mine( -- ) { 1 }");
 	key(script, &n, QDOS_KEY_LIST);
 	key(script, &n, QDOS_KEY_BACKSPACE);
 
@@ -3155,7 +3329,7 @@ static void test_the_prompt_shows_the_keypad_layer(void) {
 static void test_a_program_calls_an_uploaded_module(void) {
 	store_reset();
 	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
-	seed_system("twice", "fn twice(n:i64 -- r:i64) { demo::double }");
+	seed_system("twice", "fn twice(n:i64 -- r:i64) { n demo::double }");
 
 	qdos_key_event script[64];
 	size_t n = 0;
@@ -3292,7 +3466,7 @@ static void test_no_modules_means_no_settings_row(void) {
 static void test_the_list_shows_modules(void) {
 	store_reset();
 	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
-	seed_system("twice", "fn twice(n:i64 -- r:i64) { demo::double }");
+	seed_system("twice", "fn twice(n:i64 -- r:i64) { n demo::double }");
 
 	qdos_key_event script[8];
 	size_t n = 0;
@@ -4026,7 +4200,7 @@ int main(void) {
 	test_store_a_string();
 	test_control_flow_in_line_mode();
 	test_session_survives_power_cycle();
-	test_program_survives_power_cycle();
+	test_a_declared_word_is_not_written_to_the_card();
 	test_forget_outlives_the_reboot();
 	test_tab_completes_a_word();
 	test_tab_lists_ambiguous();
@@ -4034,6 +4208,11 @@ int main(void) {
 	test_pixels_are_unambiguous();
 	test_list_browses_words();
 	test_list_shows_apps_and_origin();
+	test_an_app_folder_is_listed_under_its_own_name();
+	test_an_app_runs_its_entry_point();
+	test_two_apps_may_both_have_a_main();
+	test_an_app_leaves_nothing_behind();
+	test_editing_an_app_writes_into_its_folder();
 	test_list_toggles_to_all_words();
 	test_list_moves_and_picks();
 	test_list_exits();

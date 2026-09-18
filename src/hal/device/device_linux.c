@@ -48,11 +48,27 @@ typedef struct {
 
 	int watch_fd; ///< inotify, waited on beside the keypad
 	int watch_id; ///< The card's watch, remade whenever it comes back
+
+/** @brief As many app folders as the card is watched into */
+#define QDOS_WATCH_SUBS 16
+
+	/** @brief One per app folder: inotify does not watch into a directory */
+	int sub_id[QDOS_WATCH_SUBS];
+	size_t sub_count;
 } device_state;
 
 static const char* env_or(const char* name, const char* fallback) {
 	const char* value = getenv(name);
 	return (value && *value) ? value : fallback;
+}
+
+static bool is_dir(const char* dir, const char* name) {
+	char path[512];
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path))
+		return false;
+
+	struct stat sb;
+	return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
 }
 
 /**
@@ -232,6 +248,8 @@ static void device_wait(qdos_hal* hal, int timeout_ms) {
 	poll(pfd, 2, timeout_ms);
 }
 
+#define WATCH_EVENTS (IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE | IN_CREATE)
+
 /** @brief Sharing unmounts the inbox and takes the watch with it */
 static void device_watch_inbox(device_state* st) {
 	if (st->watch_fd < 0)
@@ -239,9 +257,31 @@ static void device_watch_inbox(device_state* st) {
 
 	if (st->watch_id >= 0)
 		inotify_rm_watch(st->watch_fd, st->watch_id);
+	for (size_t i = 0; i < st->sub_count; i++)
+		inotify_rm_watch(st->watch_fd, st->sub_id[i]);
+	st->sub_count = 0;
 
-	st->watch_id = inotify_add_watch(
-			st->watch_fd, st->inbox_dir, IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE);
+	st->watch_id = inotify_add_watch(st->watch_fd, st->inbox_dir, WATCH_EVENTS);
+
+	// A file dropped inside an app folder is an upload like any other
+	DIR* dir = opendir(st->inbox_dir);
+	if (dir == NULL)
+		return;
+
+	const struct dirent* ent;
+	while ((ent = readdir(dir)) != NULL && st->sub_count < QDOS_WATCH_SUBS) {
+		if (ent->d_name[0] == '.' || !is_dir(st->inbox_dir, ent->d_name))
+			continue;
+
+		char path[512];
+		if (snprintf(path, sizeof(path), "%s/%s", st->inbox_dir, ent->d_name) >= (int)sizeof(path))
+			continue;
+
+		const int id = inotify_add_watch(st->watch_fd, path, WATCH_EVENTS);
+		if (id >= 0)
+			st->sub_id[st->sub_count++] = id;
+	}
+	closedir(dir);
 }
 
 static bool device_store_changed(qdos_hal* hal) {
@@ -255,6 +295,10 @@ static bool device_store_changed(qdos_hal* hal) {
 	while (read(st->watch_fd, buf, sizeof(buf)) > 0)
 		changed = true;
 
+	// A folder that has just arrived is not being watched yet
+	if (changed)
+		device_watch_inbox(st);
+
 	return changed;
 }
 
@@ -267,7 +311,7 @@ static const char* dir_for(device_state* st, qdos_store_scope scope) {
 }
 
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
-	if (!name || !*name || strchr(name, '/') || strchr(name, '\\') || strcmp(name, "..") == 0)
+	if (!qdos_store_name_ok(name))
 		return false;
 
 	const int written = snprintf(buf, cap, "%s/%s", dir, name);
@@ -306,6 +350,14 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 
 	mkdir(st->store_dir, 0755);
 
+	// An app is written into a folder of its own, which may not be there yet
+	char* slash = strrchr(path, '/');
+	if (slash != NULL && strchr(name, '/') != NULL) {
+		*slash = '\0';
+		mkdir(path, 0755);
+		*slash = '/';
+	}
+
 	FILE* f = fopen(path, "wb");
 	if (!f)
 		return QDOS_STORE_IO_ERROR;
@@ -324,11 +376,17 @@ static bool device_store_path(
 	return store_path(dir_for(st, scope), name, buf, cap);
 }
 
-static qdos_store_result device_store_list(
-		qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
+static qdos_store_result device_store_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
+		qdos_store_visit visit, void* user) {
 	device_state* st = (device_state*)hal->impl;
 
-	DIR* dir = opendir(dir_for(st, scope));
+	char root[512];
+	if (folder == NULL || *folder == '\0')
+		snprintf(root, sizeof(root), "%s", dir_for(st, scope));
+	else if (!store_path(dir_for(st, scope), folder, root, sizeof(root)))
+		return QDOS_STORE_IO_ERROR;
+
+	DIR* dir = opendir(root);
 	if (!dir)
 		return QDOS_STORE_NOT_FOUND;
 
@@ -336,7 +394,15 @@ static qdos_store_result device_store_list(
 	while ((ent = readdir(dir)) != NULL) {
 		if (ent->d_name[0] == '.')
 			continue;
-		if (!visit(ent->d_name, user))
+
+		// A folder is listed with the mark on it, being an app and not a file
+		char name[288];
+		const int written = snprintf(
+				name, sizeof(name), "%s%s", ent->d_name, is_dir(root, ent->d_name) ? "/" : "");
+		if (written <= 0 || (size_t)written >= sizeof(name))
+			continue;
+
+		if (!visit(name, user))
 			break;
 	}
 

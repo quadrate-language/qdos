@@ -37,6 +37,17 @@ static bool refuses(const char* source) {
 	return !ok;
 }
 
+/** Whether the top of the stack came back a whole number rather than a float */
+static bool is_whole(const char* source) {
+	qd_interp* interp = fresh();
+	qd_interp_value value;
+	const bool whole = qd_interp_eval(interp, source) && qd_interp_peek(interp, 0, &value)
+			&& value.type == QD_INTERP_VALUE_INT;
+
+	qd_interp_destroy(interp);
+	return whole;
+}
+
 static void close_to(const char* source, double want) {
 	bool ok = false;
 	const double got = value_of(source, &ok);
@@ -106,6 +117,38 @@ static void test_plain_words(void) {
 	close_to("3 7 max", 7.0);
 	close_to("7 3 min", 3.0); // and the order of the two does not matter
 	close_to("7 3 max", 7.0);
+}
+
+/**
+ * These six are written in Quadrate in lib/math rather than C, so there is no
+ * usr_math_ symbol to call and the shell does them itself. A whole number in
+ * is a whole number out: `3 sq` is 9 on a calculator, not 9.0, and the bitwise
+ * words still take it.
+ */
+static void test_the_words_the_shell_does_itself(void) {
+	CHECK(is_whole("7 sq"));
+	CHECK(is_whole("3 cb"));
+	CHECK(is_whole("5 neg abs"));
+	CHECK(is_whole("3 7 min"));
+	CHECK(is_whole("7 3 max"));
+
+	CHECK(!is_whole("2.5 sq"));
+	CHECK(!is_whole("2.5 neg abs"));
+	CHECK(!is_whole("4 inv")); // a reciprocal is a fraction whatever went in
+
+	close_to("2.5 sq", 6.25);
+	close_to("1.5 cb", 3.375);
+	close_to("2.5 neg abs", 2.5);
+	close_to("4 inv", 0.25);
+
+	// The one it picks is the one it keeps, float or not
+	close_to("3 7.5 min", 3.0);
+	CHECK(is_whole("3 7.5 min"));
+	close_to("3 7.5 max", 7.5);
+	CHECK(!is_whole("3 7.5 max"));
+
+	CHECK(refuses("0 inv"));
+	CHECK(refuses("\"x\" sq"));
 }
 
 /** atan2 keeps the quadrant that atan throws away, so the order is the point. */
@@ -203,6 +246,7 @@ static void test_messages_fit_the_screen(void) {
 int main(void) {
 	test_domains_are_errors();
 	test_plain_words();
+	test_the_words_the_shell_does_itself();
 	test_atan2_argument_order();
 	test_constants();
 	test_degree_mode();

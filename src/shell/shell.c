@@ -123,6 +123,18 @@ typedef enum {
 #define DECIMALS_AUTO -1
 #define DECIMALS_MAX 9
 
+/** @brief As many apps as the card may offer at once */
+#define QDOS_APPS_MAX 32
+
+/** @brief As many words as one session may declare at the prompt */
+#define QDOS_LINE_WORDS 64
+
+/** @brief One registered app word, and what running it needs to know */
+typedef struct {
+	char name[QDOS_PROGRAM_NAME_MAX];
+	struct qdos_shell* sh;
+} app_word;
+
 struct qdos_shell {
 	qdos_hal* hal;	   ///< Borrowed, not owned
 	qd_interp* interp; ///< Owned
@@ -138,6 +150,16 @@ struct qdos_shell {
 	qdos_wordlist list;
 	qdos_program_entry apps[QDOS_WORDLIST_MAX];
 	size_t app_count;
+
+	/** @brief What each app word was registered with; the interpreter keeps
+	 * the pointer, so it has to outlive the registration */
+	app_word app_word[QDOS_APPS_MAX];
+	size_t app_word_count;
+
+	/** @brief Words declared at the prompt rather than read off the card.
+	 * They are in memory only, so `forget` has nothing to erase for them. */
+	char line_word[QDOS_LINE_WORDS][QDOS_PROGRAM_NAME_MAX];
+	size_t line_word_count;
 	bool list_all; ///< Every word, rather than just the installed programs
 	size_t list_sel;
 	size_t list_top;
@@ -363,21 +385,47 @@ static bool input_is_complete(const qdos_shell* sh) {
 	return depth <= 0;
 }
 
-/** @brief Store the source of a word the last eval declared, so it survives a reboot */
-static void persist_declaration(qdos_shell* sh) {
+/**
+ * @brief Say what the last eval declared
+ *
+ * A word written on the line lives in memory only. The card holds programs,
+ * which are put there by `edit` or by uploading them, and scratch work at the
+ * prompt is not that -- it would otherwise fill the store with every `sq` ever
+ * tried, each one a row in APPS.
+ */
+static void report_declaration(qdos_shell* sh) {
 	const char* name = qd_interp_last_declared(sh->interp);
 	if (!name) {
 		set_message(sh, "", false);
 		return;
 	}
 
+	bool known = false;
+	for (size_t i = 0; i < sh->line_word_count; i++)
+		known = known || strcmp(sh->line_word[i], name) == 0;
+
+	if (!known && sh->line_word_count < QDOS_LINE_WORDS)
+		snprintf(sh->line_word[sh->line_word_count++], QDOS_PROGRAM_NAME_MAX, "%s", name);
+
 	char message[80];
-	if (qdos_program_save(sh->hal, name, sh->input) == QDOS_STORE_OK) {
-		snprintf(message, sizeof(message), "SAVED '%.20s'", name);
-		set_message(sh, message, false);
-	} else {
-		snprintf(message, sizeof(message), "'%.12s' DECLARED, NOT SAVED", name);
-		set_message(sh, message, true);
+	snprintf(message, sizeof(message), "DECLARED '%.20s'", name);
+	set_message(sh, message, false);
+}
+
+/** @brief Whether this word was written at the prompt, and so is not on the card */
+static bool declared_here(qdos_shell* sh, const char* name) {
+	for (size_t i = 0; i < sh->line_word_count; i++)
+		if (strcmp(sh->line_word[i], name) == 0)
+			return true;
+	return false;
+}
+
+static void forget_here(qdos_shell* sh, const char* name) {
+	for (size_t i = 0; i < sh->line_word_count; i++) {
+		if (strcmp(sh->line_word[i], name) != 0)
+			continue;
+		memcpy(sh->line_word[i], sh->line_word[--sh->line_word_count], QDOS_PROGRAM_NAME_MAX);
+		return;
 	}
 }
 
@@ -410,6 +458,7 @@ static const soft_key SOFT[7][SOFT_KEYS] = {
 
 static const char* angle_text(void);
 static const qdos_native_entry* list_module(const qdos_shell* sh, size_t i);
+static void register_apps(qdos_shell* sh, qd_interp* interp);
 
 static void render_soft(qdos_shell* sh, qdos_console* con) {
 	for (int i = 0; i < SOFT_KEYS; i++) {
@@ -595,7 +644,7 @@ static void submit(qdos_shell* sh) {
 	undo_snapshot(sh);
 	if (qdos_guarded_eval(sh->interp, sh->input)) {
 		if (sh->mode == before)
-			persist_declaration(sh);
+			report_declaration(sh);
 	} else {
 		set_message(sh, qdos_guarded_error(sh->interp), true);
 
@@ -937,26 +986,48 @@ static void edit_open(qdos_shell* sh, const char* name, const char* source);
 
 #define LIST_ROWS (ROW_CONTENT_LAST - ROW_CONTENT_FIRST + 1)
 
-/* Modules first, being what the programs under them are liable to call. */
+/**
+ * @brief Shared libraries, being what the programs under them are liable to call
+ *
+ * A module inside an app is that app's own half rather than something the card
+ * offers, so it is loaded and callable but never listed: the row that matters
+ * is the app.
+ */
+static size_t module_count(const qdos_shell* sh) {
+	size_t n = 0;
+	for (size_t i = 0; i < sh->natives.count; i++)
+		if (sh->natives.entry[i].app[0] == '\0')
+			n++;
+	return n;
+}
+
 static size_t list_count(const qdos_shell* sh) {
 	if (sh->list_all)
 		return sh->list.count;
-	return sh->natives.count + sh->app_count;
+	return module_count(sh) + sh->app_count;
 }
 
 /** @brief The module a row shows, or NULL where the row is a program */
 static const qdos_native_entry* list_module(const qdos_shell* sh, size_t i) {
-	if (sh->list_all || i >= sh->natives.count)
+	if (sh->list_all)
 		return NULL;
-	return &sh->natives.entry[i];
+
+	size_t at = 0;
+	for (size_t n = 0; n < sh->natives.count; n++) {
+		if (sh->natives.entry[n].app[0] != '\0')
+			continue;
+		if (at++ == i)
+			return &sh->natives.entry[n];
+	}
+	return NULL;
 }
 
 /** @brief The program a row shows, or NULL where the row is a module */
 static const qdos_program_entry* list_program(const qdos_shell* sh, size_t i) {
-	if (sh->list_all || i < sh->natives.count)
+	if (sh->list_all || i < module_count(sh))
 		return NULL;
 
-	const size_t at = i - sh->natives.count;
+	const size_t at = i - module_count(sh);
 	return (at < sh->app_count) ? &sh->apps[at] : NULL;
 }
 
@@ -1189,6 +1260,7 @@ static void check_program(qdos_shell* sh) {
 	qdos_natives_register(&sh->natives, scratch);
 	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++)
 		qdos_programs_restore(sh->hal, (qdos_store_scope)scope, scratch);
+	register_apps(sh, scratch);
 
 	char message[80];
 	bool bad = !qdos_guarded_eval(scratch, sh->ed.text);
@@ -1201,6 +1273,77 @@ static void check_program(qdos_shell* sh) {
 
 	qd_interp_destroy(scratch);
 	set_message(sh, message, bad);
+}
+
+/**
+ * @brief Run an app, which is a folder on the card holding main.qd
+ *
+ * In an interpreter of its own, so that every app may call its entry point
+ * `main` and name its helpers whatever suits it without two of them ever
+ * meeting. An app holds the screen until `main` returns, and leaves nothing
+ * behind in the vocabulary when it does.
+ */
+static int run_app(qd_context* ctx, void* userdata) {
+	(void)ctx;
+	qdos_shell* sh = ((app_word*)userdata)->sh;
+	const char* name = ((app_word*)userdata)->name;
+
+	char source[QDOS_PROGRAM_MAX];
+	if (!load_program_anywhere(sh, name, source, sizeof(source))) {
+		set_message(sh, "GONE FROM THE CARD", true);
+		return 0;
+	}
+
+	qd_interp* app = qd_interp_create(STACK_SIZE);
+	if (!app) {
+		set_message(sh, "CANNOT RUN IT", true);
+		return 0;
+	}
+
+	register_natives(sh, app);
+	qdos_natives_register(&sh->natives, app);
+
+	if (!qdos_guarded_eval(app, source))
+		set_message(sh, qdos_guarded_error(app), true);
+	else if (!qdos_guarded_eval(app, QDOS_APP_ENTRY))
+		set_message(sh, qdos_guarded_error(app), true);
+
+	qd_interp_destroy(app);
+	return 0;
+}
+
+/**
+ * @brief Make every app on the card a word, so typing its name runs it
+ *
+ * A slot is found by name and never moved, because the interpreter keeps the
+ * pointer: reusing one for a different app would make a name that is still
+ * registered run something else. An app taken off the card keeps its slot and
+ * says so when it cannot be loaded.
+ */
+static void register_apps(qdos_shell* sh, qd_interp* interp) {
+	qdos_program_entry found[QDOS_WORDLIST_MAX];
+	const size_t count = qdos_programs_gather(sh->hal, found, QDOS_WORDLIST_MAX);
+
+	for (size_t i = 0; i < count; i++) {
+		if (!found[i].app)
+			continue;
+
+		app_word* slot = NULL;
+		for (size_t s = 0; s < sh->app_word_count && slot == NULL; s++)
+			if (strcmp(sh->app_word[s].name, found[i].name) == 0)
+				slot = &sh->app_word[s];
+
+		if (slot == NULL) {
+			if (sh->app_word_count >= QDOS_APPS_MAX)
+				break;
+			slot = &sh->app_word[sh->app_word_count];
+			snprintf(slot->name, sizeof(slot->name), "%s", found[i].name);
+			slot->sh = sh;
+			sh->app_word_count++;
+		}
+
+		qd_interp_register(interp, slot->name, "( -- )", run_app, slot);
+	}
 }
 
 static void edit_insert_word(qdos_shell* sh, const char* word) {
@@ -2046,8 +2189,11 @@ static int native_forget(qd_context* ctx, void* userdata) {
 
 	char message[80];
 
-	// A read-only program cannot be removed, only overridden
-	if (qdos_program_is_readonly(sh->hal, name) && !qdos_program_is_user(sh->hal, name)) {
+	// A read-only program cannot be removed, only overridden -- but a word
+	// written at the prompt covering one is yours, and dropping it is what
+	// brings the shipped version back
+	if (!declared_here(sh, name) && qdos_program_is_readonly(sh->hal, name)
+			&& !qdos_program_is_user(sh->hal, name)) {
 		const bool card = qdos_program_is_inbox(sh->hal, name);
 		snprintf(message, sizeof(message), "'%.10s' IS %s", name, card ? "ON THE CARD" : "BUILT IN");
 		qd_set_error_msg(ctx, message);
@@ -2060,6 +2206,7 @@ static int native_forget(qd_context* ctx, void* userdata) {
 		return 1;
 	}
 
+	forget_here(sh, name);
 	qdos_program_erase(sh->hal, name);
 
 	// Forgetting an override brings back whatever it was covering, card before
@@ -2163,6 +2310,14 @@ typedef struct {
 static bool spot_new_module(const char* entry, void* user) {
 	module_walk* walk = (module_walk*)user;
 
+	// An app that has just arrived brings its own modules with it
+	char folder[QDOS_PROGRAM_NAME_MAX];
+	if (qdos_app_name(entry, folder, sizeof(folder))) {
+		walk->sh->hal->store_list(
+				walk->sh->hal, QDOS_SCOPE_INBOX, folder, spot_new_module, walk);
+		return !walk->found;
+	}
+
 	char name[QDOS_PROGRAM_NAME_MAX];
 	if (!qdos_module_name(entry, name, sizeof(name)))
 		return true;
@@ -2179,7 +2334,7 @@ static bool card_has_new_module(const qdos_shell* sh, char* out, size_t cap) {
 		return false;
 
 	module_walk walk = {.sh = sh, .out = out, .cap = cap, .found = false};
-	sh->hal->store_list(sh->hal, QDOS_SCOPE_INBOX, spot_new_module, &walk);
+	sh->hal->store_list(sh->hal, QDOS_SCOPE_INBOX, NULL, spot_new_module, &walk);
 	return walk.found;
 }
 
@@ -2192,6 +2347,9 @@ static bool card_has_new_module(const qdos_shell* sh, char* out, size_t cap) {
  */
 static void reload_card(qdos_shell* sh) {
 	const int found = qdos_programs_restore(sh->hal, QDOS_SCOPE_INBOX, sh->interp);
+
+	// An app that has just arrived is a word the interpreter has not got yet
+	register_apps(sh, sh->interp);
 
 	// A list on screen is a snapshot, so it has to be taken again
 	if (sh->mode == QDOS_MODE_LIST) {
@@ -2254,6 +2412,7 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	qdos_programs_restore(hal, QDOS_SCOPE_SYSTEM, sh->interp);
 	qdos_programs_restore(hal, QDOS_SCOPE_INBOX, sh->interp);
 	qdos_programs_restore(hal, QDOS_SCOPE_USER, sh->interp);
+	register_apps(sh, sh->interp);
 
 	// A calculator that is ready says so by being on screen, so a clean boot
 	// leaves the message line empty. Only a restored stack is worth a word,

@@ -184,7 +184,7 @@ inside the tree, that copy would include itself.
 partition 1  64M  FAT   bootcode.bin, start.elf, fixup.dat, config.txt, cmdline.txt, Image, dtb, overlays
 partition 2  80M  ext4  read-only rootfs: busybox, kmod, qdos
 partition 3  16M  ext4  /var/lib/qdos — registers and the saved session
-partition 4  32M  FAT   /mnt/inbox — programs uploaded from a PC
+partition 4  32M  FAT   /mnt/inbox — programs and apps uploaded from a PC
 ```
 
 Four is the limit an MBR allows, and all four are spoken for. The image is about

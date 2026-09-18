@@ -29,6 +29,10 @@ extern "C" {
 typedef struct {
 	char name[QDOS_PROGRAM_NAME_MAX]; ///< `foo`, from libfoo.so
 
+	/** @brief The app this belongs to, or empty for one loose on the card.
+	 * A module inside an app is that app's own half and gets no row of its own. */
+	char app[QDOS_PROGRAM_NAME_MAX];
+
 	void* handle;					   ///< NULL if refused
 	const qdos_native_module* module;  ///< Inside the mapping, valid until unload
 	char error[QDOS_NATIVE_ERROR_MAX]; ///< Why it was refused, or empty

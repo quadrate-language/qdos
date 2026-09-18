@@ -54,6 +54,18 @@ typedef enum {
 /** @brief Receives one stored entry name; false stops the walk */
 typedef bool (*qdos_store_visit)(const char* name, void* user);
 
+/** @brief Marks a listed name as a folder rather than a file: `doom/` */
+#define QDOS_STORE_DIR_MARK '/'
+
+/**
+ * @brief Whether a name is one a store may hold
+ *
+ * A name is a file, or one folder and a file in it: `doom/main.qd`. One level
+ * and no more, so an app is a flat directory of its own parts and the store
+ * stays something a FAT card and a fixed-size buffer can both hold.
+ */
+bool qdos_store_name_ok(const char* name);
+
 struct qdos_hal {
 	int (*init)(qdos_hal* hal);
 
@@ -93,9 +105,14 @@ struct qdos_hal {
 	/** @brief No scope: the system store cannot be written, by construction */
 	qdos_store_result (*store_write)(qdos_hal* hal, const char* name, const void* buf, size_t len);
 
-	/** @brief Unordered, and may be NULL */
-	qdos_store_result (*store_list)(
-			qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user);
+	/**
+	 * @brief Unordered, and may be NULL
+	 *
+	 * @p folder is NULL for the scope itself, or an app's name to list what is
+	 * inside it. Names come back bare; a folder carries QDOS_STORE_DIR_MARK.
+	 */
+	qdos_store_result (*store_list)(qdos_hal* hal, qdos_store_scope scope, const char* folder,
+			qdos_store_visit visit, void* user);
 
 	/**
 	 * @brief Where an entry sits in a filesystem, if it sits in one at all

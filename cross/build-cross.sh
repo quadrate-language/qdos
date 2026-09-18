@@ -50,7 +50,7 @@ meson setup "$BUILD" "$QUADRATE_SRC" \
 	--buildtype=release \
 	-Dbuild_tests=true \
 	-Dbuild_tools=false \
-	-Dbuild_stdlib=false \
+	-Dbuild_stdlib=true \
 	-Dwerror=false \
 	--wipe 2>/dev/null || \
 meson setup "$BUILD" "$QUADRATE_SRC" \
@@ -85,8 +85,15 @@ mv "$STAGE/lib/quadrate/librt_packed.a"     "$STAGE/lib/quadrate/librt.a"
 mv "$STAGE/lib/quadrate/libmath_packed.a"   "$STAGE/lib/quadrate/libmath.a"
 mv "$STAGE/lib/quadrate/libu8t_packed.a"    "$STAGE/lib/quadrate/libu8t.a"
 
-for mod in interp qc rt; do
-	cp -r "$QUADRATE_SRC/lib/$mod/include/quadrate/$mod" "$STAGE/include/quadrate/"
+# math is a standard library rather than a compiler library, so it sits
+# somewhere else in the tree; both halves are headers QDOS includes
+for mod in lib/interp lib/qc lib/rt stdlib/math; do
+	name=$(basename "$mod")
+	if [ ! -d "$QUADRATE_SRC/$mod/include/quadrate/$name" ]; then
+		echo "$0: no headers for $name at $QUADRATE_SRC/$mod" >&2
+		exit 1
+	fi
+	cp -r "$QUADRATE_SRC/$mod/include/quadrate/$name" "$STAGE/include/quadrate/"
 done
 
 echo "Staged:"

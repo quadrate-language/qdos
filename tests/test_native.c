@@ -38,12 +38,35 @@ static void store_put(qdos_store_scope scope, const char* file) {
 		g_scope[scope].name[g_scope[scope].count++] = file;
 }
 
-static qdos_store_result stub_list(
-		qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
+/** A name with a '/' in it sits in a folder; see stub_list in test_shell.c */
+static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
+		qdos_store_visit visit, void* user) {
 	(void)hal;
-	for (size_t i = 0; i < g_scope[scope].count; i++)
-		if (!visit(g_scope[scope].name[i], user))
+
+	for (size_t i = 0; i < g_scope[scope].count; i++) {
+		const char* name = g_scope[scope].name[i];
+		const char* slash = strchr(name, '/');
+
+		if (folder != NULL) {
+			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0
+					|| folder[slash - name] != '\0')
+				continue;
+			if (!visit(slash + 1, user))
+				break;
+			continue;
+		}
+
+		if (slash != NULL) {
+			char dir[QDOS_PROGRAM_NAME_MAX];
+			snprintf(dir, sizeof(dir), "%.*s/", (int)(slash - name), name);
+			if (!visit(dir, user))
+				break;
+			continue;
+		}
+
+		if (!visit(name, user))
 			break;
+	}
 	return QDOS_STORE_OK;
 }
 
@@ -51,7 +74,11 @@ static bool stub_path(
 		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	(void)hal;
 	(void)scope;
-	const int written = snprintf(buf, cap, "%s/%s", MODULE_DIR, name);
+
+	// The built modules are all in one directory, whatever folder the store
+	// says they sit in
+	const char* slash = strrchr(name, '/');
+	const int written = snprintf(buf, cap, "%s/%s", MODULE_DIR, slash ? slash + 1 : name);
 	return written > 0 && (size_t)written < cap;
 }
 
@@ -182,6 +209,55 @@ static void test_a_module_brings_words(void) {
 	qd_interp_destroy(interp);
 	qdos_natives_unload(&set);
 	CHECK(set.count == 0);
+}
+
+/**
+ * A module inside an app folder is that app's own half.
+ *
+ * It loads and its words are callable, but it is marked as belonging to the
+ * app so that the list shows the app rather than the library under it.
+ */
+static void test_a_module_inside_an_app_belongs_to_it(void) {
+	store_reset();
+	store_put(QDOS_SCOPE_INBOX, "doom/libdemo.so");
+
+	qdos_hal hal;
+	stub_hal(&hal);
+
+	qdos_natives set;
+	memset(&set, 0, sizeof(set));
+	CHECK(qdos_natives_load(&set, &hal, QDOS_SCOPE_INBOX) == 1);
+	CHECK(set.count == 1);
+	CHECK(strcmp(set.entry[0].app, "doom") == 0);
+
+	// Still scoped by the file, so the app calls it the way anything would
+	qd_interp* interp = qd_interp_create(256);
+	CHECK(interp != NULL);
+	CHECK(qdos_natives_register(&set, interp) == 6);
+	CHECK(qd_interp_eval(interp, "21 demo::double"));
+
+	qd_interp_value value;
+	CHECK(qd_interp_peek(interp, 0, &value));
+	CHECK(value.i == 42);
+
+	qd_interp_destroy(interp);
+	qdos_natives_unload(&set);
+}
+
+/** One loose on the card belongs to nothing, and is listed in its own right. */
+static void test_a_module_on_the_card_belongs_to_no_app(void) {
+	store_reset();
+	store_put(QDOS_SCOPE_INBOX, "libdemo.so");
+
+	qdos_hal hal;
+	stub_hal(&hal);
+
+	qdos_natives set;
+	memset(&set, 0, sizeof(set));
+	CHECK(qdos_natives_load(&set, &hal, QDOS_SCOPE_INBOX) == 1);
+	CHECK(set.entry[0].app[0] == '\0');
+
+	qdos_natives_unload(&set);
 }
 
 /** A word that gives up reports through the same line every error uses. */
@@ -462,6 +538,8 @@ static void test_the_set_has_a_limit(void) {
 int main(void) {
 	test_module_names();
 	test_a_module_brings_words();
+	test_a_module_inside_an_app_belongs_to_it();
+	test_a_module_on_the_card_belongs_to_no_app();
 	test_a_word_can_fail();
 	test_the_signature_is_checked();
 	test_a_program_takes_its_bare_name();

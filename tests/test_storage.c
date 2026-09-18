@@ -70,10 +70,35 @@ static qdos_store_result mem_write(qdos_hal* hal, const char* name, const void* 
 	return QDOS_STORE_OK;
 }
 
-static qdos_store_result mem_list(qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
+/** A name with a '/' in it sits in a folder; see stub_list in test_shell.c */
+static qdos_store_result mem_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
+		qdos_store_visit visit, void* user) {
 	(void)hal;
 	for (int i = 0; i < SLOTS; i++) {
-		if (g_slots[i].used && g_slots[i].scope == scope && !visit(g_slots[i].name, user))
+		if (!g_slots[i].used || g_slots[i].scope != scope)
+			continue;
+
+		const char* name = g_slots[i].name;
+		const char* slash = strchr(name, '/');
+
+		if (folder != NULL) {
+			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0
+					|| folder[slash - name] != '\0')
+				continue;
+			if (!visit(slash + 1, user))
+				break;
+			continue;
+		}
+
+		if (slash != NULL) {
+			char dir[QDOS_PROGRAM_NAME_MAX];
+			snprintf(dir, sizeof(dir), "%.*s/", (int)(slash - name), name);
+			if (!visit(dir, user))
+				break;
+			continue;
+		}
+
+		if (!visit(name, user))
 			break;
 	}
 	return QDOS_STORE_OK;

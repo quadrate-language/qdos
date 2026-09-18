@@ -204,6 +204,50 @@ bool qdos_program_key(const char* name, char* buf, size_t cap) {
 	return written > 0 && (size_t)written < cap;
 }
 
+bool qdos_app_key(const char* app, const char* leaf, char* buf, size_t cap) {
+	if (!valid_program_name(app) || leaf == NULL || *leaf == '\0')
+		return false;
+
+	const int written = snprintf(buf, cap, "%s/%s", app, leaf);
+	return written > 0 && (size_t)written < cap;
+}
+
+bool qdos_app_name(const char* entry, char* out, size_t cap) {
+	if (entry == NULL)
+		return false;
+
+	const size_t len = strlen(entry);
+	if (len < 2 || entry[len - 1] != QDOS_STORE_DIR_MARK || len > cap)
+		return false;
+
+	memcpy(out, entry, len - 1);
+	out[len - 1] = '\0';
+
+	// The folder names a word in the vocabulary, so it has to lex as one
+	return valid_program_name(out);
+}
+
+bool qdos_app_exists(qdos_hal* hal, const char* name) {
+	if (hal == NULL || hal->store_read == NULL)
+		return false;
+
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	if (!qdos_app_key(name, QDOS_APP_MAIN, key, sizeof(key)))
+		return false;
+
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
+		char probe[1];
+		size_t len = 0;
+		const qdos_store_result r =
+				hal->store_read(hal, (qdos_store_scope)scope, key, probe, sizeof(probe), &len);
+
+		// A source of any length at all is there; TOO_BIG says so loudest
+		if (r == QDOS_STORE_TOO_BIG || (r == QDOS_STORE_OK && len > 0))
+			return true;
+	}
+	return false;
+}
+
 bool qdos_module_name(const char* entry, char* out, size_t cap) {
 	if (entry == NULL)
 		return false;
@@ -235,9 +279,22 @@ bool qdos_module_key(const char* name, char* buf, size_t cap) {
 	return written > 0 && (size_t)written < cap;
 }
 
+/**
+ * @brief The store key holding a program's source
+ *
+ * An app keeps its source inside its own folder, a loose program beside
+ * everything else. Which one a name is, the card decides.
+ */
+static bool source_key(qdos_hal* hal, const char* name, char* buf, size_t cap) {
+	if (qdos_app_exists(hal, name))
+		return qdos_app_key(name, QDOS_APP_MAIN, buf, cap);
+
+	return qdos_program_key(name, buf, cap);
+}
+
 qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char* source) {
-	char key[QDOS_PROGRAM_NAME_MAX];
-	if (!qdos_program_key(name, key, sizeof(key)) || !source)
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	if (!source_key(hal, name, key, sizeof(key)) || !source)
 		return QDOS_STORE_IO_ERROR;
 
 	const size_t len = strnlen(source, QDOS_PROGRAM_MAX);
@@ -249,8 +306,8 @@ qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char*
 
 qdos_store_result qdos_program_load(
 		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
-	char key[QDOS_PROGRAM_NAME_MAX];
-	if (!qdos_program_key(name, key, sizeof(key)) || cap == 0)
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	if (!source_key(hal, name, key, sizeof(key)) || cap == 0)
 		return QDOS_STORE_IO_ERROR;
 
 	size_t len = 0;
@@ -264,8 +321,8 @@ qdos_store_result qdos_program_load(
 }
 
 qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name) {
-	char key[QDOS_PROGRAM_NAME_MAX];
-	if (!qdos_program_key(name, key, sizeof(key)))
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	if (!source_key(hal, name, key, sizeof(key)))
 		return QDOS_STORE_IO_ERROR;
 
 	return hal->store_write(hal, key, "", 0);
@@ -281,7 +338,13 @@ typedef struct {
 static bool restore_one(const char* entry, void* user) {
 	restore_walk* walk = (restore_walk*)user;
 
+	// An app is not declared with the rest: every one of them calls its entry
+	// point `main`, so they would overwrite each other. It is declared when it
+	// is run, and forgotten again afterwards.
 	const size_t len = strlen(entry);
+	if (len > 0 && entry[len - 1] == QDOS_STORE_DIR_MARK)
+		return true;
+
 	if (len <= PROGRAM_SUFFIX_LEN || strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0)
 		return true;
 
@@ -323,20 +386,26 @@ static void mark_origin(qdos_program_entry* e, qdos_store_scope scope) {
 static bool gather_one(const char* entry, void* userdata) {
 	gather_walk* w = (gather_walk*)userdata;
 
-	const size_t len = strlen(entry);
-	if (len <= PROGRAM_SUFFIX_LEN || strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0)
-		return true;
-
-	const size_t stem = len - PROGRAM_SUFFIX_LEN;
-	if (stem >= QDOS_PROGRAM_NAME_MAX)
-		return true;
-
 	char name[QDOS_PROGRAM_NAME_MAX];
-	memcpy(name, entry, stem);
-	name[stem] = '\0';
+	const bool app = qdos_app_name(entry, name, sizeof(name));
+
+	if (!app) {
+		const size_t len = strlen(entry);
+		if (len <= PROGRAM_SUFFIX_LEN
+				|| strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0)
+			return true;
+
+		const size_t stem = len - PROGRAM_SUFFIX_LEN;
+		if (stem >= QDOS_PROGRAM_NAME_MAX)
+			return true;
+
+		memcpy(name, entry, stem);
+		name[stem] = '\0';
+	}
 
 	// Erasing writes an empty entry, there being no delete in the HAL, so a
-	// dropped program is still listed unless its contents are looked at
+	// dropped program is still listed unless its contents are looked at. A
+	// folder with nothing to run is not an app either.
 	char source[QDOS_PROGRAM_MAX];
 	if (qdos_program_load(w->hal, w->scope, name, source, sizeof(source)) != QDOS_STORE_OK)
 		return true;
@@ -354,6 +423,7 @@ static bool gather_one(const char* entry, void* userdata) {
 	qdos_program_entry* e = &w->out[w->count];
 	memset(e, 0, sizeof(*e));
 	snprintf(e->name, QDOS_PROGRAM_NAME_MAX, "%s", name);
+	e->app = app;
 	mark_origin(e, w->scope);
 	w->count++;
 	return true;
@@ -384,7 +454,7 @@ size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap) 
 	gather_walk walk = {.hal = hal, .out = out, .cap = cap, .count = 0, .scope = QDOS_SCOPE_SYSTEM};
 	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
 		walk.scope = (qdos_store_scope)scope;
-		hal->store_list(hal, walk.scope, gather_one, &walk);
+		hal->store_list(hal, walk.scope, NULL, gather_one, &walk);
 	}
 
 	qsort(out, walk.count, sizeof(*out), entry_order);
@@ -424,7 +494,7 @@ int qdos_programs_restore(qdos_hal* hal, qdos_store_scope scope, qd_interp* inte
 	const size_t before = qd_interp_depth(interp);
 
 	restore_walk walk = {.hal = hal, .scope = scope, .interp = interp, .declared = 0};
-	hal->store_list(hal, scope, restore_one, &walk);
+	hal->store_list(hal, scope, NULL, restore_one, &walk);
 
 	qd_context* ctx = qd_interp_context(interp);
 	while (qd_interp_depth(interp) > before) {

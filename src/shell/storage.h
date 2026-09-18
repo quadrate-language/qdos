@@ -59,6 +59,27 @@ bool qdos_register_key(int64_t slot, char* buf, size_t cap);
 /** @brief Plain `<name>.qd`, so an uploaded file and a saved one are alike */
 bool qdos_program_key(const char* name, char* buf, size_t cap);
 
+/**
+ * @brief The entry point a folder has to hold to be an app
+ *
+ * A folder on the card is an app named after the folder, and this is the file
+ * inside it the shell runs. Everything else in there -- its modules, its data
+ * -- belongs to it and is not listed separately.
+ */
+#define QDOS_APP_MAIN "main.qd"
+
+/** @brief The word an app's entry point declares */
+#define QDOS_APP_ENTRY "main"
+
+/** @brief `doom` and `main.qd` make the store key `doom/main.qd` */
+bool qdos_app_key(const char* app, const char* leaf, char* buf, size_t cap);
+
+/** @brief The app a listed folder is: `doom/` is `doom`, a file is nothing */
+bool qdos_app_name(const char* entry, char* out, size_t cap);
+
+/** @brief Whether a folder of this name, holding an entry point, is on the card */
+bool qdos_app_exists(qdos_hal* hal, const char* name);
+
 /** @brief `libfoo.so` is the module `foo`, reached as `foo::bar` */
 bool qdos_module_name(const char* entry, char* out, size_t cap);
 
@@ -86,6 +107,7 @@ typedef struct {
 	bool system; ///< Shipped in the firmware
 	bool inbox;	 ///< Uploaded from a PC
 	bool user;	 ///< Written here
+	bool app;	 ///< A folder with an entry point, rather than a loose file
 } qdos_program_entry;
 
 /**

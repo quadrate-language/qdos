@@ -86,12 +86,57 @@ typedef struct {
 	/** Closing the watched descriptor does not reliably wake a blocked read */
 	int wake_fd[2];
 
+/** @brief As many app folders as the card is watched into */
+#define QDOS_WATCH_SUBS 16
+
+	int sub_id[QDOS_WATCH_SUBS]; ///< One watch per app folder
+	size_t sub_count;
+
 	SDL_Thread* watcher;
 	volatile bool store_dirty;
 
 	/** Staging buffer: the HAL speaks 8-bit gray, the texture wants RGB. */
 	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
 } sim_state;
+
+#define WATCH_EVENTS (IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE | IN_CREATE)
+
+static const char* dir_for(qdos_store_scope scope);
+static bool is_dir(const char* dir, const char* name);
+
+/** @brief The card and every app folder on it; inotify does not recurse */
+static void sim_watch_inbox(sim_state* st) {
+	if (st->watch_fd < 0)
+		return;
+
+	if (st->watch_id >= 0)
+		inotify_rm_watch(st->watch_fd, st->watch_id);
+	for (size_t i = 0; i < st->sub_count; i++)
+		inotify_rm_watch(st->watch_fd, st->sub_id[i]);
+	st->sub_count = 0;
+
+	const char* inbox = dir_for(QDOS_SCOPE_INBOX);
+	st->watch_id = inotify_add_watch(st->watch_fd, inbox, WATCH_EVENTS);
+
+	DIR* dir = opendir(inbox);
+	if (dir == NULL)
+		return;
+
+	const struct dirent* ent;
+	while ((ent = readdir(dir)) != NULL && st->sub_count < QDOS_WATCH_SUBS) {
+		if (ent->d_name[0] == '.' || !is_dir(inbox, ent->d_name))
+			continue;
+
+		char path[512];
+		if (snprintf(path, sizeof(path), "%s/%s", inbox, ent->d_name) >= (int)sizeof(path))
+			continue;
+
+		const int id = inotify_add_watch(st->watch_fd, path, WATCH_EVENTS);
+		if (id >= 0)
+			st->sub_id[st->sub_count++] = id;
+	}
+	closedir(dir);
+}
 
 static int SDLCALL sim_watch_thread(void* data) {
 	sim_state* st = (sim_state*)data;
@@ -112,6 +157,9 @@ static int SDLCALL sim_watch_thread(void* data) {
 			break;
 
 		st->store_dirty = true;
+
+		// A folder that has just arrived is not being watched yet
+		sim_watch_inbox(st);
 
 		SDL_Event wake;
 		SDL_zero(wake);
@@ -174,8 +222,7 @@ static int sim_init(qdos_hal* hal) {
 
 	st->watch_fd = inotify_init1(IN_CLOEXEC);
 	if (st->watch_fd >= 0 && pipe(st->wake_fd) == 0) {
-		st->watch_id = inotify_add_watch(st->watch_fd, dir_for(QDOS_SCOPE_INBOX),
-				IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE);
+		sim_watch_inbox(st);
 		st->watcher = SDL_CreateThread(sim_watch_thread, "qdos-watch", st);
 	}
 
@@ -467,12 +514,20 @@ static bool scope_is_reachable(const sim_state* st, qdos_store_scope scope) {
 }
 
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
-	// Reject anything that could escape the store directory
-	if (!name || !*name || strchr(name, '/') || strchr(name, '\\') || strcmp(name, "..") == 0)
+	if (!qdos_store_name_ok(name))
 		return false;
 
 	const int written = snprintf(buf, cap, "%s/%s", dir, name);
 	return written > 0 && (size_t)written < cap;
+}
+
+static bool is_dir(const char* dir, const char* name) {
+	char path[512];
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path))
+		return false;
+
+	struct stat sb;
+	return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
 }
 
 static qdos_store_result sim_store_read(
@@ -510,6 +565,14 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 
 	mkdir(dir_for(QDOS_SCOPE_USER), 0755); // may already exist, which is fine
 
+	// An app is written into a folder of its own, which may not be there yet
+	char* slash = strrchr(path, '/');
+	if (slash != NULL && strchr(name, '/') != NULL) {
+		*slash = '\0';
+		mkdir(path, 0755);
+		*slash = '/';
+	}
+
 	FILE* f = fopen(path, "wb");
 	if (!f)
 		return QDOS_STORE_IO_ERROR;
@@ -537,7 +600,8 @@ static int sim_usb_export(qdos_hal* hal, bool on) {
 
 	st->shared = on;
 	if (on)
-		printf("qdos: card shared -- drop .qd and lib*.so in %s/\n", dir_for(QDOS_SCOPE_INBOX));
+		printf("qdos: card shared -- drop .qd, lib*.so or an app folder in %s/\n",
+				dir_for(QDOS_SCOPE_INBOX));
 	else
 		printf("qdos: card taken back\n");
 	fflush(stdout);
@@ -545,13 +609,19 @@ static int sim_usb_export(qdos_hal* hal, bool on) {
 	return 0;
 }
 
-static qdos_store_result sim_store_list(
-		qdos_hal* hal, qdos_store_scope scope, qdos_store_visit visit, void* user) {
+static qdos_store_result sim_store_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
+		qdos_store_visit visit, void* user) {
 	// An empty mount point rather than an error
 	if (!scope_is_reachable((sim_state*)hal->impl, scope))
 		return QDOS_STORE_OK;
 
-	DIR* dir = opendir(dir_for(scope));
+	char root[512];
+	if (folder == NULL || *folder == '\0')
+		snprintf(root, sizeof(root), "%s", dir_for(scope));
+	else if (!store_path(dir_for(scope), folder, root, sizeof(root)))
+		return QDOS_STORE_IO_ERROR;
+
+	DIR* dir = opendir(root);
 	if (!dir)
 		return QDOS_STORE_NOT_FOUND;
 
@@ -559,7 +629,15 @@ static qdos_store_result sim_store_list(
 	while ((ent = readdir(dir)) != NULL) {
 		if (ent->d_name[0] == '.')
 			continue;
-		if (!visit(ent->d_name, user))
+
+		// A folder is listed with the mark on it, being an app and not a file
+		char name[288];
+		const int written = snprintf(
+				name, sizeof(name), "%s%s", ent->d_name, is_dir(root, ent->d_name) ? "/" : "");
+		if (written <= 0 || (size_t)written >= sizeof(name))
+			continue;
+
+		if (!visit(name, user))
 			break;
 	}
 
@@ -572,6 +650,7 @@ static sim_state g_sim;
 void qdos_sim_hal(qdos_hal* hal) {
 	memset(&g_sim, 0, sizeof(g_sim));
 	g_sim.watch_fd = -1;
+	g_sim.watch_id = -1;
 	g_sim.wake_fd[0] = -1;
 	g_sim.wake_fd[1] = -1;
 

@@ -208,12 +208,16 @@ static void test_a_name_cannot_leave_the_store(void) {
 	device_hal(&hal);
 
 	char buf[64];
+	// One folder deep is an app and is allowed; everything here is not
 	static const char* const REFUSED[] = {
 			"",
 			"..",
+			".",
 			"../escaped",
 			"../../etc/passwd",
-			"sub/dir",
+			"app/../escaped",
+			"one/two/three",
+			"app/",
 			"sub\\dir",
 			"/absolute",
 	};
@@ -237,6 +241,7 @@ static void test_a_name_cannot_leave_the_store(void) {
 
 	hal.shutdown(&hal);
 }
+
 
 /** Each scope is its own directory, and a read says which one it means. */
 static void test_the_scopes_are_separate(void) {
@@ -348,6 +353,33 @@ static bool saw(const visitor* v, const char* name) {
 	return false;
 }
 
+/** An app is a folder, so writing into one has to make it, and listing show it. */
+static void test_an_app_folder_is_written_and_listed(void) {
+	qdos_hal hal;
+	device_hal(&hal);
+
+	CHECK(hal.store_write(&hal, "doom/main.qd", "fn main( -- ) { }", 17) == QDOS_STORE_OK);
+
+	char buf[64];
+	size_t len = 0;
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "doom/main.qd", buf, sizeof(buf), &len)
+			== QDOS_STORE_OK);
+	CHECK(len == 17);
+
+	// The card shows the folder with the mark on it, not what is inside it
+	visitor top = {.count = 0, .stop_after = 0};
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_USER, NULL, collect, &top) == QDOS_STORE_OK);
+	CHECK(saw(&top, "doom/"));
+	CHECK(!saw(&top, "main.qd"));
+
+	// Naming the folder lists what it holds, bare
+	visitor inside = {.count = 0, .stop_after = 0};
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_USER, "doom", collect, &inside) == QDOS_STORE_OK);
+	CHECK(saw(&inside, "main.qd"));
+
+	hal.shutdown(&hal);
+}
+
 /** Listing walks one scope's directory, and skips what is not a record. */
 static void test_list_walks_a_scope(void) {
 	qdos_hal hal;
@@ -359,14 +391,14 @@ static void test_list_walks_a_scope(void) {
 	seed(g_system, ".hidden", "no"); // and whatever else the rootfs leaves lying about
 
 	visitor user = {0};
-	CHECK(hal.store_list(&hal, QDOS_SCOPE_USER, collect, &user) == QDOS_STORE_OK);
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_USER, NULL, collect, &user) == QDOS_STORE_OK);
 	CHECK(user.count == 2);
 	CHECK(saw(&user, "one.qd"));
 	CHECK(saw(&user, "two.qd"));
 	CHECK(!saw(&user, "three.qd")); // the other scope is not this one
 
 	visitor system = {0};
-	CHECK(hal.store_list(&hal, QDOS_SCOPE_SYSTEM, collect, &system) == QDOS_STORE_OK);
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_SYSTEM, NULL, collect, &system) == QDOS_STORE_OK);
 	CHECK(system.count == 1);
 	CHECK(saw(&system, "three.qd"));
 	CHECK(!saw(&system, ".hidden"));
@@ -374,13 +406,13 @@ static void test_list_walks_a_scope(void) {
 
 	seed(g_inbox, "four.qd", "4");
 	visitor inbox = {0};
-	CHECK(hal.store_list(&hal, QDOS_SCOPE_INBOX, collect, &inbox) == QDOS_STORE_OK);
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_INBOX, NULL, collect, &inbox) == QDOS_STORE_OK);
 	CHECK(inbox.count == 1);
 	CHECK(saw(&inbox, "four.qd"));
 
 	// A visitor that has seen enough stops the walk
 	visitor early = {.stop_after = 1};
-	CHECK(hal.store_list(&hal, QDOS_SCOPE_USER, collect, &early) == QDOS_STORE_OK);
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_USER, NULL, collect, &early) == QDOS_STORE_OK);
 	CHECK(early.count == 1);
 
 	hal.shutdown(&hal);
@@ -397,7 +429,7 @@ static void test_list_of_a_missing_directory(void) {
 	CHECK(hal.init(&hal) != 0); // again, to pick the new directory up
 
 	visitor v = {0};
-	CHECK(hal.store_list(&hal, QDOS_SCOPE_SYSTEM, collect, &v) == QDOS_STORE_NOT_FOUND);
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_SYSTEM, NULL, collect, &v) == QDOS_STORE_NOT_FOUND);
 	CHECK(v.count == 0);
 
 	char buf[64];
@@ -423,7 +455,7 @@ static void test_a_shared_inbox_reads_as_empty(void) {
 	CHECK(hal.store_read(&hal, QDOS_SCOPE_INBOX, "gone.qd", buf, sizeof(buf), NULL) == QDOS_STORE_NOT_FOUND);
 
 	visitor v = {0};
-	CHECK(hal.store_list(&hal, QDOS_SCOPE_INBOX, collect, &v) == QDOS_STORE_NOT_FOUND);
+	CHECK(hal.store_list(&hal, QDOS_SCOPE_INBOX, NULL, collect, &v) == QDOS_STORE_NOT_FOUND);
 	CHECK(v.count == 0);
 
 	// The other scopes are unaffected, so the calculator still works
@@ -516,6 +548,7 @@ int main(void) {
 	test_write_then_read();
 	test_too_big_for_the_buffer();
 	test_a_name_cannot_leave_the_store();
+	test_an_app_folder_is_written_and_listed();
 	test_the_scopes_are_separate();
 	test_a_write_cannot_touch_the_system_store();
 	test_a_write_cannot_touch_the_inbox();

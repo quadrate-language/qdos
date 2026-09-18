@@ -69,8 +69,6 @@ WRAP(sinh)
 WRAP(cosh)
 WRAP(tanh)
 WRAP(asinh)
-WRAP(sq)
-WRAP(cb)
 WRAP(cbrt)
 WRAP(exp)
 WRAP(exp2)
@@ -78,14 +76,100 @@ WRAP(ceil)
 WRAP(floor)
 WRAP(round)
 WRAP(trunc)
-WRAP(abs)
 WRAP(pow)
 WRAP(hypot)
 WRAP(atan2)
-WRAP(min)
-WRAP(max)
 
 #undef WRAP
+
+/*
+ * lib/math writes these in Quadrate rather than C, so there is no usr_math_
+ * symbol to call and they are done here. Whole numbers stay whole: `3 sq` is
+ * 9 on a calculator, not 9.0, and the bitwise words still take it.
+ */
+static int whole_unary(qd_context* ctx, int64_t (*on_int)(int64_t), double (*on_real)(double)) {
+	qd_stack_element_t top;
+	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK)
+		return 1;
+
+	if (top.type == QD_STACK_TYPE_INT)
+		return qd_push_i(ctx, on_int(top.value.i));
+	if (top.type == QD_STACK_TYPE_FLOAT)
+		return qd_push_f(ctx, on_real(top.value.f));
+
+	return qdos_math_error(ctx, "math", "NEEDS A NUMBER");
+}
+
+static int64_t sq_i(int64_t x) {
+	return x * x;
+}
+static double sq_f(double x) {
+	return x * x;
+}
+static int64_t cb_i(int64_t x) {
+	return x * x * x;
+}
+static double cb_f(double x) {
+	return x * x * x;
+}
+static int64_t abs_i(int64_t x) {
+	return x < 0 ? -x : x;
+}
+static double abs_f(double x) {
+	return fabs(x);
+}
+
+static int w_sq(qd_context* ctx, void* user) {
+	(void)user;
+	return whole_unary(ctx, sq_i, sq_f);
+}
+
+static int w_cb(qd_context* ctx, void* user) {
+	(void)user;
+	return whole_unary(ctx, cb_i, cb_f);
+}
+
+static int w_abs(qd_context* ctx, void* user) {
+	(void)user;
+	return whole_unary(ctx, abs_i, abs_f);
+}
+
+static int w_inv(qd_context* ctx, void* user) {
+	(void)user;
+	double x = 0.0;
+	if (!qdos_peek_number(ctx, 0, &x))
+		return qdos_math_error(ctx, "inv", "NEEDS A NUMBER");
+	if (x == 0.0)
+		return qdos_math_error(ctx, "inv", "CANNOT DIVIDE BY 0");
+
+	return replace_top(ctx, 1.0 / x);
+}
+
+/** @brief Keeps the value it picked, so an integer stays one */
+static int pick_of_two(qd_context* ctx, const char* word, bool want_greater) {
+	double b = 0.0, a = 0.0;
+	if (!qdos_peek_number(ctx, 0, &b) || !qdos_peek_number(ctx, 1, &a))
+		return qdos_math_error(ctx, word, "NEEDS 2 NUMBERS");
+
+	qd_stack_element_t top, second;
+	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK
+			|| qd_stack_pop(ctx->st, &second) != QD_STACK_OK)
+		return 1;
+
+	const qd_stack_element_t kept = (want_greater == (b > a)) ? top : second;
+	return (kept.type == QD_STACK_TYPE_INT) ? qd_push_i(ctx, kept.value.i)
+										    : qd_push_f(ctx, kept.value.f);
+}
+
+static int w_min(qd_context* ctx, void* user) {
+	(void)user;
+	return pick_of_two(ctx, "min", false);
+}
+
+static int w_max(qd_context* ctx, void* user) {
+	(void)user;
+	return pick_of_two(ctx, "max", true);
+}
 
 /*
  * lib/math has a domain to fall out of and says so by ending the run. The
@@ -107,7 +191,6 @@ CHECKED(log10, x > 0.0, "NEEDS MORE THAN 0")
 CHECKED(log2, x > 0.0, "NEEDS MORE THAN 0")
 CHECKED(acosh, x >= 1.0, "NEEDS 1 OR MORE")
 CHECKED(atanh, x > -1.0 && x < 1.0, "NEEDS -1 TO 1")
-CHECKED(inv, x != 0.0, "CANNOT DIVIDE BY 0")
 CHECKED(fac, x >= 0.0 && x == floor(x) && x <= 170.0, "WHOLE, 0 TO 170")
 
 #undef CHECKED

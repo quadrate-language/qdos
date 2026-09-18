@@ -1,13 +1,12 @@
 // Integer square root: the largest r where r*r <= n.
 //
-// Linear, not Newton: a body cannot name its parameters yet, and the juggling
-// for a converging guess is not worth it for the sizes a calculator asks about.
+// Linear, not Newton: the juggling for a converging guess is not worth it for
+// the sizes a calculator asks about.
 fn isqrt(n:i64 -- r:i64) {
 	0
 	loop {
 		dup 1 + dup *
-		2 pick > if { break }
+		n > if { break }
 		1 +
 	}
-	swap drop
 }

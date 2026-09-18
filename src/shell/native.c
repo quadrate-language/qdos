@@ -102,6 +102,13 @@ static void api_wait(qdos_native_ctx* ctx, int timeout_ms) {
 		g_hal->wait(g_hal, timeout_ms);
 }
 
+/** @brief The app the word now running belongs to, or empty for a loose module */
+static const char* g_app = "";
+
+static bool readable(qdos_store_scope scope, const char* key, char* buf, size_t cap) {
+	return g_hal->store_path(g_hal, scope, key, buf, cap) && access(buf, R_OK) == 0;
+}
+
 static bool api_path(qdos_native_ctx* ctx, const char* name, char* buf, size_t cap) {
 	(void)ctx;
 	if (g_hal == NULL || g_hal->store_path == NULL || name == NULL)
@@ -110,10 +117,15 @@ static bool api_path(qdos_native_ctx* ctx, const char* name, char* buf, size_t c
 	// Nearest first, as a program of one name shadows another
 	static const qdos_store_scope ORDER[] = {QDOS_SCOPE_USER, QDOS_SCOPE_INBOX, QDOS_SCOPE_SYSTEM};
 
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	const bool inside = g_app[0] != '\0' && qdos_app_key(g_app, name, key, sizeof(key));
+
 	for (size_t i = 0; i < sizeof(ORDER) / sizeof(*ORDER); i++) {
-		if (!g_hal->store_path(g_hal, ORDER[i], name, buf, cap))
-			continue;
-		if (access(buf, R_OK) == 0)
+		// What an app brought with it is in its own folder; anything else it
+		// asks for is loose on the card
+		if (inside && readable(ORDER[i], key, buf, cap))
+			return true;
+		if (readable(ORDER[i], name, buf, cap))
 			return true;
 	}
 
@@ -158,6 +170,24 @@ void qdos_natives_rearm(void) {
 	g_called = false;
 }
 
+/** @brief The set the registered words came from, for finding what owns one */
+static const qdos_natives* g_set;
+
+/** @brief Which module a word belongs to; its words sit inside its own table */
+static const char* app_of(const qdos_native_word* word) {
+	if (g_set == NULL)
+		return "";
+
+	for (size_t i = 0; i < g_set->count; i++) {
+		const qdos_native_entry* entry = &g_set->entry[i];
+		if (entry->module == NULL || entry->module->words == NULL)
+			continue;
+		if (word >= entry->module->words && word < entry->module->words + entry->module->word_count)
+			return entry->app;
+	}
+	return "";
+}
+
 /** @brief The interpreter calls this; the module's own function is the userdata */
 static int call_word(qd_context* ctx, void* userdata) {
 	const qdos_native_word* word = (const qdos_native_word*)userdata;
@@ -168,7 +198,12 @@ static int call_word(qd_context* ctx, void* userdata) {
 			g_on_call(g_on_call_user);
 	}
 
-	return word->fn((qdos_native_ctx*)ctx, &API);
+	const char* was = g_app;
+	g_app = app_of(word);
+	const int result = word->fn((qdos_native_ctx*)ctx, &API);
+	g_app = was;
+
+	return result;
 }
 
 /* See qdos_natives_recover() in native.h for why these exist. */
@@ -344,18 +379,35 @@ typedef struct {
 	qdos_natives* set;
 	qdos_hal* hal;
 	qdos_store_scope scope;
+	const char* app; ///< The folder being walked, or NULL for the card itself
 	int loaded;
 } load_walk;
 
 static bool load_one(const char* file, void* userdata) {
 	load_walk* walk = (load_walk*)userdata;
 
+	// A folder is an app; its modules are inside it, and belong to it
+	char folder[QDOS_PROGRAM_NAME_MAX];
+	if (walk->app == NULL && qdos_app_name(file, folder, sizeof(folder))) {
+		load_walk inside = *walk;
+		inside.app = folder;
+		walk->hal->store_list(walk->hal, walk->scope, folder, load_one, &inside);
+		walk->loaded += inside.loaded;
+		return true;
+	}
+
 	char name[QDOS_PROGRAM_NAME_MAX];
 	if (!qdos_module_name(file, name, sizeof(name)))
 		return true;
 
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	if (walk->app == NULL)
+		snprintf(key, sizeof(key), "%s", file);
+	else if (!qdos_app_key(walk->app, file, key, sizeof(key)))
+		return true;
+
 	char path[512];
-	if (!walk->hal->store_path(walk->hal, walk->scope, file, path, sizeof(path)))
+	if (!walk->hal->store_path(walk->hal, walk->scope, key, path, sizeof(path)))
 		return true;
 
 	qdos_native_entry* entry = slot_for(walk->set, name);
@@ -364,6 +416,7 @@ static bool load_one(const char* file, void* userdata) {
 
 	release(entry);
 	mark_origin(entry, walk->scope);
+	snprintf(entry->app, sizeof(entry->app), "%s", walk->app != NULL ? walk->app : "");
 
 	if (listed(walk->set->blocked, name)) {
 		snprintf(entry->error, sizeof(entry->error), "FAULTED, NOT LOADED");
@@ -410,8 +463,8 @@ int qdos_natives_load(qdos_natives* set, qdos_hal* hal, qdos_store_scope scope) 
 	if (hal->store_path == NULL || hal->store_list == NULL)
 		return 0;
 
-	load_walk walk = {.set = set, .hal = hal, .scope = scope, .loaded = 0};
-	hal->store_list(hal, scope, load_one, &walk);
+	load_walk walk = {.set = set, .hal = hal, .scope = scope, .app = NULL, .loaded = 0};
+	hal->store_list(hal, scope, NULL, load_one, &walk);
 	return walk.loaded;
 }
 
@@ -425,13 +478,24 @@ static int call_main(qd_context* ctx, void* userdata) {
 			g_on_call(g_on_call_user);
 	}
 
-	return module->main((qdos_native_ctx*)ctx, &API);
+	const char* was = g_app;
+	if (g_set != NULL) {
+		for (size_t i = 0; i < g_set->count; i++)
+			if (g_set->entry[i].module == module)
+				g_app = g_set->entry[i].app;
+	}
+
+	const int result = module->main((qdos_native_ctx*)ctx, &API);
+	g_app = was;
+
+	return result;
 }
 
 int qdos_natives_register(const qdos_natives* set, qd_interp* interp) {
 	if (set == NULL || interp == NULL)
 		return 0;
 
+	g_set = set;
 	int registered = 0;
 	for (size_t i = 0; i < set->count; i++) {
 		const qdos_native_entry* entry = &set->entry[i];
