@@ -159,16 +159,15 @@ namespace {
 			const auto* function = static_cast<const Qd::AstNodeFunctionDeclaration*>(node);
 			names scope;
 
-			// All named or none: the rule bindParameters follows
-			const auto& inputs = function->inputParameters();
-			bool every = !inputs.empty() && !function->hasReceiver();
-			for (const auto& input : inputs) {
-				every = every && static_cast<const Qd::AstNodeParameter*>(input.get())->hasName();
-			}
-
-			if (every) {
-				for (const auto& input : inputs) {
-					scope.insert(static_cast<const Qd::AstNodeParameter*>(input.get())->name());
+			// Inputs bind as locals; `stack fn` is the one that leaves them on
+			// the stack, where the body reads them positionally and their names
+			// are documentation. The rule bindParameters follows.
+			if (!function->hasReceiver() && !function->isStack()) {
+				for (const auto& input : function->inputParameters()) {
+					const auto* parameter = static_cast<const Qd::AstNodeParameter*>(input.get());
+					if (parameter->hasName()) {
+						scope.insert(parameter->name());
+					}
 				}
 			}
 

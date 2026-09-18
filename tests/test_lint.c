@@ -207,6 +207,46 @@ static void test_what_the_interpreter_now_runs_is_not_a_find(void) {
 	qd_interp_destroy(interp);
 }
 
+/**
+ * Every input binds as a local now, named or not. A signature that mixes the
+ * two used to bind nothing at all, and a check still written to that rule
+ * refuses a word that runs perfectly well.
+ */
+static void test_inputs_bind_even_when_only_some_are_named(void) {
+	qd_interp* interp = fresh();
+	char message[80];
+
+	CHECK(!lint(interp, "fn m(x:i64 y -- r:i64) { x x + }", message, sizeof(message)));
+
+	// It really does run, which is what makes a find here the wrong answer
+	CHECK(qd_interp_eval(interp, "3 4 m"));
+
+	qd_interp_destroy(interp);
+}
+
+/**
+ * `stack fn` is the exception: its inputs stay on the stack for the body to
+ * work on, so the names in its signature are documentation and not words.
+ */
+static void test_a_stack_word_does_not_bind_its_parameter_names(void) {
+	qd_interp* interp = fresh();
+	char message[80];
+
+	CHECK(lint(interp, "stack fn s(x:i64 -- r:i64) { x x + }", message, sizeof(message)));
+	CHECK_STR(message, "L1: 'x' NOT DEFINED");
+
+	// And the interpreter says the same thing once it gets there
+	CHECK(!qd_interp_eval(interp, "3 s"));
+	CHECK(strstr(qd_interp_error(interp), "'x'") != NULL);
+	CHECK(strstr(qd_interp_error(interp), "not defined") != NULL);
+
+	// A body that reads the stack instead of the names is the point of it
+	CHECK(!lint(interp, "stack fn d(i64 -- r:i64) { 2 * }", message, sizeof(message)));
+	CHECK(qd_interp_eval(interp, "3 d"));
+
+	qd_interp_destroy(interp);
+}
+
 /** A syntax error belongs to eval, which already has a message for it. */
 static void test_unparsable_text_is_left_alone(void) {
 	qd_interp* interp = fresh();
@@ -247,6 +287,8 @@ int main(void) {
 	test_a_signature_is_not_read_as_words();
 	test_what_the_interpreter_cannot_run_is_reported();
 	test_what_the_interpreter_now_runs_is_not_a_find();
+	test_inputs_bind_even_when_only_some_are_named();
+	test_a_stack_word_does_not_bind_its_parameter_names();
 	test_unparsable_text_is_left_alone();
 	test_the_empty_cases();
 	return check_report("lint");
