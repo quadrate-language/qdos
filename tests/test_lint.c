@@ -113,7 +113,7 @@ static void test_the_whole_vocabulary_counts(void) {
 	char message[80];
 
 	CHECK(!lint(interp, "fn a() { dup drop swap over rot pick }", message, sizeof(message)));
-	CHECK(!lint(interp, "fn b() { 1 2 sto }", message, sizeof(message)));   // a registered native
+	CHECK(!lint(interp, "fn b() { 1 2 sto }", message, sizeof(message)));			  // a registered native
 	CHECK(!lint(interp, "fn c(n:i64 -- r:i64) { isqrt }", message, sizeof(message))); // another program
 
 	qd_interp_destroy(interp);
@@ -192,8 +192,7 @@ static void test_what_the_interpreter_now_runs_is_not_a_find(void) {
 
 	CHECK(!lint(interp, "fn l(a:i64 -- r:i64) { a -> x x x + }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn fo( -- r:i64) { 0 0 5 1 for i { i + } }", message, sizeof(message)));
-	CHECK(!lint(interp, "fn sw(a:i64 -- r:i64) { a switch { 1 { 10 } _ { 20 } } }", message,
-			sizeof(message)));
+	CHECK(!lint(interp, "fn sw(a:i64 -- r:i64) { a switch { 1 { 10 } _ { 20 } } }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn re(a:i64 -- r:i64) { a 0 > if { 1 return } 2 }", message, sizeof(message)));
 	CHECK(!lint(interp, "const K = 7\nfn co( -- r:i64) { K }", message, sizeof(message)));
 	CHECK(!lint(interp, "enum C { Red, Blue }\nfn en( -- r:i64) { C::Blue }", message, sizeof(message)));

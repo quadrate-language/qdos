@@ -19,7 +19,7 @@ typedef struct {
 	uint32_t width;
 	uint32_t height;
 	uint32_t pitch; ///< Bytes per scanline
-	uint32_t bpp;   ///< 16 (RGB565) and 32 (XRGB8888) are supported
+	uint32_t bpp;	///< 16 (RGB565) and 32 (XRGB8888) are supported
 } qdos_fb_info;
 
 /** @brief True for 16 or 32 bpp with a pitch wide enough for the width */

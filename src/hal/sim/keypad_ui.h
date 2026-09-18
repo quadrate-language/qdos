@@ -142,8 +142,7 @@ bool qdos_pad_modifier(const qdos_pad_button* b, qdos_pad_layer* selects);
  *                the keywell, which is the only way the simulator can say a
  *                press was received -- there is nothing under your finger.
  */
-void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer layer,
-		const qdos_pad_button* pressed);
+void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer layer, const qdos_pad_button* pressed);
 
 /** @brief Draw the case around the panel and the keypad */
 void qdos_frame_draw(uint8_t* rgb, int stride_px);

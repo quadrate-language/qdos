@@ -17,15 +17,28 @@ typedef enum {
 	QDOS_KEY_NONE = 0,
 
 	/* Digits and decimal point */
-	QDOS_KEY_0, QDOS_KEY_1, QDOS_KEY_2, QDOS_KEY_3, QDOS_KEY_4,
-	QDOS_KEY_5, QDOS_KEY_6, QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9,
+	QDOS_KEY_0,
+	QDOS_KEY_1,
+	QDOS_KEY_2,
+	QDOS_KEY_3,
+	QDOS_KEY_4,
+	QDOS_KEY_5,
+	QDOS_KEY_6,
+	QDOS_KEY_7,
+	QDOS_KEY_8,
+	QDOS_KEY_9,
 	QDOS_KEY_DOT,
 
 	/* Arithmetic */
-	QDOS_KEY_ADD, QDOS_KEY_SUB, QDOS_KEY_MUL, QDOS_KEY_DIV,
+	QDOS_KEY_ADD,
+	QDOS_KEY_SUB,
+	QDOS_KEY_MUL,
+	QDOS_KEY_DIV,
 
 	/* Stack — the operations an RPN keypad needs as dedicated keys */
-	QDOS_KEY_DUP, QDOS_KEY_DROP, QDOS_KEY_SWAP,
+	QDOS_KEY_DUP,
+	QDOS_KEY_DROP,
+	QDOS_KEY_SWAP,
 	QDOS_KEY_NEG, ///< +/-, which a bare minus cannot do while entering a number
 
 	/* Words with a key of their own. Contiguous, and FUNCTION_WORD runs in step. */
@@ -62,12 +75,12 @@ typedef enum {
 	QDOS_KEY_RIGHT,
 	QDOS_KEY_LIST,
 	QDOS_KEY_SAVE,
-	QDOS_KEY_OPEN,	///< Edit the selection
-	QDOS_KEY_CHECK,   ///< Compile what is in the editor without keeping it
+	QDOS_KEY_OPEN,	  ///< Edit the selection
+	QDOS_KEY_CHECK,	  ///< Compile what is in the editor without keeping it
 	QDOS_KEY_CATALOG, ///< Every word there is, to pick from
-	QDOS_KEY_ABOUT,    ///< What this firmware is
+	QDOS_KEY_ABOUT,	  ///< What this firmware is
 	QDOS_KEY_SETTINGS,
-	QDOS_KEY_DEBUG,    ///< The log of what has been said
+	QDOS_KEY_DEBUG, ///< The log of what has been said
 	QDOS_KEY_UNDO,
 	QDOS_KEY_ANGLE, ///< Degrees or radians, the one setting that changes answers
 	QDOS_KEY_STO,	///< Store x in a register; the next digit says which

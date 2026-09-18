@@ -11,24 +11,27 @@
 #include "framebuffer.h"
 #include "keypad.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
+#include <linux/input.h>
 #include <linux/kd.h>
 #include <linux/vt.h>
-#include <linux/input.h>
 #include <poll.h>
-#include <sys/inotify.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+/** @brief As many app folders as the card is watched into */
+#define QDOS_WATCH_SUBS 16
 
 typedef struct {
 	int fb_fd;
@@ -43,14 +46,11 @@ typedef struct {
 	const char* store_dir;
 	const char* system_dir;
 	const char* inbox_dir;
-	int tty_fd;		 ///< The VT whose text output is suspended while we draw
+	int tty_fd; ///< The VT whose text output is suspended while we draw
 	bool first_paint;
 
 	int watch_fd; ///< inotify, waited on beside the keypad
 	int watch_id; ///< The card's watch, remade whenever it comes back
-
-/** @brief As many app folders as the card is watched into */
-#define QDOS_WATCH_SUBS 16
 
 	/** @brief One per app folder: inotify does not watch into a directory */
 	int sub_id[QDOS_WATCH_SUBS];
@@ -64,8 +64,9 @@ static const char* env_or(const char* name, const char* fallback) {
 
 static bool is_dir(const char* dir, const char* name) {
 	char path[512];
-	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path))
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path)) {
 		return false;
+	}
 
 	struct stat sb;
 	return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
@@ -98,8 +99,9 @@ static int device_init(qdos_hal* hal) {
 
 	// Only offer USB where the helper is installed, so a machine without one
 	// does not show a setting that cannot do anything
-	if (access(usb_helper(), X_OK) != 0)
+	if (access(usb_helper(), X_OK) != 0) {
 		hal->usb_export = NULL;
+	}
 
 	const char* fb_path = env_or("QDOS_FB", "/dev/fb0");
 	st->fb_fd = open(fb_path, O_RDWR);
@@ -147,8 +149,9 @@ static int device_init(qdos_hal* hal) {
 
 	const char* input_path = env_or("QDOS_INPUT", "/dev/input/event0");
 	st->input_fd = qdos_keypad_open(input_path);
-	if (st->input_fd < 0)
+	if (st->input_fd < 0) {
 		fprintf(stderr, "qdos: no keypad on %s: %s\n", input_path, strerror(errno));
+	}
 
 	// Stop the console drawing over the calculator.
 	st->tty_fd = open(env_or("QDOS_TTY", "/dev/tty1"), O_RDWR);
@@ -158,10 +161,11 @@ static int device_init(qdos_hal* hal) {
 
 	// Watching rather than looking; see hal->store_changed
 	st->watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-	if (st->watch_fd < 0)
+	if (st->watch_fd < 0) {
 		fprintf(stderr, "qdos: cannot watch %s: %s\n", st->inbox_dir, strerror(errno));
-	else
+	} else {
 		device_watch_inbox(st);
+	}
 
 	st->first_paint = true;
 	st->running = true;
@@ -170,8 +174,9 @@ static int device_init(qdos_hal* hal) {
 
 static void device_shutdown(qdos_hal* hal) {
 	device_state* st = (device_state*)hal->impl;
-	if (!st)
+	if (!st) {
 		return;
+	}
 
 	// Hand the console back, or a later login would type onto a dead screen
 	if (st->tty_fd >= 0) {
@@ -180,13 +185,16 @@ static void device_shutdown(qdos_hal* hal) {
 		st->tty_fd = -1;
 	}
 
-	if (st->fb_mem)
+	if (st->fb_mem) {
 		munmap(st->fb_mem, st->fb_size);
-	if (st->fb_fd >= 0)
+	}
+	if (st->fb_fd >= 0) {
 		close(st->fb_fd);
+	}
 	qdos_keypad_close(st->input_fd);
-	if (st->watch_fd >= 0)
+	if (st->watch_fd >= 0) {
 		close(st->watch_fd);
+	}
 
 	st->fb_mem = NULL;
 	st->fb_fd = -1;
@@ -237,8 +245,9 @@ static void device_wait(qdos_hal* hal, int timeout_ms) {
 
 	// poll() ignores a negative fd, so with no keypad an indefinite wait would
 	// never end. Bound it instead and let the loop go round.
-	if (st->input_fd < 0 && timeout_ms < 0)
+	if (st->input_fd < 0 && timeout_ms < 0) {
 		timeout_ms = 1000;
+	}
 
 	// The card's watch waits alongside the keypad
 	struct pollfd pfd[2] = {
@@ -252,67 +261,81 @@ static void device_wait(qdos_hal* hal, int timeout_ms) {
 
 /** @brief Sharing unmounts the inbox and takes the watch with it */
 static void device_watch_inbox(device_state* st) {
-	if (st->watch_fd < 0)
+	if (st->watch_fd < 0) {
 		return;
+	}
 
-	if (st->watch_id >= 0)
+	if (st->watch_id >= 0) {
 		inotify_rm_watch(st->watch_fd, st->watch_id);
-	for (size_t i = 0; i < st->sub_count; i++)
+	}
+	for (size_t i = 0; i < st->sub_count; i++) {
 		inotify_rm_watch(st->watch_fd, st->sub_id[i]);
+	}
 	st->sub_count = 0;
 
 	st->watch_id = inotify_add_watch(st->watch_fd, st->inbox_dir, WATCH_EVENTS);
 
 	// A file dropped inside an app folder is an upload like any other
 	DIR* dir = opendir(st->inbox_dir);
-	if (dir == NULL)
+	if (dir == NULL) {
 		return;
+	}
 
 	const struct dirent* ent;
 	while ((ent = readdir(dir)) != NULL && st->sub_count < QDOS_WATCH_SUBS) {
-		if (ent->d_name[0] == '.' || !is_dir(st->inbox_dir, ent->d_name))
+		if (ent->d_name[0] == '.' || !is_dir(st->inbox_dir, ent->d_name)) {
 			continue;
+		}
 
 		char path[512];
-		if (snprintf(path, sizeof(path), "%s/%s", st->inbox_dir, ent->d_name) >= (int)sizeof(path))
+		if (snprintf(path, sizeof(path), "%s/%s", st->inbox_dir, ent->d_name) >= (int)sizeof(path)) {
 			continue;
+		}
 
 		const int id = inotify_add_watch(st->watch_fd, path, WATCH_EVENTS);
-		if (id >= 0)
+		if (id >= 0) {
 			st->sub_id[st->sub_count++] = id;
+		}
 	}
 	closedir(dir);
 }
 
 static bool device_store_changed(qdos_hal* hal) {
 	device_state* st = (device_state*)hal->impl;
-	if (st->watch_fd < 0)
+	if (st->watch_fd < 0) {
 		return false;
+	}
 
 	// Drained: an unread queue keeps poll() returning at once
 	char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
 	bool changed = false;
-	while (read(st->watch_fd, buf, sizeof(buf)) > 0)
+	while (read(st->watch_fd, buf, sizeof(buf)) > 0) {
 		changed = true;
+	}
 
 	// A folder that has just arrived is not being watched yet
-	if (changed)
+	if (changed) {
 		device_watch_inbox(st);
+	}
 
 	return changed;
 }
 
 static const char* dir_for(device_state* st, qdos_store_scope scope) {
 	switch (scope) {
-		case QDOS_SCOPE_SYSTEM: return st->system_dir;
-		case QDOS_SCOPE_INBOX: return st->inbox_dir;
-		default: return st->store_dir;
+	case QDOS_SCOPE_SYSTEM:
+		return st->system_dir;
+	case QDOS_SCOPE_INBOX:
+		return st->inbox_dir;
+	default:
+		return st->store_dir;
 	}
 }
 
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
-	if (!qdos_store_name_ok(name))
+	if (!qdos_store_name_ok(name)) {
 		return false;
+	}
 
 	const int written = snprintf(buf, cap, "%s/%s", dir, name);
 	return written > 0 && (size_t)written < cap;
@@ -323,21 +346,25 @@ static qdos_store_result device_store_read(
 	device_state* st = (device_state*)hal->impl;
 
 	char path[512];
-	if (!store_path(dir_for(st, scope), name, path, sizeof(path)))
+	if (!store_path(dir_for(st, scope), name, path, sizeof(path))) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	FILE* f = fopen(path, "rb");
-	if (!f)
+	if (!f) {
 		return QDOS_STORE_NOT_FOUND;
+	}
 
 	const size_t got = fread(buf, 1, cap, f);
 	const bool overflowed = (got == cap) && (fgetc(f) != EOF);
 	fclose(f);
 
-	if (overflowed)
+	if (overflowed) {
 		return QDOS_STORE_TOO_BIG;
-	if (len)
+	}
+	if (len) {
 		*len = got;
+	}
 	return QDOS_STORE_OK;
 }
 
@@ -345,8 +372,9 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	device_state* st = (device_state*)hal->impl;
 
 	char path[512];
-	if (!store_path(st->store_dir, name, path, sizeof(path)))
+	if (!store_path(st->store_dir, name, path, sizeof(path))) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	mkdir(st->store_dir, 0755);
 
@@ -359,8 +387,9 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	}
 
 	FILE* f = fopen(path, "wb");
-	if (!f)
+	if (!f) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	const size_t written = fwrite(buf, 1, len, f);
 	// fsync before reporting success: power can vanish mid-write.
@@ -370,40 +399,43 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
-static bool device_store_path(
-		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+static bool device_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	device_state* st = (device_state*)hal->impl;
 	return store_path(dir_for(st, scope), name, buf, cap);
 }
 
-static qdos_store_result device_store_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
-		qdos_store_visit visit, void* user) {
+static qdos_store_result device_store_list(
+		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
 	device_state* st = (device_state*)hal->impl;
 
 	char root[512];
-	if (folder == NULL || *folder == '\0')
+	if (folder == NULL || *folder == '\0') {
 		snprintf(root, sizeof(root), "%s", dir_for(st, scope));
-	else if (!store_path(dir_for(st, scope), folder, root, sizeof(root)))
+	} else if (!store_path(dir_for(st, scope), folder, root, sizeof(root))) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	DIR* dir = opendir(root);
-	if (!dir)
+	if (!dir) {
 		return QDOS_STORE_NOT_FOUND;
+	}
 
 	const struct dirent* ent;
 	while ((ent = readdir(dir)) != NULL) {
-		if (ent->d_name[0] == '.')
+		if (ent->d_name[0] == '.') {
 			continue;
+		}
 
 		// A folder is listed with the mark on it, being an app and not a file
 		char name[288];
-		const int written = snprintf(
-				name, sizeof(name), "%s%s", ent->d_name, is_dir(root, ent->d_name) ? "/" : "");
-		if (written <= 0 || (size_t)written >= sizeof(name))
+		const int written = snprintf(name, sizeof(name), "%s%s", ent->d_name, is_dir(root, ent->d_name) ? "/" : "");
+		if (written <= 0 || (size_t)written >= sizeof(name)) {
 			continue;
+		}
 
-		if (!visit(name, user))
+		if (!visit(name, user)) {
 			break;
+		}
 	}
 
 	closedir(dir);
@@ -415,8 +447,9 @@ static int device_usb_export(qdos_hal* hal, bool on) {
 	device_state* st = (device_state*)hal->impl;
 
 	const pid_t pid = fork();
-	if (pid < 0)
+	if (pid < 0) {
 		return -1;
+	}
 
 	if (pid == 0) {
 		execl(usb_helper(), usb_helper(), on ? "share" : "take", (char*)NULL);
@@ -424,11 +457,13 @@ static int device_usb_export(qdos_hal* hal, bool on) {
 	}
 
 	int status = 0;
-	if (waitpid(pid, &status, 0) < 0)
+	if (waitpid(pid, &status, 0) < 0) {
 		return -1;
+	}
 
-	if (!on)
+	if (!on) {
 		device_watch_inbox(st);
+	}
 
 	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }

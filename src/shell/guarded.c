@@ -46,8 +46,9 @@ static void capture_begin(void) {
 }
 
 static void capture_end(void) {
-	if (g_pipe[0] < 0)
+	if (g_pipe[0] < 0) {
 		return;
+	}
 
 	fflush(stdout);
 	if (g_stdout >= 0) {
@@ -74,8 +75,9 @@ bool qdos_guarded_eval(qd_interp* interp, const char* source) {
 	// Already inside an evaluation: arming again would overwrite the jump
 	// buffer the outer setjmp is waiting on, and capturing again would hand
 	// the outer's pipe back as the real stdout. Let the outer frame keep both.
-	if (g_evaluating)
+	if (g_evaluating) {
 		return qd_interp_eval(interp, source);
+	}
 
 	if (setjmp(*qd_recovery_buf(ctx)) != 0) {
 		qd_recovery_disarm(ctx);

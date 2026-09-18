@@ -23,8 +23,8 @@ extern "C" {
 /** @brief Which face of the keypad the next press will come from */
 typedef enum {
 	QDOS_MOD_NONE = 0,
-	QDOS_MOD_ALPHA,	 ///< Letters, locked until it is pressed again
-	QDOS_MOD_SYMBOL	 ///< Quadrate's syntax, for one press
+	QDOS_MOD_ALPHA, ///< Letters, locked until it is pressed again
+	QDOS_MOD_SYMBOL ///< Quadrate's syntax, for one press
 } qdos_keypad_mod;
 
 typedef enum {
@@ -111,8 +111,8 @@ struct qdos_hal {
 	 * @p folder is NULL for the scope itself, or an app's name to list what is
 	 * inside it. Names come back bare; a folder carries QDOS_STORE_DIR_MARK.
 	 */
-	qdos_store_result (*store_list)(qdos_hal* hal, qdos_store_scope scope, const char* folder,
-			qdos_store_visit visit, void* user);
+	qdos_store_result (*store_list)(
+			qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user);
 
 	/**
 	 * @brief Where an entry sits in a filesystem, if it sits in one at all
@@ -120,8 +120,7 @@ struct qdos_hal {
 	 * The store speaks in bytes everywhere else; the dynamic linker takes a
 	 * path. NULL where there is none, and then there are no modules.
 	 */
-	bool (*store_path)(
-			qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap);
+	bool (*store_path)(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap);
 
 	/**
 	 * @brief Has anything arrived on the card since this was last asked?

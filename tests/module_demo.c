@@ -28,8 +28,9 @@ static int word_hypot(qdos_native_ctx* ctx, const qdos_native_api* api) {
 
 	double squared = a * a + b * b;
 	double guess = squared > 1.0 ? squared : 1.0;
-	for (int i = 0; i < 40; i++)
+	for (int i = 0; i < 40; i++) {
 		guess = 0.5 * (guess + squared / guess);
+	}
 
 	return api->push_float(ctx, guess);
 }
@@ -48,8 +49,9 @@ static int word_sink(qdos_native_ctx* ctx, const qdos_native_api* api) {
 	}
 
 	int64_t n = 0;
-	while (text[n] != '\0')
+	while (text[n] != '\0') {
 		n++;
+	}
 	return api->push_int(ctx, n);
 }
 

@@ -11,6 +11,9 @@
  * face this small legible.
  */
 
+/* A row per glyph is what makes this readable at all. */
+/* clang-format off */
+
 #include "padfont.h"
 
 static const uint8_t COVERAGE_CAP[] = {

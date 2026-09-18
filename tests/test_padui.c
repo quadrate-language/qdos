@@ -19,6 +19,7 @@ static bool is_any_modifier(const qdos_pad_button* b) {
 	qdos_pad_layer selects;
 	return qdos_pad_modifier(b, &selects);
 }
+
 #include <string.h>
 
 static void test_every_slot_is_filled(void) {
@@ -41,8 +42,9 @@ static void test_every_slot_is_filled(void) {
 				}
 				// shf is the only button that is neither a key nor text
 				const bool is_shift = (l == 0 && is_any_modifier(b));
-				if (!is_shift)
+				if (!is_shift) {
 					CHECK((a->key != QDOS_KEY_NONE) != (a->text != NULL));
+				}
 			}
 		}
 	}
@@ -62,13 +64,14 @@ static void test_labels_fit_their_button(void) {
 			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
 
 			for (int l = 0; l < 3; l++) {
-				if (layers[l]->label == NULL)
+				if (layers[l]->label == NULL) {
 					continue;
+				}
 
 				const int w = qdos_padfont_advance(QDOS_PADFACE_CAP, layers[l]->label);
-				if (w > QDOS_KEY_LABEL_W)
-					fprintf(stderr, "  '%s' sets %dpx, key holds %d\n", layers[l]->label, w,
-							QDOS_KEY_LABEL_W);
+				if (w > QDOS_KEY_LABEL_W) {
+					fprintf(stderr, "  '%s' sets %dpx, key holds %d\n", layers[l]->label, w, QDOS_KEY_LABEL_W);
+				}
 				CHECK(w <= QDOS_KEY_LABEL_W);
 
 				// A cap that measures nothing draws nothing, which is only
@@ -90,27 +93,30 @@ static void test_shift_legends_fit_above_their_key(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const char* legend = qdos_pad_button_at(col, row)->symbol.label;
-			if (legend == NULL)
+			if (legend == NULL) {
 				continue;
+			}
 
 			const int w = qdos_padfont_advance(QDOS_PADFACE_SHIFT, legend);
-			if (w > QDOS_PAD_BUTTON_W - 4)
-				fprintf(stderr, "  legend '%s' sets %dpx, cell holds %d\n", legend, w,
-						QDOS_PAD_BUTTON_W - 4);
+			if (w > QDOS_PAD_BUTTON_W - 4) {
+				fprintf(stderr, "  legend '%s' sets %dpx, cell holds %d\n", legend, w, QDOS_PAD_BUTTON_W - 4);
+			}
 			CHECK(w > 0 && w <= QDOS_PAD_BUTTON_W - 4);
 
 			// Every glyph, top and bottom, against the band it has to sit in
 			for (const char* p = legend; *p; p++) {
 				const qdos_padglyph* g = qdos_padfont_glyph(QDOS_PADFACE_SHIFT, (unsigned char)*p);
 				CHECK(g != NULL);
-				if (g == NULL || g->h == 0)
+				if (g == NULL || g->h == 0) {
 					continue;
+				}
 
 				const int top = QDOS_SHIFT_LABEL_BASELINE + g->by;
 				const int bottom = top + g->h - 1;
-				if (bottom >= QDOS_KEY_INSET_TOP)
-					fprintf(stderr, "  legend '%s' reaches row %d, key starts at %d\n", legend,
-							bottom, QDOS_KEY_INSET_TOP);
+				if (bottom >= QDOS_KEY_INSET_TOP) {
+					fprintf(stderr, "  legend '%s' reaches row %d, key starts at %d\n", legend, bottom,
+							QDOS_KEY_INSET_TOP);
+				}
 				CHECK(top >= 0);
 				CHECK(bottom < QDOS_KEY_INSET_TOP);
 			}
@@ -139,20 +145,24 @@ static void test_the_font_has_every_keycap_character(void) {
 
 			for (int l = 0; l < 3; l++) {
 				const char* label = layers[l]->label;
-				if (label == NULL)
+				if (label == NULL) {
 					continue;
+				}
 
 				for (const char* p = label; *p; p++) {
 					const qdos_padglyph* g = qdos_padfont_glyph(QDOS_PADFACE_CAP, (unsigned char)*p);
-					if (g == NULL)
+					if (g == NULL) {
 						fprintf(stderr, "  no glyph for 0x%02x in '%s'\n", (unsigned char)*p, label);
+					}
 					CHECK(g != NULL);
-					if (g == NULL)
+					if (g == NULL) {
 						continue;
+					}
 
 					// Space is the only one allowed to be blank
-					if (*p != ' ')
+					if (*p != ' ') {
 						CHECK(g->w > 0 && g->h > 0);
+					}
 					CHECK(g->advance > 0);
 				}
 			}
@@ -168,8 +178,8 @@ static void test_the_font_has_every_keycap_character(void) {
  * looks like an oversight, which is exactly why it is asserted here.
  */
 static void test_the_soft_keys_have_blank_caps(void) {
-	static const qdos_key SOFT[QDOS_PAD_COLS] = {QDOS_KEY_SOFT1, QDOS_KEY_SOFT2, QDOS_KEY_SOFT3,
-			QDOS_KEY_SOFT4, QDOS_KEY_SOFT5};
+	static const qdos_key SOFT[QDOS_PAD_COLS] = {
+			QDOS_KEY_SOFT1, QDOS_KEY_SOFT2, QDOS_KEY_SOFT3, QDOS_KEY_SOFT4, QDOS_KEY_SOFT5};
 
 	for (int col = 0; col < QDOS_PAD_COLS; col++) {
 		const qdos_pad_button* b = qdos_pad_button_at(col, 0);
@@ -187,18 +197,21 @@ static void test_the_soft_keys_have_blank_caps(void) {
 	// Between them that is the whole of the blank caps -- anything else blank
 	// is a cap that has gone missing.
 	int blank = 0, blank_soft = 0, blank_shift = 0;
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			if (b->plain.label[0] != '\0')
+			if (b->plain.label[0] != '\0') {
 				continue;
+			}
 
 			blank++;
-			if (row == 0)
+			if (row == 0) {
 				blank_soft++;
-			else if (is_modifier(b, QDOS_PAD_SYMBOL))
+			} else if (is_modifier(b, QDOS_PAD_SYMBOL)) {
 				blank_shift++;
+			}
 		}
+	}
 	CHECK(blank_soft == QDOS_PAD_COLS);
 	CHECK(blank_shift == 1);
 	CHECK(blank == QDOS_PAD_COLS + 1);
@@ -240,13 +253,14 @@ static void test_a_blank_cap_draws_nothing(void) {
 		for (int x = 8; x < QDOS_KEY_W - 8; x++) {
 			const int sx = QDOS_PAD_X + QDOS_KEY_INSET_X + x;
 			const size_t soft = ((size_t)(QDOS_PAD_Y + QDOS_KEY_INSET_TOP + y) * w + sx) * 3;
-			const size_t below =
-					((size_t)(QDOS_PAD_Y + QDOS_PAD_BUTTON_H + QDOS_KEY_INSET_TOP + y) * w + sx) * 3;
+			const size_t below = ((size_t)(QDOS_PAD_Y + QDOS_PAD_BUTTON_H + QDOS_KEY_INSET_TOP + y) * w + sx) * 3;
 
-			if (buf[soft] > soft_max)
+			if (buf[soft] > soft_max) {
 				soft_max = buf[soft];
-			if (buf[below] > labelled_max)
+			}
+			if (buf[below] > labelled_max) {
 				labelled_max = buf[below];
+			}
 		}
 	}
 
@@ -272,8 +286,8 @@ static void test_hit_testing(void) {
 
 	// The very first and very last pixel of the pad belong to the corner keys
 	CHECK(qdos_pad_at(QDOS_PAD_X, QDOS_PAD_Y) == qdos_pad_button_at(0, 0));
-	CHECK(qdos_pad_at(QDOS_PAD_X + QDOS_PAD_W - 1, QDOS_PAD_Y + QDOS_PAD_H - 1)
-			== qdos_pad_button_at(QDOS_PAD_COLS - 1, QDOS_PAD_ROWS - 1));
+	CHECK(qdos_pad_at(QDOS_PAD_X + QDOS_PAD_W - 1, QDOS_PAD_Y + QDOS_PAD_H - 1) ==
+			qdos_pad_button_at(QDOS_PAD_COLS - 1, QDOS_PAD_ROWS - 1));
 
 	// Every cell, hit at its centre
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
@@ -288,8 +302,7 @@ static void test_hit_testing(void) {
 	for (int col = 0; col < QDOS_PAD_COLS; col++) {
 		const int left = QDOS_PAD_X + col * QDOS_PAD_BUTTON_W;
 		CHECK(qdos_pad_at(left, QDOS_PAD_Y + 5) == qdos_pad_button_at(col, 0));
-		CHECK(qdos_pad_at(left + QDOS_PAD_BUTTON_W - 1, QDOS_PAD_Y + 5)
-				== qdos_pad_button_at(col, 0));
+		CHECK(qdos_pad_at(left + QDOS_PAD_BUTTON_W - 1, QDOS_PAD_Y + 5) == qdos_pad_button_at(col, 0));
 	}
 }
 
@@ -298,8 +311,7 @@ static void test_window_geometry(void) {
 	CHECK(QDOS_WINDOW_W == QDOS_SCREEN_W + 2 * QDOS_FRAME);
 
 	// Border, nameplate, glass, keypad, border -- and nothing unaccounted for
-	CHECK(QDOS_WINDOW_H
-			== QDOS_FRAME + QDOS_NAMEPLATE_H + QDOS_SCREEN_H + QDOS_PAD_H + QDOS_FRAME);
+	CHECK(QDOS_WINDOW_H == QDOS_FRAME + QDOS_NAMEPLATE_H + QDOS_SCREEN_H + QDOS_PAD_H + QDOS_FRAME);
 
 	// The name sits above the glass, never on it
 	CHECK(QDOS_NAMEPLATE_H > 0);
@@ -336,23 +348,26 @@ static void test_draw_stays_in_bounds(void) {
 			for (int x = 0; x < w; x++) {
 				const uint8_t* p = &buf[((size_t)y * w + x) * 3];
 				const bool ink = p[0] || p[1] || p[2];
-				if (!ink)
+				if (!ink) {
 					continue;
+				}
 
-				const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
-						&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
-				if (in_pad)
+				const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W && y >= QDOS_PAD_Y &&
+									y < QDOS_PAD_Y + QDOS_PAD_H;
+				if (in_pad) {
 					painted++;
-				else
+				} else {
 					leaked++;
+				}
 			}
 		}
 		CHECK(painted > 0);
 		CHECK(leaked == 0);
 	}
 
-	for (int i = 0; i < 16; i++)
+	for (int i = 0; i < 16; i++) {
 		CHECK(buf[bytes + i] == 0xAA);
+	}
 
 	free(buf);
 }
@@ -379,8 +394,9 @@ static void test_a_pressed_key_is_drawn_sunk(void) {
 	qdos_pad_draw(loose, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN, NULL);
 	qdos_pad_draw(held, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN, key);
 
-	for (int i = 0; i < 16; i++)
+	for (int i = 0; i < 16; i++) {
 		CHECK(held[bytes + i] == 0xAA);
+	}
 
 	const int cx = QDOS_PAD_X + 2 * QDOS_PAD_BUTTON_W;
 	const int cy = QDOS_PAD_Y + (QDOS_PAD_ROWS - 1) * QDOS_PAD_BUTTON_H;
@@ -391,19 +407,21 @@ static void test_a_pressed_key_is_drawn_sunk(void) {
 			const size_t i = ((size_t)y * w + x) * 3;
 			const bool differs = memcmp(&loose[i], &held[i], 3) != 0;
 
-			const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
-					&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
-			if (!in_pad && (held[i] || held[i + 1] || held[i + 2]))
+			const bool in_pad =
+					x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W && y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
+			if (!in_pad && (held[i] || held[i + 1] || held[i + 2])) {
 				leaked++;
-			if (!differs)
+			}
+			if (!differs) {
 				continue;
+			}
 
-			const bool in_cell = x >= cx && x < cx + QDOS_PAD_BUTTON_W && y >= cy
-					&& y < cy + QDOS_PAD_BUTTON_H;
-			if (in_cell)
+			const bool in_cell = x >= cx && x < cx + QDOS_PAD_BUTTON_W && y >= cy && y < cy + QDOS_PAD_BUTTON_H;
+			if (in_cell) {
 				changed_inside++;
-			else
+			} else {
 				changed_outside++;
+			}
 		}
 	}
 
@@ -425,24 +443,26 @@ static void test_every_key_can_be_pressed(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			memset(buf, 0, bytes);
-			qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN,
-					qdos_pad_button_at(col, row));
+			qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN, qdos_pad_button_at(col, row));
 
 			int leaked = 0;
-			for (int y = 0; y < h; y++)
+			for (int y = 0; y < h; y++) {
 				for (int x = 0; x < w; x++) {
 					const size_t i = ((size_t)y * w + x) * 3;
-					const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
-							&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
-					if (!in_pad && (buf[i] || buf[i + 1] || buf[i + 2]))
+					const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W && y >= QDOS_PAD_Y &&
+										y < QDOS_PAD_Y + QDOS_PAD_H;
+					if (!in_pad && (buf[i] || buf[i + 1] || buf[i + 2])) {
 						leaked++;
+					}
 				}
+			}
 			CHECK(leaked == 0);
 		}
 	}
 
-	for (int i = 0; i < 16; i++)
+	for (int i = 0; i < 16; i++) {
 		CHECK(buf[bytes + i] == 0xAA);
+	}
 
 	free(buf);
 }
@@ -481,16 +501,20 @@ static void test_the_nameplate_is_printed_on_the_case(void) {
 	int top = -1, bottom = -1, left = -1, right = -1;
 	for (int y = 0; y < QDOS_PANEL_Y; y++) {
 		for (int x = 0; x < w; x++) {
-			if (buf[((size_t)y * w + x) * 3] <= 0x90)
+			if (buf[((size_t)y * w + x) * 3] <= 0x90) {
 				continue;
+			}
 
-			if (top < 0)
+			if (top < 0) {
 				top = y;
+			}
 			bottom = y;
-			if (left < 0 || x < left)
+			if (left < 0 || x < left) {
 				left = x;
-			if (x > right)
+			}
+			if (x > right) {
 				right = x;
+			}
 		}
 	}
 
@@ -503,8 +527,9 @@ static void test_the_nameplate_is_printed_on_the_case(void) {
 
 	const int above = top;
 	const int below = QDOS_PANEL_Y - 1 - bottom;
-	if (above > below + 2 || below > above + 2)
+	if (above > below + 2 || below > above + 2) {
 		fprintf(stderr, "  nameplate sits %d from the top, %d from the glass\n", above, below);
+	}
 	CHECK(above <= below + 2);
 	CHECK(below <= above + 2);
 
@@ -527,8 +552,9 @@ static void test_frame_paints_only_the_border(void) {
 
 	qdos_frame_draw(buf, w);
 
-	for (int i = 0; i < 16; i++)
+	for (int i = 0; i < 16; i++) {
 		CHECK(buf[bytes + i] == 0xAA);
+	}
 
 	int border_blank = 0, panel_painted = 0, pad_painted = 0;
 	for (int y = 0; y < h; y++) {
@@ -536,17 +562,18 @@ static void test_frame_paints_only_the_border(void) {
 			const uint8_t* p = &buf[((size_t)y * w + x) * 3];
 			const bool ink = p[0] || p[1] || p[2];
 
-			const bool in_panel = x >= QDOS_PANEL_X && x < QDOS_PANEL_X + QDOS_SCREEN_W
-					&& y >= QDOS_PANEL_Y && y < QDOS_PANEL_Y + QDOS_SCREEN_H;
-			const bool in_pad = x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W
-					&& y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
+			const bool in_panel = x >= QDOS_PANEL_X && x < QDOS_PANEL_X + QDOS_SCREEN_W && y >= QDOS_PANEL_Y &&
+								  y < QDOS_PANEL_Y + QDOS_SCREEN_H;
+			const bool in_pad =
+					x >= QDOS_PAD_X && x < QDOS_PAD_X + QDOS_PAD_W && y >= QDOS_PAD_Y && y < QDOS_PAD_Y + QDOS_PAD_H;
 
-			if (in_panel && ink)
+			if (in_panel && ink) {
 				panel_painted++;
-			else if (in_pad && ink)
+			} else if (in_pad && ink) {
 				pad_painted++;
-			else if (!in_panel && !in_pad && !ink)
+			} else if (!in_panel && !in_pad && !ink) {
 				border_blank++;
+			}
 		}
 	}
 
@@ -567,14 +594,17 @@ static void test_shift_layer(void) {
 
 	// One key per layer and no more, or the state machine has two masters
 	int alpha = 0, symbol = 0;
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			if (is_modifier(b, QDOS_PAD_ALPHA))
+			if (is_modifier(b, QDOS_PAD_ALPHA)) {
 				alpha++;
-			if (is_modifier(b, QDOS_PAD_SYMBOL))
+			}
+			if (is_modifier(b, QDOS_PAD_SYMBOL)) {
 				symbol++;
+			}
 		}
+	}
 	CHECK(alpha == 1);
 	CHECK(symbol == 1);
 
@@ -598,21 +628,24 @@ static void test_shift_layer(void) {
  */
 static void test_numeric_block(void) {
 	static const qdos_key DIGITS[3][3] = {
-		{QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9},
-		{QDOS_KEY_4, QDOS_KEY_5, QDOS_KEY_6},
-		{QDOS_KEY_1, QDOS_KEY_2, QDOS_KEY_3},
+			{QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9},
+			{QDOS_KEY_4, QDOS_KEY_5, QDOS_KEY_6},
+			{QDOS_KEY_1, QDOS_KEY_2, QDOS_KEY_3},
 	};
-	for (int r = 0; r < 3; r++)
-		for (int c = 0; c < 3; c++)
+	for (int r = 0; r < 3; r++) {
+		for (int c = 0; c < 3; c++) {
 			CHECK(qdos_pad_button_at(c + 1, r + 6)->plain.key == DIGITS[r][c]);
+		}
+	}
 
 	CHECK(qdos_pad_button_at(1, 9)->plain.key == QDOS_KEY_0);
 	CHECK(qdos_pad_button_at(2, 9)->plain.key == QDOS_KEY_DOT);
 
 	// Enter at the foot of the operator column, where the thumb already is
 	static const qdos_key OPS[4] = {QDOS_KEY_DIV, QDOS_KEY_MUL, QDOS_KEY_SUB, QDOS_KEY_ADD};
-	for (int r = 0; r < 4; r++)
+	for (int r = 0; r < 4; r++) {
 		CHECK(qdos_pad_button_at(4, r + 5)->plain.key == OPS[r]);
+	}
 
 	CHECK(qdos_pad_button_at(4, 9)->plain.key == QDOS_KEY_ENTER);
 
@@ -633,8 +666,8 @@ static void test_numeric_block(void) {
 
 /** Every digit types a digit on every layer: names have numbers in them. */
 static void test_digits_survive_every_layer(void) {
-	static const qdos_key DIGITS[] = {QDOS_KEY_0, QDOS_KEY_1, QDOS_KEY_2, QDOS_KEY_3, QDOS_KEY_4,
-			QDOS_KEY_5, QDOS_KEY_6, QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9, QDOS_KEY_DOT};
+	static const qdos_key DIGITS[] = {QDOS_KEY_0, QDOS_KEY_1, QDOS_KEY_2, QDOS_KEY_3, QDOS_KEY_4, QDOS_KEY_5,
+			QDOS_KEY_6, QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9, QDOS_KEY_DOT};
 
 	int found = 0;
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
@@ -642,10 +675,12 @@ static void test_digits_survive_every_layer(void) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 
 			bool is_digit = false;
-			for (size_t i = 0; i < sizeof(DIGITS) / sizeof(*DIGITS); i++)
+			for (size_t i = 0; i < sizeof(DIGITS) / sizeof(*DIGITS); i++) {
 				is_digit = is_digit || b->plain.key == DIGITS[i];
-			if (!is_digit)
+			}
+			if (!is_digit) {
 				continue;
+			}
 
 			found++;
 			const qdos_pad_action* alpha = qdos_pad_action_for(b, QDOS_PAD_ALPHA);
@@ -659,11 +694,12 @@ static void test_digits_survive_every_layer(void) {
 static void test_the_alphabet_is_complete(void) {
 	int seen[26] = {0};
 
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_action* a = &qdos_pad_button_at(col, row)->alpha;
-			if (a->label == NULL || a->text == NULL)
+			if (a->label == NULL || a->text == NULL) {
 				continue;
+			}
 
 			// One lower-case letter, typed as it is printed
 			CHECK(strlen(a->text) == 1);
@@ -671,9 +707,11 @@ static void test_the_alphabet_is_complete(void) {
 			CHECK(ch >= 'a' && ch <= 'z');
 			seen[ch - 'a']++;
 		}
+	}
 
-	for (int i = 0; i < 26; i++)
+	for (int i = 0; i < 26; i++) {
 		CHECK(seen[i] == 1);
+	}
 }
 
 /** The letters displaced ':' and '_', which live inside names, onto shift. */
@@ -682,12 +720,14 @@ static void test_what_the_letters_displaced_is_still_reachable(void) {
 
 	for (size_t w = 0; w < sizeof(wanted) / sizeof(*wanted); w++) {
 		int found = 0;
-		for (int row = 0; row < QDOS_PAD_ROWS; row++)
+		for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 			for (int col = 0; col < QDOS_PAD_COLS; col++) {
 				const qdos_pad_action* s = &qdos_pad_button_at(col, row)->symbol;
-				if (s->text != NULL && strcmp(s->text, wanted[w]) == 0)
+				if (s->text != NULL && strcmp(s->text, wanted[w]) == 0) {
 					found++;
+				}
 			}
+		}
 		CHECK(found == 1);
 	}
 }
@@ -695,12 +735,14 @@ static void test_what_the_letters_displaced_is_still_reachable(void) {
 /** Without a space key, two numbers typed in a row become one. */
 static void test_a_space_is_reachable(void) {
 	int spaces = 0;
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			if (b->plain.text != NULL && strcmp(b->plain.text, " ") == 0)
+			if (b->plain.text != NULL && strcmp(b->plain.text, " ") == 0) {
 				spaces++;
+			}
 		}
+	}
 	CHECK(spaces == 1);
 }
 
@@ -710,14 +752,17 @@ static void test_a_space_is_reachable(void) {
  */
 static void test_default_layer_is_the_calculator(void) {
 	int functions = 0, syntax = 0;
-	for (int row = 1; row < QDOS_PAD_ROWS; row++)
+	for (int row = 1; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			if (b->plain.key >= QDOS_KEY_FN_FIRST && b->plain.key <= QDOS_KEY_FN_LAST)
+			if (b->plain.key >= QDOS_KEY_FN_FIRST && b->plain.key <= QDOS_KEY_FN_LAST) {
 				functions++;
-			if (b->symbol.text != NULL)
+			}
+			if (b->symbol.text != NULL) {
 				syntax++;
+			}
 		}
+	}
 	CHECK(functions >= 12); // sin through mod
 	CHECK(syntax >= 20);
 
@@ -731,33 +776,39 @@ static void test_default_layer_is_the_calculator(void) {
  * where it is most wanted.
  */
 static void test_default_layer_reaches_the_calculator(void) {
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			if (b->plain.text == NULL)
+			if (b->plain.text == NULL) {
 				continue;
+			}
 
 			// A space means nothing to the calculator, and ':' is how you leave it
 			const bool allowed = strcmp(b->plain.text, " ") == 0 || strcmp(b->plain.text, ":") == 0;
 			CHECK(allowed);
 		}
+	}
 }
 
 /** Every letter, exactly once, or something cannot be typed at all. */
 static void test_alpha_layer_has_the_alphabet(void) {
 	int seen[26] = {0};
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_action* a = &qdos_pad_button_at(col, row)->alpha;
-			if (a->label == NULL || a->text == NULL)
+			if (a->label == NULL || a->text == NULL) {
 				continue;
+			}
 			const char c = a->text[0];
-			if (c >= 'a' && c <= 'z' && strlen(a->text) == 1)
+			if (c >= 'a' && c <= 'z' && strlen(a->text) == 1) {
 				seen[c - 'a']++;
+			}
 		}
+	}
 
-	for (int i = 0; i < 26; i++)
+	for (int i = 0; i < 26; i++) {
 		CHECK(seen[i] == 1);
+	}
 }
 
 /**
@@ -765,43 +816,49 @@ static void test_alpha_layer_has_the_alphabet(void) {
  * a locked layer has no Enter, no backspace and no way to move.
  */
 static void test_alpha_keeps_the_editing_keys(void) {
-	static const qdos_key NEEDED[] = {
-			QDOS_KEY_ENTER, QDOS_KEY_BACKSPACE, QDOS_KEY_CLEAR, QDOS_KEY_UP, QDOS_KEY_DOWN};
+	static const qdos_key NEEDED[] = {QDOS_KEY_ENTER, QDOS_KEY_BACKSPACE, QDOS_KEY_CLEAR, QDOS_KEY_UP, QDOS_KEY_DOWN};
 
 	for (size_t i = 0; i < sizeof(NEEDED) / sizeof(*NEEDED); i++) {
 		bool found = false;
-		for (int row = 0; row < QDOS_PAD_ROWS && !found; row++)
+		for (int row = 0; row < QDOS_PAD_ROWS && !found; row++) {
 			for (int col = 0; col < QDOS_PAD_COLS && !found; col++) {
 				const qdos_pad_button* b = qdos_pad_button_at(col, row);
-				if (b->plain.key != NEEDED[i])
+				if (b->plain.key != NEEDED[i]) {
 					continue;
+				}
 				const qdos_pad_action* a = qdos_pad_action_for(b, QDOS_PAD_ALPHA);
 				found = (a != NULL && a->key == NEEDED[i]);
 			}
+		}
 		CHECK(found);
 	}
 }
 
 /** A modifier is not a key: pressing it must never type anything. */
 static void test_modifiers_send_nothing(void) {
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			if (!is_any_modifier(b))
+			if (!is_any_modifier(b)) {
 				continue;
+			}
 			CHECK(b->plain.key == QDOS_KEY_NONE && b->plain.text == NULL);
 		}
+	}
 }
 
 /** @brief The label with no surrounding spaces, as the cap prints it */
 static void trimmed(const char* text, char* out, size_t cap) {
-	while (*text == ' ')
+	while (*text == ' ') {
 		text++;
+	}
 	size_t len = strlen(text);
-	while (len > 0 && text[len - 1] == ' ')
+	while (len > 0 && text[len - 1] == ' ') {
 		len--;
-	if (len >= cap)
+	}
+	if (len >= cap) {
 		len = cap - 1;
+	}
 	memcpy(out, text, len);
 	out[len] = '\0';
 }
@@ -812,37 +869,43 @@ static void trimmed(const char* text, char* out, size_t cap) {
  * is neither says nothing.
  */
 static void test_cap_case_says_whether_it_is_the_word(void) {
-	for (int row = 0; row < QDOS_PAD_ROWS; row++)
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < QDOS_PAD_COLS; col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
 
 			for (int l = 0; l < 3; l++) {
 				const char* label = layers[l]->label;
-				if (label == NULL || (unsigned char)label[0] < 32)
+				if (label == NULL || (unsigned char)label[0] < 32) {
 					continue;
+				}
 
 				int lower = 0, upper = 0;
 				for (const char* c = label; *c; c++) {
-					if (*c >= 'a' && *c <= 'z')
+					if (*c >= 'a' && *c <= 'z') {
 						lower++;
-					if (*c >= 'A' && *c <= 'Z')
+					}
+					if (*c >= 'A' && *c <= 'Z') {
 						upper++;
+					}
 				}
 				CHECK(lower == 0 || upper == 0); // never a mixture
 
 				// The alphabet is a keyboard, which prints capitals and types small
 				const bool is_letter_key = (l == 1);
-				if (lower == 0 || layers[l]->text == NULL || is_letter_key)
+				if (lower == 0 || layers[l]->text == NULL || is_letter_key) {
 					continue;
+				}
 
 				char want[32];
 				trimmed(layers[l]->text, want, sizeof(want));
-				if (strcmp(label, want) != 0)
+				if (strcmp(label, want) != 0) {
 					fprintf(stderr, "  cap '%s' types '%s'\n", label, want);
+				}
 				CHECK(strcmp(label, want) == 0);
 			}
 		}
+	}
 }
 
 /**
@@ -854,8 +917,9 @@ static void test_cap_case_says_whether_it_is_the_word(void) {
 static int dump_ppm(const char* path, qdos_pad_layer layer, const qdos_pad_button* pressed) {
 	const int w = QDOS_WINDOW_W, h = QDOS_WINDOW_H;
 	uint8_t* buf = calloc((size_t)w * h * 3, 1);
-	if (buf == NULL)
+	if (buf == NULL) {
 		return 1;
+	}
 
 	qdos_frame_draw(buf, w);
 	qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, layer, pressed);
@@ -874,14 +938,12 @@ static int dump_ppm(const char* path, qdos_pad_layer layer, const qdos_pad_butto
 
 int main(int argc, char** argv) {
 	if (argc > 2 && strcmp(argv[1], "--dump") == 0) {
-		const qdos_pad_layer layer = (argc > 3 && strcmp(argv[3], "alpha") == 0)
-				? QDOS_PAD_ALPHA
-				: (argc > 3 && strcmp(argv[3], "symbol") == 0) ? QDOS_PAD_SYMBOL : QDOS_PAD_PLAIN;
+		const qdos_pad_layer layer = (argc > 3 && strcmp(argv[3], "alpha") == 0)	? QDOS_PAD_ALPHA
+									 : (argc > 3 && strcmp(argv[3], "symbol") == 0) ? QDOS_PAD_SYMBOL
+																					: QDOS_PAD_PLAIN;
 		// A fourth argument sinks one key, so the press can be looked at too
 		const qdos_pad_button* pressed =
-				(argc > 4) ? qdos_pad_button_at(atoi(argv[4]) % QDOS_PAD_COLS,
-						atoi(argv[4]) / QDOS_PAD_COLS)
-						   : NULL;
+				(argc > 4) ? qdos_pad_button_at(atoi(argv[4]) % QDOS_PAD_COLS, atoi(argv[4]) / QDOS_PAD_COLS) : NULL;
 		return dump_ppm(argv[2], layer, pressed);
 	}
 

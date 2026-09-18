@@ -26,9 +26,11 @@ static int app_main(qdos_native_ctx* ctx, const qdos_native_api* api) {
 	g_calls++;
 
 	memset(canvas, 0xFF, (size_t)w * h);
-	for (int y = 0; y < MARK; y++)
-		for (int x = 0; x < MARK; x++)
+	for (int y = 0; y < MARK; y++) {
+		for (int x = 0; x < MARK; x++) {
 			canvas[(size_t)y * w + x] = 0x00;
+		}
+	}
 
 	(void)api->ticks(ctx);
 	(void)api->running(ctx);

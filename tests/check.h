@@ -15,23 +15,22 @@
 static int g_failures = 0;
 static int g_checks = 0;
 
-#define CHECK(cond)                                                                      \
-	do {                                                                                 \
-		g_checks++;                                                                      \
-		if (!(cond)) {                                                                   \
-			g_failures++;                                                                \
-			fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);              \
-		}                                                                                \
+#define CHECK(cond)                                                                                                    \
+	do {                                                                                                               \
+		g_checks++;                                                                                                    \
+		if (!(cond)) {                                                                                                 \
+			g_failures++;                                                                                              \
+			fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                                            \
+		}                                                                                                              \
 	} while (0)
 
-#define CHECK_STR(actual, expected)                                                      \
-	do {                                                                                 \
-		g_checks++;                                                                      \
-		if (strcmp((actual), (expected)) != 0) {                                         \
-			g_failures++;                                                                \
-			fprintf(stderr, "FAIL %s:%d: got \"%s\", want \"%s\"\n", __FILE__, __LINE__, \
-					(actual), (expected));                                               \
-		}                                                                                \
+#define CHECK_STR(actual, expected)                                                                                    \
+	do {                                                                                                               \
+		g_checks++;                                                                                                    \
+		if (strcmp((actual), (expected)) != 0) {                                                                       \
+			g_failures++;                                                                                              \
+			fprintf(stderr, "FAIL %s:%d: got \"%s\", want \"%s\"\n", __FILE__, __LINE__, (actual), (expected));        \
+		}                                                                                                              \
 	} while (0)
 
 static inline int check_report(const char* suite) {

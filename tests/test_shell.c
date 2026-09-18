@@ -37,7 +37,7 @@ typedef struct {
 	uint32_t ms;	  ///< Fake monotonic clock
 	uint32_t ms_step; ///< What each wait() adds: idling is what passes time
 
-	size_t waits;	   ///< wait() calls so far
+	size_t waits;		///< wait() calls so far
 	size_t wait_budget; ///< Passes to keep running for after the script is spent
 } stub_state;
 
@@ -75,8 +75,9 @@ static bool stub_poll_key(qdos_hal* hal, qdos_key_event* out) {
 		st->served = false;
 		return false;
 	}
-	if (st->next >= st->count)
+	if (st->next >= st->count) {
 		return false;
+	}
 
 	*out = st->script[st->next++];
 	st->served = true;
@@ -144,16 +145,17 @@ static void store_reset(void) {
 	g_card_module = NULL;
 }
 
-static qdos_store_result stub_read(
-		qdos_hal* h, qdos_store_scope scope, const char* n, void* b, size_t c, size_t* l) {
+static qdos_store_result stub_read(qdos_hal* h, qdos_store_scope scope, const char* n, void* b, size_t c, size_t* l) {
 	(void)h;
 	for (int i = 0; i < STORE_SLOTS; i++) {
 		if (g_store[i].used && g_store[i].scope == scope && strcmp(g_store[i].name, n) == 0) {
-			if (g_store[i].len > c)
+			if (g_store[i].len > c) {
 				return QDOS_STORE_TOO_BIG;
+			}
 			memcpy(b, g_store[i].data, g_store[i].len);
-			if (l)
+			if (l) {
 				*l = g_store[i].len;
+			}
 			return QDOS_STORE_OK;
 		}
 	}
@@ -162,8 +164,9 @@ static qdos_store_result stub_read(
 
 static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, size_t l) {
 	(void)h;
-	if (l > STORE_BYTES)
+	if (l > STORE_BYTES) {
 		return QDOS_STORE_TOO_BIG;
+	}
 
 	int slot = -1;
 	for (int i = 0; i < STORE_SLOTS; i++) {
@@ -172,11 +175,13 @@ static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, s
 			slot = i;
 			break;
 		}
-		if (!g_store[i].used && slot < 0)
+		if (!g_store[i].used && slot < 0) {
 			slot = i;
+		}
 	}
-	if (slot < 0)
+	if (slot < 0) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	snprintf(g_store[slot].name, sizeof(g_store[slot].name), "%s", n);
 	memcpy(g_store[slot].data, b, l);
@@ -191,32 +196,35 @@ static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, s
  * Listing the card reports each one once with the mark on it; listing a folder
  * reports what is under it, bare.
  */
-static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
-		qdos_store_visit visit, void* user) {
+static qdos_store_result stub_list(
+		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
 	(void)hal;
 
 	char seen[STORE_SLOTS][QDOS_PROGRAM_NAME_MAX];
 	size_t seen_count = 0;
 
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (!g_store[i].used || g_store[i].scope != scope)
+		if (!g_store[i].used || g_store[i].scope != scope) {
 			continue;
+		}
 
 		const char* name = g_store[i].name;
 		const char* slash = strchr(name, '/');
 
 		if (folder != NULL) {
-			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0
-					|| folder[slash - name] != '\0')
+			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0 || folder[slash - name] != '\0') {
 				continue;
-			if (!visit(slash + 1, user))
+			}
+			if (!visit(slash + 1, user)) {
 				return QDOS_STORE_OK;
+			}
 			continue;
 		}
 
 		if (slash == NULL) {
-			if (!visit(name, user))
+			if (!visit(name, user)) {
 				return QDOS_STORE_OK;
+			}
 			continue;
 		}
 
@@ -224,14 +232,17 @@ static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, const 
 		snprintf(dir, sizeof(dir), "%.*s/", (int)(slash - name), name);
 
 		bool already = false;
-		for (size_t s = 0; s < seen_count; s++)
+		for (size_t s = 0; s < seen_count; s++) {
 			already = already || strcmp(seen[s], dir) == 0;
-		if (already)
+		}
+		if (already) {
 			continue;
+		}
 
 		snprintf(seen[seen_count++], QDOS_PROGRAM_NAME_MAX, "%s", dir);
-		if (!visit(dir, user))
+		if (!visit(dir, user)) {
 			return QDOS_STORE_OK;
+		}
 	}
 	return QDOS_STORE_OK;
 }
@@ -239,8 +250,9 @@ static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, const 
 /** Put an entry in a store under its own name, whatever shape that name is */
 static void seed_raw(qdos_store_scope scope, const char* file, const char* bytes) {
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used)
+		if (g_store[i].used) {
 			continue;
+		}
 		snprintf(g_store[i].name, sizeof(g_store[i].name), "%s", file);
 		memcpy(g_store[i].data, bytes, strlen(bytes));
 		g_store[i].len = strlen(bytes);
@@ -253,8 +265,9 @@ static void seed_raw(qdos_store_scope scope, const char* file, const char* bytes
 /** Whether anything is on the card under this name, in any scope */
 static bool stored(const char* file) {
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used && strcmp(g_store[i].name, file) == 0 && g_store[i].len > 0)
+		if (g_store[i].used && strcmp(g_store[i].name, file) == 0 && g_store[i].len > 0) {
 			return true;
+		}
 	}
 	return false;
 }
@@ -269,8 +282,9 @@ static void seed_app(qdos_store_scope scope, const char* name, const char* sourc
 /** Put a program in one of the read-only stores */
 static void seed_scope(qdos_store_scope scope, const char* name, const char* source) {
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used)
+		if (g_store[i].used) {
 			continue;
+		}
 		snprintf(g_store[i].name, sizeof(g_store[i].name), "%s.qd", name);
 		memcpy(g_store[i].data, source, strlen(source));
 		g_store[i].len = strlen(source);
@@ -301,8 +315,9 @@ static void seed_setting(const char* key, int64_t number) {
 	CHECK(qdos_value_encode(&value, buf, &len));
 
 	for (int i = 0; i < STORE_SLOTS; i++) {
-		if (g_store[i].used)
+		if (g_store[i].used) {
 			continue;
+		}
 		snprintf(g_store[i].name, sizeof(g_store[i].name), "%s", key);
 		memcpy(g_store[i].data, buf, len);
 		g_store[i].len = len;
@@ -315,8 +330,9 @@ static void seed_setting(const char* key, int64_t number) {
 static int stub_usb_export(qdos_hal* hal, bool on) {
 	(void)hal;
 	g_usb_calls++;
-	if (g_usb_fails)
+	if (g_usb_fails) {
 		return -1;
+	}
 
 	g_usb_shared = on;
 	return 0;
@@ -334,19 +350,21 @@ static qdos_keypad_mod stub_modifier(qdos_hal* hal) {
 
 static bool stub_store_changed(qdos_hal* hal) {
 	(void)hal;
-	if (!g_card_arrival)
+	if (!g_card_arrival) {
 		return false;
+	}
 
 	g_card_arrival = false;
-	if (g_card_name != NULL)
+	if (g_card_name != NULL) {
 		seed_inbox(g_card_name, g_card_source);
-	if (g_card_module != NULL)
+	}
+	if (g_card_module != NULL) {
 		seed_raw(QDOS_SCOPE_INBOX, g_card_module, "");
+	}
 	return true;
 }
 
-static bool stub_store_path(
-		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+static bool stub_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	(void)hal;
 	(void)scope;
 	const int written = snprintf(buf, cap, "%s/%s", MODULE_DIR, name);
@@ -396,18 +414,20 @@ static void key(qdos_key_event* script, size_t* n, qdos_key k) {
 /** Press the keys for a number, as a keypad would. */
 static void digits(qdos_key_event* script, size_t* n, const char* text) {
 	for (const char* p = text; *p; p++) {
-		if (*p >= '0' && *p <= '9')
+		if (*p >= '0' && *p <= '9') {
 			script[(*n)++] = (qdos_key_event){(qdos_key)(QDOS_KEY_0 + (*p - '0')), 0};
-		else if (*p == '.')
+		} else if (*p == '.') {
 			script[(*n)++] = (qdos_key_event){QDOS_KEY_DOT, 0};
+		}
 	}
 }
 
 /** Type a whole line in line mode: ':', the text, then Enter. */
 static void type_line(qdos_key_event* script, size_t* n, const char* text) {
 	script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
-	for (const char* p = text; *p; p++)
+	for (const char* p = text; *p; p++) {
 		script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 	script[(*n)++] = (qdos_key_event){QDOS_KEY_ENTER, 0};
 }
 
@@ -416,15 +436,17 @@ static void type_line(qdos_key_event* script, size_t* n, const char* text) {
  * just inserts a colon -- so these skip it.
  */
 static void type_more(qdos_key_event* script, size_t* n, const char* text) {
-	for (const char* p = text; *p; p++)
+	for (const char* p = text; *p; p++) {
 		script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 	script[(*n)++] = (qdos_key_event){QDOS_KEY_ENTER, 0};
 }
 
 /** As type_more(), but leaves the line unsubmitted so Tab can be pressed. */
 static void type_partial(qdos_key_event* script, size_t* n, const char* text) {
-	for (const char* p = text; *p; p++)
+	for (const char* p = text; *p; p++) {
 		script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 }
 
 /**
@@ -442,13 +464,13 @@ static bool cell_is(const uint8_t* fb, int col, int row, char ch, bool inverted)
 			const size_t i = (size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + col * QDOS_CELL_W + x;
 			const bool dark = fb[i] < 0x80;
 			const bool lit = inverted ? !dark : dark;
-			if (lit != ((bits & (1u << (x / QDOS_FONT_SCALE))) != 0))
+			if (lit != ((bits & (1u << (x / QDOS_FONT_SCALE))) != 0)) {
 				return false;
+			}
 		}
 	}
 	return true;
 }
-
 
 /** Read a row of the framebuffer back as text by matching glyphs. */
 static void read_row(const uint8_t* fb, int row, char* out, size_t cap) {
@@ -465,18 +487,19 @@ static void read_row(const uint8_t* fb, int row, char* out, size_t cap) {
 		// The drawn symbols read back as themselves, so a cap showing an arrow
 		// can still be checked
 		for (char ch = QDOS_GLYPH_FIRST; found == ' ' && ch <= QDOS_GLYPH_LAST; ch++) {
-			if (cell_is(fb, col, row, ch, false) || cell_is(fb, col, row, ch, true))
+			if (cell_is(fb, col, row, ch, false) || cell_is(fb, col, row, ch, true)) {
 				found = ch;
+			}
 		}
 		out[len++] = found;
 	}
 
 	// Trim trailing blanks
-	while (len > 0 && out[len - 1] == ' ')
+	while (len > 0 && out[len - 1] == ' ') {
 		len--;
+	}
 	out[len] = '\0';
 }
-
 
 /**
  * @brief Run a key script and keep two screens
@@ -484,8 +507,8 @@ static void read_row(const uint8_t* fb, int row, char* out, size_t cap) {
  * @param fb_out     The final screen
  * @param mid_out    The screen after @p stop_after keys, or NULL
  */
-static void run_script_capturing(const qdos_key_event* script, size_t count, size_t stop_after, uint8_t* fb_out,
-		uint8_t* mid_out) {
+static void run_script_capturing(
+		const qdos_key_event* script, size_t count, size_t stop_after, uint8_t* fb_out, uint8_t* mid_out) {
 	stub_state st;
 	memset(&st, 0, sizeof(st));
 	st.script = script;
@@ -520,8 +543,8 @@ static void run_script(const qdos_key_event* script, size_t count, uint8_t* fb_o
  * @param passes Idle passes to allow once the script is spent
  * @param presents_out Repaints over the whole run, or NULL
  */
-static size_t run_script_idling(const qdos_key_event* script, size_t count, uint32_t step, size_t passes,
-		uint8_t* fb_out, int* presents_out) {
+static size_t run_script_idling(
+		const qdos_key_event* script, size_t count, uint32_t step, size_t passes, uint8_t* fb_out, int* presents_out) {
 	stub_state st;
 	memset(&st, 0, sizeof(st));
 	st.script = script;
@@ -540,8 +563,9 @@ static size_t run_script_idling(const qdos_key_event* script, size_t count, uint
 	qdos_shell_destroy(sh);
 
 	memcpy(fb_out, st.last_fb, (size_t)QDOS_SCREEN_W * QDOS_SCREEN_H);
-	if (presents_out != NULL)
+	if (presents_out != NULL) {
 		*presents_out = st.presents;
+	}
 
 	// Short of the budget means the shell stopped of its own accord
 	return st.waits;
@@ -552,8 +576,9 @@ static bool page_has(const uint8_t* fb, const char* text) {
 	char row[QDOS_COLS + 1];
 	for (int r = ROW_CONTENT_FIRST_T; r <= ROW_CONTENT_LAST_T; r++) {
 		read_row(fb, r, row, sizeof(row));
-		if (strstr(row, text) != NULL)
+		if (strstr(row, text) != NULL) {
 			return true;
+		}
 	}
 	return false;
 }
@@ -600,7 +625,7 @@ static void test_digits_accumulate(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
-	CHECK(strstr(row, "123") != NULL); // one number, not three
+	CHECK(strstr(row, "123") != NULL);	   // one number, not three
 	CHECK(row[0] == '1' && row[1] == ':'); // one value, so it is row 1
 }
 
@@ -724,11 +749,13 @@ static void test_line_mode_persists(void) {
 	qdos_key_event script[64];
 	size_t n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
-	for (const char* p = "2 3 +"; *p; p++)
+	for (const char* p = "2 3 +"; *p; p++) {
 		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 	key(script, &n, QDOS_KEY_ENTER);
-	for (const char* p = "10 *"; *p; p++)
+	for (const char* p = "10 *"; *p; p++) {
 		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 	key(script, &n, QDOS_KEY_ENTER);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -881,16 +908,19 @@ static void test_open_line_continues(void) {
 	qdos_key_event script[128];
 	size_t n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
-	for (const char* p = "fn sq(x:i64 -- r:i64) { x"; *p; p++)
+	for (const char* p = "fn sq(x:i64 -- r:i64) { x"; *p; p++) {
 		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 	key(script, &n, QDOS_KEY_ENTER); // open: continues
-	for (const char* p = "dup *"; *p; p++)
+	for (const char* p = "dup *"; *p; p++) {
 		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 	key(script, &n, QDOS_KEY_ENTER); // still open
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, '}'};
 	key(script, &n, QDOS_KEY_ENTER); // closed: evaluates
-	for (const char* p = "7 sq"; *p; p++)
+	for (const char* p = "7 sq"; *p; p++) {
 		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
 	key(script, &n, QDOS_KEY_ENTER);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1140,8 +1170,9 @@ static void test_pixels_are_unambiguous(void) {
 
 	int ambiguous = 0;
 	for (size_t i = 0; i < sizeof(fb); i++) {
-		if (fb[i] >= 64 && fb[i] < 192)
+		if (fb[i] >= 64 && fb[i] < 192) {
 			ambiguous++;
+		}
 	}
 	CHECK(ambiguous == 0);
 }
@@ -1875,8 +1906,9 @@ static void test_rot_three_times_is_a_full_turn(void) {
 	key(script, &n, QDOS_KEY_ENTER);
 	digits(script, &n, "3");
 	key(script, &n, QDOS_KEY_ENTER);
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 3; i++) {
 		key(script, &n, QDOS_KEY_ROT);
+	}
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -1914,8 +1946,14 @@ static void test_over_in_calculator_mode(void) {
  */
 static void test_fatal_runtime_errors_are_survivable(void) {
 	static const char* const DEADLY[] = {
-			"1.5 2.5 and", "1 2.5 mod", "1.5 shl", "\"s\" sqrt", "\"s\" sin",
-			"0.0 0.0 fac", "1 0 /", "5 ln ln ln ln",
+			"1.5 2.5 and",
+			"1 2.5 mod",
+			"1.5 shl",
+			"\"s\" sqrt",
+			"\"s\" sin",
+			"0.0 0.0 fac",
+			"1 0 /",
+			"5 ln ln ln ln",
 	};
 
 	for (size_t i = 0; i < sizeof(DEADLY) / sizeof(*DEADLY); i++) {
@@ -2010,7 +2048,7 @@ static void test_print_survives_a_nested_evaluation(void) {
 	qdos_key_event script[256];
 	size_t n = 0;
 	type_line(script, &n, "fn hyp( -- r:i64) { 9 }"); // override the shipped one
-	type_line(script, &n, "\"hyp\" forget");			 // and put it back
+	type_line(script, &n, "\"hyp\" forget");		  // and put it back
 	type_line(script, &n, "\"HELLO\" print");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2041,10 +2079,12 @@ static void test_debug_page_keeps_a_log(void) {
 	bool printed = false, failed = false;
 	for (int r = ROW_CONTENT_FIRST_T; r <= QDOS_ROWS - 4; r++) {
 		read_row(fb, r, row, sizeof(row));
-		if (strstr(row, "FIRST") != NULL)
+		if (strstr(row, "FIRST") != NULL) {
 			printed = true;
-		if (strstr(row, "ZERO") != NULL || strstr(row, "zero") != NULL)
+		}
+		if (strstr(row, "ZERO") != NULL || strstr(row, "zero") != NULL) {
 			failed = true;
+		}
 	}
 	CHECK(printed);
 	CHECK(failed);
@@ -2601,10 +2641,12 @@ static void test_debug_page_scrolls_to_both_ends(void) {
 
 	// Far more than the log holds, in both directions
 	const size_t at_top = n + 40;
-	for (int i = 0; i < 40; i++)
+	for (int i = 0; i < 40; i++) {
 		key(script, &n, QDOS_KEY_UP);
-	for (int i = 0; i < 40; i++)
+	}
+	for (int i = 0; i < 40; i++) {
 		key(script, &n, QDOS_KEY_DOWN);
+	}
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	static uint8_t top[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2695,8 +2737,9 @@ static void test_settings_change_decimals(void) {
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 3; i++) {
 		key(script, &n, QDOS_KEY_ENTER); // AUTO -> 0 -> 1 -> 2
+	}
 	key(script, &n, QDOS_KEY_CLEAR);
 	digits(script, &n, "2");
 	key(script, &n, QDOS_KEY_ENTER);
@@ -2820,7 +2863,7 @@ static void test_settings_selection_stops_at_the_ends(void) {
 	qdos_key_event script[16];
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SETTINGS);
-	key(script, &n, QDOS_KEY_UP);	// already at the top
+	key(script, &n, QDOS_KEY_UP); // already at the top
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN); // already at the bottom, with no gadget
@@ -2851,8 +2894,9 @@ static void test_fixed_decimals_apply_to_integers(void) {
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 3; i++) {
 		key(script, &n, QDOS_KEY_ENTER); // AUTO -> 0 -> 1 -> 2
+	}
 	key(script, &n, QDOS_KEY_CLEAR);
 	digits(script, &n, "7");
 	key(script, &n, QDOS_KEY_ENTER);
@@ -2873,8 +2917,9 @@ static void test_fixed_decimals_leave_strings_alone(void) {
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 3; i++) {
 		key(script, &n, QDOS_KEY_ENTER);
+	}
 	key(script, &n, QDOS_KEY_CLEAR);
 	type_line(script, &n, "\"text\"");
 
@@ -3695,7 +3740,7 @@ static void test_the_card_is_not_read_while_it_is_shared(void) {
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
-	key(script, &n, QDOS_KEY_DOWN); // onto USB
+	key(script, &n, QDOS_KEY_DOWN);	 // onto USB
 	key(script, &n, QDOS_KEY_ENTER); // share it
 
 	// And only then does something land

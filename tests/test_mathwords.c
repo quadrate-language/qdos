@@ -24,8 +24,9 @@ static double value_of(const char* source, bool* ok) {
 
 	double out = NAN;
 	qd_interp_value value;
-	if (*ok && qd_interp_peek(interp, 0, &value))
+	if (*ok && qd_interp_peek(interp, 0, &value)) {
 		out = (value.type == QD_INTERP_VALUE_FLOAT) ? value.f : (double)value.i;
+	}
 
 	qd_interp_destroy(interp);
 	return out;
@@ -41,8 +42,8 @@ static bool refuses(const char* source) {
 static bool is_whole(const char* source) {
 	qd_interp* interp = fresh();
 	qd_interp_value value;
-	const bool whole = qd_interp_eval(interp, source) && qd_interp_peek(interp, 0, &value)
-			&& value.type == QD_INTERP_VALUE_INT;
+	const bool whole =
+			qd_interp_eval(interp, source) && qd_interp_peek(interp, 0, &value) && value.type == QD_INTERP_VALUE_INT;
 
 	qd_interp_destroy(interp);
 	return whole;
@@ -61,12 +62,28 @@ static void close_to(const char* source, double want) {
  */
 static void test_domains_are_errors(void) {
 	static const char* const OUTSIDE[] = {
-			"-1 sqrt", "0 ln", "-1 ln", "0 log10", "-2 log10", "0 log2", "-2 log2",
-			"2 asin", "-2 asin", "2 acos", "-2 acos", "0 acosh", "1 atanh", "-1 atanh",
-			"0 inv", "-1 fac", "1000000 fac", "5 0 fmod",
+			"-1 sqrt",
+			"0 ln",
+			"-1 ln",
+			"0 log10",
+			"-2 log10",
+			"0 log2",
+			"-2 log2",
+			"2 asin",
+			"-2 asin",
+			"2 acos",
+			"-2 acos",
+			"0 acosh",
+			"1 atanh",
+			"-1 atanh",
+			"0 inv",
+			"-1 fac",
+			"1000000 fac",
+			"5 0 fmod",
 	};
-	for (size_t i = 0; i < sizeof(OUTSIDE) / sizeof(*OUTSIDE); i++)
+	for (size_t i = 0; i < sizeof(OUTSIDE) / sizeof(*OUTSIDE); i++) {
 		CHECK(refuses(OUTSIDE[i]));
+	}
 }
 
 /** Inside the domain nothing changed: lib/math still computes, integers included. */
@@ -166,8 +183,9 @@ static void test_repeated_ln_does_not_abort(void) {
 
 	bool refused = false;
 	for (int i = 0; i < 20; i++) {
-		if (!qd_interp_eval(interp, "ln"))
+		if (!qd_interp_eval(interp, "ln")) {
 			refused = true;
+		}
 	}
 	CHECK(refused); // it stopped rather than carrying on into nonsense
 
@@ -227,8 +245,18 @@ static void test_divide(void) {
  */
 static void test_messages_fit_the_screen(void) {
 	static const char* const REFUSED[] = {
-			"-1 sqrt", "0 ln", "0 log10", "0 log2", "2 asin", "2 acos",
-			"0 acosh", "1 atanh", "0 inv", "-1 fac", "5 0 fmod", "1 0 divide",
+			"-1 sqrt",
+			"0 ln",
+			"0 log10",
+			"0 log2",
+			"2 asin",
+			"2 acos",
+			"0 acosh",
+			"1 atanh",
+			"0 inv",
+			"-1 fac",
+			"5 0 fmod",
+			"1 0 divide",
 	};
 
 	for (size_t i = 0; i < sizeof(REFUSED) / sizeof(*REFUSED); i++) {
@@ -236,8 +264,9 @@ static void test_messages_fit_the_screen(void) {
 		CHECK(!qd_interp_eval(interp, REFUSED[i]));
 
 		const char* text = qd_interp_error(interp);
-		if (strlen(text) > (size_t)QDOS_COLS)
+		if (strlen(text) > (size_t)QDOS_COLS) {
 			fprintf(stderr, "  too long (%zu): %s\n", strlen(text), text);
+		}
 		CHECK(strlen(text) <= (size_t)QDOS_COLS);
 		qd_interp_destroy(interp);
 	}

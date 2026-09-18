@@ -12,11 +12,13 @@
 
 static bool collect(const char* name, void* userdata) {
 	qdos_wordlist* out = (qdos_wordlist*)userdata;
-	if (out->count >= QDOS_WORDLIST_MAX)
+	if (out->count >= QDOS_WORDLIST_MAX) {
 		return false;
+	}
 
-	if (strlen(name) >= QDOS_WORDLIST_NAME)
+	if (strlen(name) >= QDOS_WORDLIST_NAME) {
 		return true;
+	}
 
 	snprintf(out->name[out->count], QDOS_WORDLIST_NAME, "%s", name);
 	out->count++;
@@ -36,10 +38,12 @@ void qdos_wordlist_gather(const qd_interp* interp, qdos_wordlist* out) {
 	// A declaration shadowing a builtin appears twice; keep one
 	size_t kept = 0;
 	for (size_t i = 0; i < out->count; i++) {
-		if (kept > 0 && strcmp(out->name[kept - 1], out->name[i]) == 0)
+		if (kept > 0 && strcmp(out->name[kept - 1], out->name[i]) == 0) {
 			continue;
-		if (kept != i)
+		}
+		if (kept != i) {
 			memcpy(out->name[kept], out->name[i], QDOS_WORDLIST_NAME);
+		}
 		kept++;
 	}
 	out->count = kept;

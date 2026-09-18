@@ -34,8 +34,9 @@ static uint32_t next_random(void) {
 }
 
 static void seed_board(uint8_t* board, int w, int h) {
-	for (int i = 0; i < w * h; i++)
+	for (int i = 0; i < w * h; i++) {
 		board[i] = (next_random() & 3u) == 0 ? ALIVE : DEAD;
+	}
 }
 
 /** @brief How many of the eight neighbours are alive, wrapping at the edges */
@@ -45,11 +46,13 @@ static int neighbours(const uint8_t* board, int w, int h, int x, int y) {
 	for (int dy = -1; dy <= 1; dy++) {
 		const int ny = (y + dy + h) % h;
 		for (int dx = -1; dx <= 1; dx++) {
-			if (dx == 0 && dy == 0)
+			if (dx == 0 && dy == 0) {
 				continue;
+			}
 			const int nx = (x + dx + w) % w;
-			if (board[(size_t)ny * w + nx] == ALIVE)
+			if (board[(size_t)ny * w + nx] == ALIVE) {
 				alive++;
+			}
 		}
 	}
 	return alive;
@@ -61,10 +64,11 @@ static void step(const uint8_t* from, uint8_t* to, int w, int h) {
 			const size_t at = (size_t)y * w + x;
 			const int around = neighbours(from, w, h, x, y);
 
-			if (from[at] == ALIVE)
+			if (from[at] == ALIVE) {
 				to[at] = (around == 2 || around == 3) ? ALIVE : DEAD;
-			else
+			} else {
 				to[at] = (around == 3) ? ALIVE : DEAD;
+			}
 		}
 	}
 }
@@ -104,12 +108,13 @@ static int life_main(qdos_native_ctx* ctx, const qdos_native_api* api) {
 		qdos_key key = QDOS_KEY_NONE;
 		char ch = 0;
 		while (api->key(ctx, &key, &ch)) {
-			if (key == QDOS_KEY_CLEAR || key == QDOS_KEY_POWER)
+			if (key == QDOS_KEY_CLEAR || key == QDOS_KEY_POWER) {
 				running = false;
-			else if (key == QDOS_KEY_ENTER)
+			} else if (key == QDOS_KEY_ENTER) {
 				seed_board(canvas, w, h);
-			else
+			} else {
 				paused = !paused;
+			}
 		}
 
 		// Give the machine back for whatever is left of the frame. A loop that

@@ -27,19 +27,22 @@ bool qdos_math_degrees(void) {
 
 bool qdos_peek_number(qd_context* ctx, size_t depth, double* out) {
 	const size_t size = qd_stack_size(ctx->st);
-	if (depth >= size)
+	if (depth >= size) {
 		return false;
+	}
 
 	qd_stack_element_t element;
-	if (qd_stack_element(ctx->st, size - 1 - depth, &element) != QD_STACK_OK)
+	if (qd_stack_element(ctx->st, size - 1 - depth, &element) != QD_STACK_OK) {
 		return false;
+	}
 
-	if (element.type == QD_STACK_TYPE_INT)
+	if (element.type == QD_STACK_TYPE_INT) {
 		*out = (double)element.value.i;
-	else if (element.type == QD_STACK_TYPE_FLOAT)
+	} else if (element.type == QD_STACK_TYPE_FLOAT) {
 		*out = element.value.f;
-	else
+	} else {
 		return false;
+	}
 	return true;
 }
 
@@ -53,16 +56,17 @@ int qdos_math_error(qd_context* ctx, const char* word, const char* text) {
 /** @brief Swap the top value for @p value, leaving the rest of the stack */
 static int replace_top(qd_context* ctx, double value) {
 	qd_stack_element_t discard;
-	if (qd_stack_pop(ctx->st, &discard) != QD_STACK_OK)
+	if (qd_stack_pop(ctx->st, &discard) != QD_STACK_OK) {
 		return 1;
+	}
 	return qd_push_f(ctx, value);
 }
 
 /* usr_math_* take only a context; a native takes userdata as well */
-#define WRAP(name) \
-	static int w_##name(qd_context* ctx, void* user) { \
-		(void)user; \
-		return usr_math_##name(ctx); \
+#define WRAP(name)                                                                                                     \
+	static int w_##name(qd_context* ctx, void* user) {                                                                 \
+		(void)user;                                                                                                    \
+		return usr_math_##name(ctx);                                                                                   \
 	}
 
 WRAP(sinh)
@@ -89,13 +93,16 @@ WRAP(atan2)
  */
 static int whole_unary(qd_context* ctx, int64_t (*on_int)(int64_t), double (*on_real)(double)) {
 	qd_stack_element_t top;
-	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK)
+	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK) {
 		return 1;
+	}
 
-	if (top.type == QD_STACK_TYPE_INT)
+	if (top.type == QD_STACK_TYPE_INT) {
 		return qd_push_i(ctx, on_int(top.value.i));
-	if (top.type == QD_STACK_TYPE_FLOAT)
+	}
+	if (top.type == QD_STACK_TYPE_FLOAT) {
 		return qd_push_f(ctx, on_real(top.value.f));
+	}
 
 	return qdos_math_error(ctx, "math", "NEEDS A NUMBER");
 }
@@ -103,18 +110,23 @@ static int whole_unary(qd_context* ctx, int64_t (*on_int)(int64_t), double (*on_
 static int64_t sq_i(int64_t x) {
 	return x * x;
 }
+
 static double sq_f(double x) {
 	return x * x;
 }
+
 static int64_t cb_i(int64_t x) {
 	return x * x * x;
 }
+
 static double cb_f(double x) {
 	return x * x * x;
 }
+
 static int64_t abs_i(int64_t x) {
 	return x < 0 ? -x : x;
 }
+
 static double abs_f(double x) {
 	return fabs(x);
 }
@@ -137,10 +149,12 @@ static int w_abs(qd_context* ctx, void* user) {
 static int w_inv(qd_context* ctx, void* user) {
 	(void)user;
 	double x = 0.0;
-	if (!qdos_peek_number(ctx, 0, &x))
+	if (!qdos_peek_number(ctx, 0, &x)) {
 		return qdos_math_error(ctx, "inv", "NEEDS A NUMBER");
-	if (x == 0.0)
+	}
+	if (x == 0.0) {
 		return qdos_math_error(ctx, "inv", "CANNOT DIVIDE BY 0");
+	}
 
 	return replace_top(ctx, 1.0 / x);
 }
@@ -148,17 +162,17 @@ static int w_inv(qd_context* ctx, void* user) {
 /** @brief Keeps the value it picked, so an integer stays one */
 static int pick_of_two(qd_context* ctx, const char* word, bool want_greater) {
 	double b = 0.0, a = 0.0;
-	if (!qdos_peek_number(ctx, 0, &b) || !qdos_peek_number(ctx, 1, &a))
+	if (!qdos_peek_number(ctx, 0, &b) || !qdos_peek_number(ctx, 1, &a)) {
 		return qdos_math_error(ctx, word, "NEEDS 2 NUMBERS");
+	}
 
 	qd_stack_element_t top, second;
-	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK
-			|| qd_stack_pop(ctx->st, &second) != QD_STACK_OK)
+	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK || qd_stack_pop(ctx->st, &second) != QD_STACK_OK) {
 		return 1;
+	}
 
 	const qd_stack_element_t kept = (want_greater == (b > a)) ? top : second;
-	return (kept.type == QD_STACK_TYPE_INT) ? qd_push_i(ctx, kept.value.i)
-										    : qd_push_f(ctx, kept.value.f);
+	return (kept.type == QD_STACK_TYPE_INT) ? qd_push_i(ctx, kept.value.i) : qd_push_f(ctx, kept.value.f);
 }
 
 static int w_min(qd_context* ctx, void* user) {
@@ -176,13 +190,13 @@ static int w_max(qd_context* ctx, void* user) {
  * shell survives that now, but a plain refusal reads better than a runtime
  * message, so these check first and keep lib/math's arithmetic.
  */
-#define CHECKED(name, domain, rule) \
-	static int w_##name(qd_context* ctx, void* user) { \
-		(void)user; \
-		double x = 0.0; \
-		if (qdos_peek_number(ctx, 0, &x) && !(domain)) \
-			return qdos_math_error(ctx, #name, rule); \
-		return usr_math_##name(ctx); \
+#define CHECKED(name, domain, rule)                                                                                    \
+	static int w_##name(qd_context* ctx, void* user) {                                                                 \
+		(void)user;                                                                                                    \
+		double x = 0.0;                                                                                                \
+		if (qdos_peek_number(ctx, 0, &x) && !(domain))                                                                 \
+			return qdos_math_error(ctx, #name, rule);                                                                  \
+		return usr_math_##name(ctx);                                                                                   \
 	}
 
 CHECKED(sqrt, x >= 0.0, "NEEDS 0 OR MORE")
@@ -196,14 +210,13 @@ CHECKED(fac, x >= 0.0 && x == floor(x) && x <= 170.0, "WHOLE, 0 TO 170")
 #undef CHECKED
 
 /* Degrees in, radians on to lib/math */
-#define TRIG_IN(name) \
-	static int w_##name(qd_context* ctx, void* user) { \
-		(void)user; \
-		double x = 0.0; \
-		if (g_degrees && qdos_peek_number(ctx, 0, &x) \
-				&& replace_top(ctx, x * QDOS_PI / 180.0) != 0) \
-			return 1; \
-		return usr_math_##name(ctx); \
+#define TRIG_IN(name)                                                                                                  \
+	static int w_##name(qd_context* ctx, void* user) {                                                                 \
+		(void)user;                                                                                                    \
+		double x = 0.0;                                                                                                \
+		if (g_degrees && qdos_peek_number(ctx, 0, &x) && replace_top(ctx, x * QDOS_PI / 180.0) != 0)                   \
+			return 1;                                                                                                  \
+		return usr_math_##name(ctx);                                                                                   \
 	}
 
 TRIG_IN(sin)
@@ -213,17 +226,17 @@ TRIG_IN(tan)
 #undef TRIG_IN
 
 /* Radians out of lib/math, degrees back to the user */
-#define TRIG_OUT(name, domain, rule) \
-	static int w_##name(qd_context* ctx, void* user) { \
-		(void)user; \
-		double x = 0.0; \
-		if (qdos_peek_number(ctx, 0, &x) && !(domain)) \
-			return qdos_math_error(ctx, #name, rule); \
-		const int result = usr_math_##name(ctx); \
-		double radians = 0.0; \
-		if (result != 0 || !g_degrees || !qdos_peek_number(ctx, 0, &radians)) \
-			return result; \
-		return replace_top(ctx, radians * 180.0 / QDOS_PI); \
+#define TRIG_OUT(name, domain, rule)                                                                                   \
+	static int w_##name(qd_context* ctx, void* user) {                                                                 \
+		(void)user;                                                                                                    \
+		double x = 0.0;                                                                                                \
+		if (qdos_peek_number(ctx, 0, &x) && !(domain))                                                                 \
+			return qdos_math_error(ctx, #name, rule);                                                                  \
+		const int result = usr_math_##name(ctx);                                                                       \
+		double radians = 0.0;                                                                                          \
+		if (result != 0 || !g_degrees || !qdos_peek_number(ctx, 0, &radians))                                          \
+			return result;                                                                                             \
+		return replace_top(ctx, radians * 180.0 / QDOS_PI);                                                            \
 	}
 
 TRIG_OUT(asin, x >= -1.0 && x <= 1.0, "NEEDS -1 TO 1")
@@ -236,8 +249,9 @@ TRIG_OUT(atan, true, "")
 static int w_fmod(qd_context* ctx, void* user) {
 	(void)user;
 	double divisor = 0.0;
-	if (qdos_peek_number(ctx, 0, &divisor) && divisor == 0.0)
+	if (qdos_peek_number(ctx, 0, &divisor) && divisor == 0.0) {
 		return qdos_math_error(ctx, "fmod", "ZERO DIVISOR");
+	}
 	return usr_math_fmod(ctx);
 }
 
@@ -250,19 +264,21 @@ static int w_fmod(qd_context* ctx, void* user) {
 static int w_divide(qd_context* ctx, void* user) {
 	(void)user;
 	double b = 0.0, a = 0.0;
-	if (!qdos_peek_number(ctx, 0, &b) || !qdos_peek_number(ctx, 1, &a))
+	if (!qdos_peek_number(ctx, 0, &b) || !qdos_peek_number(ctx, 1, &a)) {
 		return qdos_math_error(ctx, "divide", "NEEDS 2 NUMBERS");
-	if (b == 0.0)
+	}
+	if (b == 0.0) {
 		return qdos_math_error(ctx, "divide", "ZERO DIVISOR");
+	}
 
 	qd_stack_element_t top, second;
-	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK
-			|| qd_stack_pop(ctx->st, &second) != QD_STACK_OK)
+	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK || qd_stack_pop(ctx->st, &second) != QD_STACK_OK) {
 		return 1;
+	}
 
-	if (top.type == QD_STACK_TYPE_INT && second.type == QD_STACK_TYPE_INT
-			&& second.value.i % top.value.i == 0)
+	if (top.type == QD_STACK_TYPE_INT && second.type == QD_STACK_TYPE_INT && second.value.i % top.value.i == 0) {
 		return qd_push_i(ctx, second.value.i / top.value.i);
+	}
 	return qd_push_f(ctx, a / b);
 }
 
@@ -326,6 +342,7 @@ void qdos_register_math(qd_interp* interp) {
 			{"e", "( -- r:f64)", w_e},
 	};
 
-	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++)
+	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++) {
 		qd_interp_register(interp, WORDS[i].name, WORDS[i].signature, WORDS[i].fn, NULL);
+	}
 }

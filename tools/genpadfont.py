@@ -143,6 +143,9 @@ def main():
  * face this small legible.
  */
 
+/* A row per glyph is what makes this readable at all. */
+/* clang-format off */
+
 #include "padfont.h"
 
 ''')

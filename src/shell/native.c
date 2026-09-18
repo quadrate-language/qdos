@@ -62,32 +62,39 @@ void qdos_natives_bind(qdos_hal* hal, uint8_t* canvas) {
 
 static uint8_t* api_canvas(qdos_native_ctx* ctx, int* width, int* height) {
 	(void)ctx;
-	if (width != NULL)
+	if (width != NULL) {
 		*width = QDOS_SCREEN_W;
-	if (height != NULL)
+	}
+	if (height != NULL) {
 		*height = QDOS_SCREEN_H;
+	}
 	return g_canvas;
 }
 
 static void api_present(qdos_native_ctx* ctx) {
 	(void)ctx;
-	if (g_hal != NULL && g_canvas != NULL)
+	if (g_hal != NULL && g_canvas != NULL) {
 		g_hal->present(g_hal, g_canvas);
+	}
 }
 
 static bool api_key(qdos_native_ctx* ctx, qdos_key* key, char* ch) {
 	(void)ctx;
-	if (g_hal == NULL)
+	if (g_hal == NULL) {
 		return false;
+	}
 
 	qdos_key_event event;
-	if (!g_hal->poll_key(g_hal, &event))
+	if (!g_hal->poll_key(g_hal, &event)) {
 		return false;
+	}
 
-	if (key != NULL)
+	if (key != NULL) {
 		*key = event.key;
-	if (ch != NULL)
+	}
+	if (ch != NULL) {
 		*ch = event.ch;
+	}
 	return true;
 }
 
@@ -98,8 +105,9 @@ static uint32_t api_ticks(qdos_native_ctx* ctx) {
 
 static void api_wait(qdos_native_ctx* ctx, int timeout_ms) {
 	(void)ctx;
-	if (g_hal != NULL)
+	if (g_hal != NULL) {
 		g_hal->wait(g_hal, timeout_ms);
+	}
 }
 
 /** @brief The app the word now running belongs to, or empty for a loose module */
@@ -111,8 +119,9 @@ static bool readable(qdos_store_scope scope, const char* key, char* buf, size_t 
 
 static bool api_path(qdos_native_ctx* ctx, const char* name, char* buf, size_t cap) {
 	(void)ctx;
-	if (g_hal == NULL || g_hal->store_path == NULL || name == NULL)
+	if (g_hal == NULL || g_hal->store_path == NULL || name == NULL) {
 		return false;
+	}
 
 	// Nearest first, as a program of one name shadows another
 	static const qdos_store_scope ORDER[] = {QDOS_SCOPE_USER, QDOS_SCOPE_INBOX, QDOS_SCOPE_SYSTEM};
@@ -123,10 +132,12 @@ static bool api_path(qdos_native_ctx* ctx, const char* name, char* buf, size_t c
 	for (size_t i = 0; i < sizeof(ORDER) / sizeof(*ORDER); i++) {
 		// What an app brought with it is in its own folder; anything else it
 		// asks for is loose on the card
-		if (inside && readable(ORDER[i], key, buf, cap))
+		if (inside && readable(ORDER[i], key, buf, cap)) {
 			return true;
-		if (readable(ORDER[i], name, buf, cap))
+		}
+		if (readable(ORDER[i], name, buf, cap)) {
 			return true;
+		}
 	}
 
 	buf[0] = '\0';
@@ -175,15 +186,18 @@ static const qdos_natives* g_set;
 
 /** @brief Which module a word belongs to; its words sit inside its own table */
 static const char* app_of(const qdos_native_word* word) {
-	if (g_set == NULL)
+	if (g_set == NULL) {
 		return "";
+	}
 
 	for (size_t i = 0; i < g_set->count; i++) {
 		const qdos_native_entry* entry = &g_set->entry[i];
-		if (entry->module == NULL || entry->module->words == NULL)
+		if (entry->module == NULL || entry->module->words == NULL) {
 			continue;
-		if (word >= entry->module->words && word < entry->module->words + entry->module->word_count)
+		}
+		if (word >= entry->module->words && word < entry->module->words + entry->module->word_count) {
 			return entry->app;
+		}
 	}
 	return "";
 }
@@ -194,8 +208,9 @@ static int call_word(qd_context* ctx, void* userdata) {
 
 	if (!g_called) {
 		g_called = true;
-		if (g_on_call != NULL)
+		if (g_on_call != NULL) {
 			g_on_call(g_on_call_user);
+		}
 	}
 
 	const char* was = g_app;
@@ -212,19 +227,22 @@ static int call_word(qd_context* ctx, void* userdata) {
 
 static void read_text(qdos_hal* hal, const char* key, char* out, size_t cap) {
 	out[0] = '\0';
-	if (hal->store_read == NULL)
+	if (hal->store_read == NULL) {
 		return;
+	}
 
 	size_t len = 0;
-	if (hal->store_read(hal, QDOS_SCOPE_USER, key, out, cap - 1, &len) != QDOS_STORE_OK)
+	if (hal->store_read(hal, QDOS_SCOPE_USER, key, out, cap - 1, &len) != QDOS_STORE_OK) {
 		return;
+	}
 
 	out[len < cap ? len : cap - 1] = '\0';
 }
 
 static void write_text(qdos_hal* hal, const char* key, const char* text) {
-	if (hal->store_write == NULL)
+	if (hal->store_write == NULL) {
 		return;
+	}
 	hal->store_write(hal, key, text, strlen(text));
 }
 
@@ -235,33 +253,38 @@ static bool listed(const char* list, const char* name) {
 	for (const char* p = list; *p != '\0';) {
 		const char* end = strchr(p, ' ');
 		const size_t span = (end != NULL) ? (size_t)(end - p) : strlen(p);
-		if (span == len && strncmp(p, name, len) == 0)
+		if (span == len && strncmp(p, name, len) == 0) {
 			return true;
-		if (end == NULL)
+		}
+		if (end == NULL) {
 			break;
+		}
 		p = end + 1;
 	}
 	return false;
 }
 
 static void list_add(char* list, size_t cap, const char* name) {
-	if (listed(list, name))
+	if (listed(list, name)) {
 		return;
+	}
 
 	const size_t used = strlen(list);
 	snprintf(list + used, cap - used, "%s%s", used > 0 ? " " : "", name);
 }
 
 bool qdos_natives_recover(qdos_natives* set, qdos_hal* hal) {
-	if (set == NULL || hal == NULL || hal->store_read == NULL || hal->store_write == NULL)
+	if (set == NULL || hal == NULL || hal->store_read == NULL || hal->store_write == NULL) {
 		return false;
+	}
 
 	read_text(hal, NATIVE_BLOCKED_KEY, set->blocked, sizeof(set->blocked));
 
 	char crumb[QDOS_PROGRAM_NAME_MAX];
 	read_text(hal, NATIVE_LOADING_KEY, crumb, sizeof(crumb));
-	if (crumb[0] == '\0')
+	if (crumb[0] == '\0') {
 		return false;
+	}
 
 	list_add(set->blocked, sizeof(set->blocked), crumb);
 	write_text(hal, NATIVE_BLOCKED_KEY, set->blocked);
@@ -272,24 +295,29 @@ bool qdos_natives_recover(qdos_natives* set, qdos_hal* hal) {
 }
 
 void qdos_natives_unblock(qdos_natives* set, qdos_hal* hal) {
-	if (set == NULL)
+	if (set == NULL) {
 		return;
+	}
 
 	set->blocked[0] = '\0';
 	set->faulted[0] = '\0';
 
-	if (hal != NULL && hal->store_write != NULL)
+	if (hal != NULL && hal->store_write != NULL) {
 		write_text(hal, NATIVE_BLOCKED_KEY, "");
+	}
 }
 
 size_t qdos_natives_blocked_count(const qdos_natives* set) {
-	if (set == NULL || set->blocked[0] == '\0')
+	if (set == NULL || set->blocked[0] == '\0') {
 		return 0;
+	}
 
 	size_t n = 1;
-	for (const char* p = set->blocked; *p != '\0'; p++)
-		if (*p == ' ')
+	for (const char* p = set->blocked; *p != '\0'; p++) {
+		if (*p == ' ') {
 			n++;
+		}
+	}
 	return n;
 }
 
@@ -342,12 +370,14 @@ static bool accept(const qdos_native_module* module, char* error, size_t cap) {
 
 static qdos_native_entry* slot_for(qdos_natives* set, const char* name) {
 	for (size_t i = 0; i < set->count; i++) {
-		if (strcmp(set->entry[i].name, name) == 0)
+		if (strcmp(set->entry[i].name, name) == 0) {
 			return &set->entry[i];
+		}
 	}
 
-	if (set->count >= QDOS_NATIVE_MAX)
+	if (set->count >= QDOS_NATIVE_MAX) {
 		return NULL;
+	}
 
 	qdos_native_entry* entry = &set->entry[set->count++];
 	memset(entry, 0, sizeof(*entry));
@@ -357,18 +387,26 @@ static qdos_native_entry* slot_for(qdos_natives* set, const char* name) {
 
 static void mark_origin(qdos_native_entry* entry, qdos_store_scope scope) {
 	switch (scope) {
-		case QDOS_SCOPE_SYSTEM: entry->system = true; break;
-		case QDOS_SCOPE_INBOX: entry->inbox = true; break;
-		default: entry->user = true; break;
+	case QDOS_SCOPE_SYSTEM:
+		entry->system = true;
+		break;
+	case QDOS_SCOPE_INBOX:
+		entry->inbox = true;
+		break;
+	default:
+		entry->user = true;
+		break;
 	}
 }
 
 /** @brief Keeps where it came from */
 static void release(qdos_native_entry* entry) {
-	if (entry->module != NULL && entry->module->close != NULL)
+	if (entry->module != NULL && entry->module->close != NULL) {
 		entry->module->close();
-	if (entry->handle != NULL)
+	}
+	if (entry->handle != NULL) {
 		dlclose(entry->handle);
+	}
 
 	entry->handle = NULL;
 	entry->module = NULL;
@@ -397,22 +435,26 @@ static bool load_one(const char* file, void* userdata) {
 	}
 
 	char name[QDOS_PROGRAM_NAME_MAX];
-	if (!qdos_module_name(file, name, sizeof(name)))
+	if (!qdos_module_name(file, name, sizeof(name))) {
 		return true;
+	}
 
 	char key[QDOS_PROGRAM_NAME_MAX * 2];
-	if (walk->app == NULL)
+	if (walk->app == NULL) {
 		snprintf(key, sizeof(key), "%s", file);
-	else if (!qdos_app_key(walk->app, file, key, sizeof(key)))
+	} else if (!qdos_app_key(walk->app, file, key, sizeof(key))) {
 		return true;
+	}
 
 	char path[512];
-	if (!walk->hal->store_path(walk->hal, walk->scope, key, path, sizeof(path)))
+	if (!walk->hal->store_path(walk->hal, walk->scope, key, path, sizeof(path))) {
 		return true;
+	}
 
 	qdos_native_entry* entry = slot_for(walk->set, name);
-	if (entry == NULL)
+	if (entry == NULL) {
 		return false; // no room, and nothing to be gained by reading the rest
+	}
 
 	release(entry);
 	mark_origin(entry, walk->scope);
@@ -457,11 +499,13 @@ static bool load_one(const char* file, void* userdata) {
 }
 
 int qdos_natives_load(qdos_natives* set, qdos_hal* hal, qdos_store_scope scope) {
-	if (set == NULL || hal == NULL)
+	if (set == NULL || hal == NULL) {
 		return 0;
+	}
 
-	if (hal->store_path == NULL || hal->store_list == NULL)
+	if (hal->store_path == NULL || hal->store_list == NULL) {
 		return 0;
+	}
 
 	load_walk walk = {.set = set, .hal = hal, .scope = scope, .app = NULL, .loaded = 0};
 	hal->store_list(hal, scope, NULL, load_one, &walk);
@@ -474,15 +518,18 @@ static int call_main(qd_context* ctx, void* userdata) {
 
 	if (!g_called) {
 		g_called = true;
-		if (g_on_call != NULL)
+		if (g_on_call != NULL) {
 			g_on_call(g_on_call_user);
+		}
 	}
 
 	const char* was = g_app;
 	if (g_set != NULL) {
-		for (size_t i = 0; i < g_set->count; i++)
-			if (g_set->entry[i].module == module)
+		for (size_t i = 0; i < g_set->count; i++) {
+			if (g_set->entry[i].module == module) {
 				g_app = g_set->entry[i].app;
+			}
+		}
 	}
 
 	const int result = module->main((qdos_native_ctx*)ctx, &API);
@@ -492,21 +539,23 @@ static int call_main(qd_context* ctx, void* userdata) {
 }
 
 int qdos_natives_register(const qdos_natives* set, qd_interp* interp) {
-	if (set == NULL || interp == NULL)
+	if (set == NULL || interp == NULL) {
 		return 0;
+	}
 
 	g_set = set;
 	int registered = 0;
 	for (size_t i = 0; i < set->count; i++) {
 		const qdos_native_entry* entry = &set->entry[i];
-		if (entry->module == NULL)
+		if (entry->module == NULL) {
 			continue;
+		}
 
 		// A program takes the bare name: `doom`, not `doom::`
-		if (entry->module->main != NULL
-				&& qd_interp_register(interp, entry->name, "( -- )", call_main,
-						(void*)entry->module))
+		if (entry->module->main != NULL &&
+				qd_interp_register(interp, entry->name, "( -- )", call_main, (void*)entry->module)) {
 			registered++;
+		}
 
 		for (size_t w = 0; w < entry->module->word_count; w++) {
 			const qdos_native_word* word = &entry->module->words[w];
@@ -514,30 +563,35 @@ int qdos_natives_register(const qdos_natives* set, qd_interp* interp) {
 			char scoped[QDOS_PROGRAM_NAME_MAX * 2];
 			snprintf(scoped, sizeof(scoped), "%s::%s", entry->name, word->name);
 
-			if (qd_interp_register(interp, scoped, word->signature, call_word, (void*)word))
+			if (qd_interp_register(interp, scoped, word->signature, call_word, (void*)word)) {
 				registered++;
+			}
 		}
 	}
 	return registered;
 }
 
 void qdos_natives_unload(qdos_natives* set) {
-	if (set == NULL)
+	if (set == NULL) {
 		return;
+	}
 
-	for (size_t i = 0; i < set->count; i++)
+	for (size_t i = 0; i < set->count; i++) {
 		release(&set->entry[i]);
+	}
 
 	set->count = 0;
 }
 
 const qdos_native_entry* qdos_natives_find(const qdos_natives* set, const char* name) {
-	if (set == NULL || name == NULL)
+	if (set == NULL || name == NULL) {
 		return NULL;
+	}
 
 	for (size_t i = 0; i < set->count; i++) {
-		if (strcmp(set->entry[i].name, name) == 0)
+		if (strcmp(set->entry[i].name, name) == 0) {
 			return &set->entry[i];
+		}
 	}
 	return NULL;
 }

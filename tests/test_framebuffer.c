@@ -164,11 +164,12 @@ static void test_blit_clips_on_smaller_framebuffer(void) {
 	qdos_fb_blit(&info, fb, panel);
 
 	CHECK(fb[0] == 0xFF);
-	for (size_t i = size; i < size + 64; i++)
+	for (size_t i = size; i < size + 64; i++) {
 		if (fb[i] != 0) {
 			CHECK(0 && "blit wrote past the end of the framebuffer");
 			goto done;
 		}
+	}
 	CHECK(1);
 done:
 	free(fb);
@@ -192,13 +193,13 @@ static void test_blit_rejects_bad_input(void) {
 	free(panel);
 }
 
-
 /**
  */
 static void test_real_framebuffer_device(void) {
 	const char* path = getenv("QDOS_FB");
-	if (path == NULL)
+	if (path == NULL) {
 		path = "/dev/fb0";
+	}
 
 	const int fd = open(path, O_RDONLY);
 	if (fd < 0) {
@@ -220,8 +221,7 @@ static void test_real_framebuffer_device(void) {
 			.pitch = fix.line_length,
 			.bpp = var.bits_per_pixel,
 	};
-	printf("framebuffer: probing %s — %ux%u, %u bpp, pitch %u\n", path, info.width, info.height, info.bpp,
-			info.pitch);
+	printf("framebuffer: probing %s — %ux%u, %u bpp, pitch %u\n", path, info.width, info.height, info.bpp, info.pitch);
 
 	// The device reports a geometry; our validation must agree it is usable, or
 	// explain itself by rejecting an unsupported depth
@@ -236,8 +236,9 @@ static void test_real_framebuffer_device(void) {
 	const size_t size = (size_t)info.pitch * info.height;
 	void* mapped = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
 	CHECK(mapped != MAP_FAILED);
-	if (mapped != MAP_FAILED)
+	if (mapped != MAP_FAILED) {
 		munmap(mapped, size);
+	}
 
 	// Blit into a private buffer with the device's real geometry
 	if (qdos_fb_supported(&info)) {

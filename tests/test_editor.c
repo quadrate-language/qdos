@@ -54,8 +54,9 @@ static void test_insert_and_backspace(void) {
 	CHECK(strcmp(ed.text, "ac") == 0);
 
 	// Backspace at the very start does nothing
-	while (ed.cursor > 0)
+	while (ed.cursor > 0) {
 		qdos_editor_move(&ed, -1, 0);
+	}
 	qdos_editor_backspace(&ed);
 	CHECK(strcmp(ed.text, "ac") == 0);
 }
@@ -75,8 +76,9 @@ static void test_vertical_movement_keeps_column(void) {
 	qdos_editor ed;
 	qdos_editor_open(&ed, "x", "abcdef\nghijkl\nmn");
 
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < 4; i++) {
 		qdos_editor_move(&ed, 1, 0); // column 4 on line 0
+	}
 
 	qdos_editor_move(&ed, 0, 1);
 	size_t line, col;
@@ -97,19 +99,22 @@ static void test_movement_stops_at_the_ends(void) {
 	qdos_editor ed;
 	qdos_editor_open(&ed, "x", "one\ntwo");
 
-	for (int i = 0; i < 20; i++)
+	for (int i = 0; i < 20; i++) {
 		qdos_editor_move(&ed, 0, -1);
+	}
 	size_t line, col;
 	qdos_editor_where(&ed, &line, &col);
 	CHECK(line == 0);
 
-	for (int i = 0; i < 20; i++)
+	for (int i = 0; i < 20; i++) {
 		qdos_editor_move(&ed, 0, 1);
+	}
 	qdos_editor_where(&ed, &line, &col);
 	CHECK(line == 1);
 
-	for (int i = 0; i < 40; i++)
+	for (int i = 0; i < 40; i++) {
 		qdos_editor_move(&ed, 1, 0);
+	}
 	CHECK(ed.cursor == ed.len);
 }
 
@@ -117,8 +122,9 @@ static void test_full_buffer_is_refused(void) {
 	qdos_editor ed;
 	qdos_editor_open(&ed, "x", "");
 
-	for (size_t i = 0; i < QDOS_PROGRAM_MAX + 100; i++)
+	for (size_t i = 0; i < QDOS_PROGRAM_MAX + 100; i++) {
 		qdos_editor_insert(&ed, 'z');
+	}
 
 	CHECK(ed.len < QDOS_PROGRAM_MAX);
 	CHECK(ed.text[ed.len] == '\0');

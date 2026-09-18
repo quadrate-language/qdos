@@ -9,12 +9,12 @@
 
 #include "keypad_ui.h"
 
+#include <dirent.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
-#include <poll.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -59,6 +59,9 @@ static const uint8_t PANEL_PAPER[3] = {0xC9, 0xCE, 0xC6};
  * so, and your own file manager is the PC. */
 #define SIM_INBOX_DIR "qdos-inbox"
 
+/** @brief As many app folders as the card is watched into */
+#define QDOS_WATCH_SUBS 16
+
 typedef struct {
 	SDL_Window* window;
 	SDL_Renderer* renderer;
@@ -68,9 +71,9 @@ typedef struct {
 	/** The card is a PC's to write, and so nothing the shell may read */
 	bool shared;
 	int scale;
-	const char* pending; ///< Rest of a text button still to be delivered
-	qdos_pad_layer layer;   ///< Which keypad face is showing
-	qdos_pad_layer locked;  ///< What a one-press layer hands back to
+	const char* pending;   ///< Rest of a text button still to be delivered
+	qdos_pad_layer layer;  ///< Which keypad face is showing
+	qdos_pad_layer locked; ///< What a one-press layer hands back to
 
 	/** Held down by the mouse, drawn sunk until the button comes back up */
 	const qdos_pad_button* pressed;
@@ -85,9 +88,6 @@ typedef struct {
 
 	/** Closing the watched descriptor does not reliably wake a blocked read */
 	int wake_fd[2];
-
-/** @brief As many app folders as the card is watched into */
-#define QDOS_WATCH_SUBS 16
 
 	int sub_id[QDOS_WATCH_SUBS]; ///< One watch per app folder
 	size_t sub_count;
@@ -106,34 +106,41 @@ static bool is_dir(const char* dir, const char* name);
 
 /** @brief The card and every app folder on it; inotify does not recurse */
 static void sim_watch_inbox(sim_state* st) {
-	if (st->watch_fd < 0)
+	if (st->watch_fd < 0) {
 		return;
+	}
 
-	if (st->watch_id >= 0)
+	if (st->watch_id >= 0) {
 		inotify_rm_watch(st->watch_fd, st->watch_id);
-	for (size_t i = 0; i < st->sub_count; i++)
+	}
+	for (size_t i = 0; i < st->sub_count; i++) {
 		inotify_rm_watch(st->watch_fd, st->sub_id[i]);
+	}
 	st->sub_count = 0;
 
 	const char* inbox = dir_for(QDOS_SCOPE_INBOX);
 	st->watch_id = inotify_add_watch(st->watch_fd, inbox, WATCH_EVENTS);
 
 	DIR* dir = opendir(inbox);
-	if (dir == NULL)
+	if (dir == NULL) {
 		return;
+	}
 
 	const struct dirent* ent;
 	while ((ent = readdir(dir)) != NULL && st->sub_count < QDOS_WATCH_SUBS) {
-		if (ent->d_name[0] == '.' || !is_dir(inbox, ent->d_name))
+		if (ent->d_name[0] == '.' || !is_dir(inbox, ent->d_name)) {
 			continue;
+		}
 
 		char path[512];
-		if (snprintf(path, sizeof(path), "%s/%s", inbox, ent->d_name) >= (int)sizeof(path))
+		if (snprintf(path, sizeof(path), "%s/%s", inbox, ent->d_name) >= (int)sizeof(path)) {
 			continue;
+		}
 
 		const int id = inotify_add_watch(st->watch_fd, path, WATCH_EVENTS);
-		if (id >= 0)
+		if (id >= 0) {
 			st->sub_id[st->sub_count++] = id;
+		}
 	}
 	closedir(dir);
 }
@@ -147,14 +154,17 @@ static int SDLCALL sim_watch_thread(void* data) {
 	};
 
 	for (;;) {
-		if (poll(fds, 2, -1) < 0)
+		if (poll(fds, 2, -1) < 0) {
 			break;
-		if (fds[1].revents != 0)
+		}
+		if (fds[1].revents != 0) {
 			break; // shutdown
+		}
 
 		char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
-		if (read(st->watch_fd, buf, sizeof(buf)) <= 0)
+		if (read(st->watch_fd, buf, sizeof(buf)) <= 0) {
 			break;
+		}
 
 		st->store_dirty = true;
 
@@ -190,8 +200,9 @@ static int sim_init(qdos_hal* hal) {
 	const char* scale_env = getenv("QDOS_SIM_SCALE");
 	if (scale_env != NULL) {
 		const int wanted = atoi(scale_env);
-		if (wanted >= 1 && wanted <= SIM_SCALE_MAX)
+		if (wanted >= 1 && wanted <= SIM_SCALE_MAX) {
 			st->scale = wanted;
+		}
 	}
 
 	st->window = SDL_CreateWindow("QDOS", WINDOW_W * st->scale, WINDOW_H * st->scale, 0);
@@ -206,8 +217,8 @@ static int sim_init(qdos_hal* hal) {
 		return 1;
 	}
 
-	st->texture = SDL_CreateTexture(st->renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
-			WINDOW_W, WINDOW_H);
+	st->texture =
+			SDL_CreateTexture(st->renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, WINDOW_W, WINDOW_H);
 	if (!st->texture) {
 		fprintf(stderr, "qdos: SDL_CreateTexture failed: %s\n", SDL_GetError());
 		return 1;
@@ -232,15 +243,19 @@ static int sim_init(qdos_hal* hal) {
 
 static void sim_shutdown(qdos_hal* hal) {
 	sim_state* st = (sim_state*)hal->impl;
-	if (!st)
+	if (!st) {
 		return;
+	}
 
-	if (st->texture)
+	if (st->texture) {
 		SDL_DestroyTexture(st->texture);
-	if (st->renderer)
+	}
+	if (st->renderer) {
 		SDL_DestroyRenderer(st->renderer);
-	if (st->window)
+	}
+	if (st->window) {
 		SDL_DestroyWindow(st->window);
+	}
 
 	// Told to stop before being waited for: closing the descriptor it is
 	// blocked on leaves the read blocked and the wait below never returns
@@ -310,15 +325,25 @@ static void map_char(char ch, qdos_key_event* out) {
 	}
 
 	switch (ch) {
-		case '.': out->key = QDOS_KEY_DOT; return;
-		case '+': out->key = QDOS_KEY_ADD; return;
-		case '-': out->key = QDOS_KEY_SUB; return;
-		case '*': out->key = QDOS_KEY_MUL; return;
-		case '/': out->key = QDOS_KEY_DIV; return;
-		default:
-			out->key = QDOS_KEY_CHAR;
-			out->ch = ch;
-			return;
+	case '.':
+		out->key = QDOS_KEY_DOT;
+		return;
+	case '+':
+		out->key = QDOS_KEY_ADD;
+		return;
+	case '-':
+		out->key = QDOS_KEY_SUB;
+		return;
+	case '*':
+		out->key = QDOS_KEY_MUL;
+		return;
+	case '/':
+		out->key = QDOS_KEY_DIV;
+		return;
+	default:
+		out->key = QDOS_KEY_CHAR;
+		out->ch = ch;
+		return;
 	}
 }
 
@@ -335,131 +360,134 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
-			// Up before down, so a release is never mistaken for a press. The
-			// key sinks on the way down and comes back on the way up, which is
-			// the only acknowledgement the simulator can offer -- on the real
-			// machine there is a key under your finger doing it for you.
-			case SDL_EVENT_MOUSE_BUTTON_UP:
-				if (st->pressed != NULL) {
-					st->pressed = NULL;
-					push_frame(st);
-				}
-				break;
-
-			case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-				const qdos_pad_button* b = qdos_pad_at(
-						(int)event.button.x / st->scale, (int)event.button.y / st->scale);
-				if (b == NULL)
-					break;
-
-				// Shown before the key is acted on, so the press lands even
-				// where the action itself changes nothing on screen
-				st->pressed = b;
+		// Up before down, so a release is never mistaken for a press. The
+		// key sinks on the way down and comes back on the way up, which is
+		// the only acknowledgement the simulator can offer -- on the real
+		// machine there is a key under your finger doing it for you.
+		case SDL_EVENT_MOUSE_BUTTON_UP:
+			if (st->pressed != NULL) {
+				st->pressed = NULL;
 				push_frame(st);
+			}
+			break;
 
-				qdos_pad_layer selects;
-				if (qdos_pad_modifier(b, &selects)) {
-					if (st->layer == selects) {
-						st->layer = QDOS_PAD_PLAIN;
-						st->locked = QDOS_PAD_PLAIN;
-					} else {
-						st->layer = selects;
-						// Letters lock, since a name is more than one press;
-						// symbols do not, and hand back to what was showing
-						if (selects == QDOS_PAD_ALPHA)
-							st->locked = QDOS_PAD_ALPHA;
-					}
-					push_frame(st);
-					break;
-				}
-
-				const qdos_pad_action* a = qdos_pad_action_for(b, st->layer);
-				const qdos_pad_layer was = st->layer;
-				st->layer = st->locked;
-				if (a == NULL) {
-					if (was != st->layer)
-						push_frame(st);
-					break;
-				}
-				if (was != st->layer)
-					push_frame(st);
-
-				if (a->key != QDOS_KEY_NONE) {
-					out->key = a->key;
-					out->ch = 0;
-					return true;
-				}
-				st->pending = a->text;
-				out->key = QDOS_KEY_CHAR;
-				out->ch = *st->pending++;
-				return true;
+		case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+			const qdos_pad_button* b = qdos_pad_at((int)event.button.x / st->scale, (int)event.button.y / st->scale);
+			if (b == NULL) {
+				break;
 			}
 
-			case SDL_EVENT_QUIT:
-				st->running = false;
-				return false;
+			// Shown before the key is acted on, so the press lands even
+			// where the action itself changes nothing on screen
+			st->pressed = b;
+			push_frame(st);
 
-			case SDL_EVENT_TEXT_INPUT:
-				if (event.text.text[0]) {
-					map_char(event.text.text[0], out);
-					return true;
+			qdos_pad_layer selects;
+			if (qdos_pad_modifier(b, &selects)) {
+				if (st->layer == selects) {
+					st->layer = QDOS_PAD_PLAIN;
+					st->locked = QDOS_PAD_PLAIN;
+				} else {
+					st->layer = selects;
+					// Letters lock, since a name is more than one press;
+					// symbols do not, and hand back to what was showing
+					if (selects == QDOS_PAD_ALPHA) {
+						st->locked = QDOS_PAD_ALPHA;
+					}
+				}
+				push_frame(st);
+				break;
+			}
+
+			const qdos_pad_action* a = qdos_pad_action_for(b, st->layer);
+			const qdos_pad_layer was = st->layer;
+			st->layer = st->locked;
+			if (a == NULL) {
+				if (was != st->layer) {
+					push_frame(st);
 				}
 				break;
+			}
+			if (was != st->layer) {
+				push_frame(st);
+			}
 
-			case SDL_EVENT_KEY_DOWN:
-				switch (event.key.key) {
-					case SDLK_RETURN:
-					case SDLK_KP_ENTER:
-						out->key = QDOS_KEY_ENTER;
-						out->ch = 0;
-						return true;
-					case SDLK_BACKSPACE:
-						out->key = QDOS_KEY_BACKSPACE;
-						out->ch = 0;
-						return true;
-					case SDLK_TAB:
-						out->key = QDOS_KEY_TAB;
-						out->ch = 0;
-						return true;
-					case SDLK_UP:
-						out->key = QDOS_KEY_UP;
-						out->ch = 0;
-						return true;
-					case SDLK_DOWN:
-						out->key = QDOS_KEY_DOWN;
-						out->ch = 0;
-						return true;
-					case SDLK_LEFT:
-						out->key = QDOS_KEY_LEFT;
-						out->ch = 0;
-						return true;
-					case SDLK_RIGHT:
-						out->key = QDOS_KEY_RIGHT;
-						out->ch = 0;
-						return true;
-					case SDLK_F1:
-					case SDLK_F2:
-					case SDLK_F3:
-					case SDLK_F4:
-					case SDLK_F5:
-						out->key = (qdos_key)(QDOS_KEY_SOFT1 + (event.key.key - SDLK_F1));
-						out->ch = 0;
-						return true;
-					case SDLK_ESCAPE:
-						out->key = QDOS_KEY_CLEAR;
-						out->ch = 0;
-						return true;
-					case SDLK_F10:
-						out->key = QDOS_KEY_POWER;
-						out->ch = 0;
-						return true;
-					default:
-						break;
-				}
-				break;
+			if (a->key != QDOS_KEY_NONE) {
+				out->key = a->key;
+				out->ch = 0;
+				return true;
+			}
+			st->pending = a->text;
+			out->key = QDOS_KEY_CHAR;
+			out->ch = *st->pending++;
+			return true;
+		}
 
+		case SDL_EVENT_QUIT:
+			st->running = false;
+			return false;
+
+		case SDL_EVENT_TEXT_INPUT:
+			if (event.text.text[0]) {
+				map_char(event.text.text[0], out);
+				return true;
+			}
+			break;
+
+		case SDL_EVENT_KEY_DOWN:
+			switch (event.key.key) {
+			case SDLK_RETURN:
+			case SDLK_KP_ENTER:
+				out->key = QDOS_KEY_ENTER;
+				out->ch = 0;
+				return true;
+			case SDLK_BACKSPACE:
+				out->key = QDOS_KEY_BACKSPACE;
+				out->ch = 0;
+				return true;
+			case SDLK_TAB:
+				out->key = QDOS_KEY_TAB;
+				out->ch = 0;
+				return true;
+			case SDLK_UP:
+				out->key = QDOS_KEY_UP;
+				out->ch = 0;
+				return true;
+			case SDLK_DOWN:
+				out->key = QDOS_KEY_DOWN;
+				out->ch = 0;
+				return true;
+			case SDLK_LEFT:
+				out->key = QDOS_KEY_LEFT;
+				out->ch = 0;
+				return true;
+			case SDLK_RIGHT:
+				out->key = QDOS_KEY_RIGHT;
+				out->ch = 0;
+				return true;
+			case SDLK_F1:
+			case SDLK_F2:
+			case SDLK_F3:
+			case SDLK_F4:
+			case SDLK_F5:
+				out->key = (qdos_key)(QDOS_KEY_SOFT1 + (event.key.key - SDLK_F1));
+				out->ch = 0;
+				return true;
+			case SDLK_ESCAPE:
+				out->key = QDOS_KEY_CLEAR;
+				out->ch = 0;
+				return true;
+			case SDLK_F10:
+				out->key = QDOS_KEY_POWER;
+				out->ch = 0;
+				return true;
 			default:
 				break;
+			}
+			break;
+
+		default:
+			break;
 		}
 	}
 	return false;
@@ -467,9 +495,12 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 
 static qdos_keypad_mod sim_modifier(qdos_hal* hal) {
 	switch (((sim_state*)hal->impl)->layer) {
-		case QDOS_PAD_ALPHA: return QDOS_MOD_ALPHA;
-		case QDOS_PAD_SYMBOL: return QDOS_MOD_SYMBOL;
-		default: return QDOS_MOD_NONE;
+	case QDOS_PAD_ALPHA:
+		return QDOS_MOD_ALPHA;
+	case QDOS_PAD_SYMBOL:
+		return QDOS_MOD_SYMBOL;
+	default:
+		return QDOS_MOD_NONE;
 	}
 }
 
@@ -485,10 +516,11 @@ static uint32_t sim_ticks_ms(qdos_hal* hal) {
 static void sim_wait(qdos_hal* hal, int timeout_ms) {
 	(void)hal;
 	// A NULL event leaves it on the queue, so sim_poll_key still sees it.
-	if (timeout_ms < 0)
+	if (timeout_ms < 0) {
 		SDL_WaitEvent(NULL);
-	else
+	} else {
 		SDL_WaitEventTimeout(NULL, timeout_ms);
+	}
 }
 
 /**
@@ -502,9 +534,12 @@ static const char* env_or(const char* name, const char* fallback) {
 
 static const char* dir_for(qdos_store_scope scope) {
 	switch (scope) {
-		case QDOS_SCOPE_SYSTEM: return env_or("QDOS_SYSTEM_STORE", SIM_SYSTEM_DIR);
-		case QDOS_SCOPE_INBOX: return env_or("QDOS_INBOX", SIM_INBOX_DIR);
-		default: return env_or("QDOS_STORE", SIM_STORE_DIR);
+	case QDOS_SCOPE_SYSTEM:
+		return env_or("QDOS_SYSTEM_STORE", SIM_SYSTEM_DIR);
+	case QDOS_SCOPE_INBOX:
+		return env_or("QDOS_INBOX", SIM_INBOX_DIR);
+	default:
+		return env_or("QDOS_STORE", SIM_STORE_DIR);
 	}
 }
 
@@ -514,8 +549,9 @@ static bool scope_is_reachable(const sim_state* st, qdos_store_scope scope) {
 }
 
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
-	if (!qdos_store_name_ok(name))
+	if (!qdos_store_name_ok(name)) {
 		return false;
+	}
 
 	const int written = snprintf(buf, cap, "%s/%s", dir, name);
 	return written > 0 && (size_t)written < cap;
@@ -523,8 +559,9 @@ static bool store_path(const char* dir, const char* name, char* buf, size_t cap)
 
 static bool is_dir(const char* dir, const char* name) {
 	char path[512];
-	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path))
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path)) {
 		return false;
+	}
 
 	struct stat sb;
 	return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
@@ -532,27 +569,32 @@ static bool is_dir(const char* dir, const char* name) {
 
 static qdos_store_result sim_store_read(
 		qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
-	if (!scope_is_reachable((sim_state*)hal->impl, scope))
+	if (!scope_is_reachable((sim_state*)hal->impl, scope)) {
 		return QDOS_STORE_NOT_FOUND;
+	}
 
 	char path[512];
-	if (!store_path(dir_for(scope), name, path, sizeof(path)))
+	if (!store_path(dir_for(scope), name, path, sizeof(path))) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	FILE* f = fopen(path, "rb");
-	if (!f)
+	if (!f) {
 		return QDOS_STORE_NOT_FOUND;
+	}
 
 	const size_t got = fread(buf, 1, cap, f);
 	// A full buffer with bytes left is too-small, not a short read.
 	const bool overflowed = (got == cap) && (fgetc(f) != EOF);
 	fclose(f);
 
-	if (overflowed)
+	if (overflowed) {
 		return QDOS_STORE_TOO_BIG;
+	}
 
-	if (len)
+	if (len) {
 		*len = got;
+	}
 	return QDOS_STORE_OK;
 }
 
@@ -560,8 +602,9 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 	(void)hal;
 
 	char path[512];
-	if (!store_path(dir_for(QDOS_SCOPE_USER), name, path, sizeof(path)))
+	if (!store_path(dir_for(QDOS_SCOPE_USER), name, path, sizeof(path))) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	mkdir(dir_for(QDOS_SCOPE_USER), 0755); // may already exist, which is fine
 
@@ -574,18 +617,19 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 	}
 
 	FILE* f = fopen(path, "wb");
-	if (!f)
+	if (!f) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	const size_t written = fwrite(buf, 1, len, f);
 	const bool ok = (fclose(f) == 0) && (written == len);
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
-static bool sim_store_path(
-		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
-	if (!scope_is_reachable((sim_state*)hal->impl, scope))
+static bool sim_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+	if (!scope_is_reachable((sim_state*)hal->impl, scope)) {
 		return false;
+	}
 	return store_path(dir_for(scope), name, buf, cap);
 }
 
@@ -599,46 +643,51 @@ static int sim_usb_export(qdos_hal* hal, bool on) {
 	sim_state* st = (sim_state*)hal->impl;
 
 	st->shared = on;
-	if (on)
-		printf("qdos: card shared -- drop .qd, lib*.so or an app folder in %s/\n",
-				dir_for(QDOS_SCOPE_INBOX));
-	else
+	if (on) {
+		printf("qdos: card shared -- drop .qd, lib*.so or an app folder in %s/\n", dir_for(QDOS_SCOPE_INBOX));
+	} else {
 		printf("qdos: card taken back\n");
+	}
 	fflush(stdout);
 
 	return 0;
 }
 
-static qdos_store_result sim_store_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
-		qdos_store_visit visit, void* user) {
+static qdos_store_result sim_store_list(
+		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
 	// An empty mount point rather than an error
-	if (!scope_is_reachable((sim_state*)hal->impl, scope))
+	if (!scope_is_reachable((sim_state*)hal->impl, scope)) {
 		return QDOS_STORE_OK;
+	}
 
 	char root[512];
-	if (folder == NULL || *folder == '\0')
+	if (folder == NULL || *folder == '\0') {
 		snprintf(root, sizeof(root), "%s", dir_for(scope));
-	else if (!store_path(dir_for(scope), folder, root, sizeof(root)))
+	} else if (!store_path(dir_for(scope), folder, root, sizeof(root))) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	DIR* dir = opendir(root);
-	if (!dir)
+	if (!dir) {
 		return QDOS_STORE_NOT_FOUND;
+	}
 
 	const struct dirent* ent;
 	while ((ent = readdir(dir)) != NULL) {
-		if (ent->d_name[0] == '.')
+		if (ent->d_name[0] == '.') {
 			continue;
+		}
 
 		// A folder is listed with the mark on it, being an app and not a file
 		char name[288];
-		const int written = snprintf(
-				name, sizeof(name), "%s%s", ent->d_name, is_dir(root, ent->d_name) ? "/" : "");
-		if (written <= 0 || (size_t)written >= sizeof(name))
+		const int written = snprintf(name, sizeof(name), "%s%s", ent->d_name, is_dir(root, ent->d_name) ? "/" : "");
+		if (written <= 0 || (size_t)written >= sizeof(name)) {
 			continue;
+		}
 
-		if (!visit(name, user))
+		if (!visit(name, user)) {
 			break;
+		}
 	}
 
 	closedir(dir);

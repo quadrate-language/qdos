@@ -24,17 +24,43 @@ typedef struct {
 } layout_key;
 
 static const layout_key LAYOUT_US[] = {
-		{KEY_A, 'a', 'A', 0}, {KEY_B, 'b', 'B', 0}, {KEY_C, 'c', 'C', 0}, {KEY_D, 'd', 'D', 0},
-		{KEY_E, 'e', 'E', 0}, {KEY_F, 'f', 'F', 0}, {KEY_G, 'g', 'G', 0}, {KEY_H, 'h', 'H', 0},
-		{KEY_I, 'i', 'I', 0}, {KEY_J, 'j', 'J', 0}, {KEY_K, 'k', 'K', 0}, {KEY_L, 'l', 'L', 0},
-		{KEY_M, 'm', 'M', 0}, {KEY_N, 'n', 'N', 0}, {KEY_O, 'o', 'O', 0}, {KEY_P, 'p', 'P', 0},
-		{KEY_Q, 'q', 'Q', 0}, {KEY_R, 'r', 'R', 0}, {KEY_S, 's', 'S', 0}, {KEY_T, 't', 'T', 0},
-		{KEY_U, 'u', 'U', 0}, {KEY_V, 'v', 'V', 0}, {KEY_W, 'w', 'W', 0}, {KEY_X, 'x', 'X', 0},
-		{KEY_Y, 'y', 'Y', 0}, {KEY_Z, 'z', 'Z', 0},
+		{KEY_A, 'a', 'A', 0},
+		{KEY_B, 'b', 'B', 0},
+		{KEY_C, 'c', 'C', 0},
+		{KEY_D, 'd', 'D', 0},
+		{KEY_E, 'e', 'E', 0},
+		{KEY_F, 'f', 'F', 0},
+		{KEY_G, 'g', 'G', 0},
+		{KEY_H, 'h', 'H', 0},
+		{KEY_I, 'i', 'I', 0},
+		{KEY_J, 'j', 'J', 0},
+		{KEY_K, 'k', 'K', 0},
+		{KEY_L, 'l', 'L', 0},
+		{KEY_M, 'm', 'M', 0},
+		{KEY_N, 'n', 'N', 0},
+		{KEY_O, 'o', 'O', 0},
+		{KEY_P, 'p', 'P', 0},
+		{KEY_Q, 'q', 'Q', 0},
+		{KEY_R, 'r', 'R', 0},
+		{KEY_S, 's', 'S', 0},
+		{KEY_T, 't', 'T', 0},
+		{KEY_U, 'u', 'U', 0},
+		{KEY_V, 'v', 'V', 0},
+		{KEY_W, 'w', 'W', 0},
+		{KEY_X, 'x', 'X', 0},
+		{KEY_Y, 'y', 'Y', 0},
+		{KEY_Z, 'z', 'Z', 0},
 
-		{KEY_1, '1', '!', 0}, {KEY_2, '2', '@', 0}, {KEY_3, '3', '#', 0}, {KEY_4, '4', '$', 0},
-		{KEY_5, '5', '%', 0}, {KEY_6, '6', '^', 0}, {KEY_7, '7', '&', 0}, {KEY_8, '8', '*', 0},
-		{KEY_9, '9', '(', 0}, {KEY_0, '0', ')', 0},
+		{KEY_1, '1', '!', 0},
+		{KEY_2, '2', '@', 0},
+		{KEY_3, '3', '#', 0},
+		{KEY_4, '4', '$', 0},
+		{KEY_5, '5', '%', 0},
+		{KEY_6, '6', '^', 0},
+		{KEY_7, '7', '&', 0},
+		{KEY_8, '8', '*', 0},
+		{KEY_9, '9', '(', 0},
+		{KEY_0, '0', ')', 0},
 
 		{KEY_MINUS, '-', '_', 0},
 		{KEY_EQUAL, '=', '+', 0},
@@ -53,13 +79,32 @@ static const layout_key LAYOUT_US[] = {
 /**
  */
 static const layout_key LAYOUT_SE[] = {
-		{KEY_A, 'a', 'A', 0}, {KEY_B, 'b', 'B', 0}, {KEY_C, 'c', 'C', 0}, {KEY_D, 'd', 'D', 0},
-		{KEY_E, 'e', 'E', 0}, {KEY_F, 'f', 'F', 0}, {KEY_G, 'g', 'G', 0}, {KEY_H, 'h', 'H', 0},
-		{KEY_I, 'i', 'I', 0}, {KEY_J, 'j', 'J', 0}, {KEY_K, 'k', 'K', 0}, {KEY_L, 'l', 'L', 0},
-		{KEY_M, 'm', 'M', 0}, {KEY_N, 'n', 'N', 0}, {KEY_O, 'o', 'O', 0}, {KEY_P, 'p', 'P', 0},
-		{KEY_Q, 'q', 'Q', 0}, {KEY_R, 'r', 'R', 0}, {KEY_S, 's', 'S', 0}, {KEY_T, 't', 'T', 0},
-		{KEY_U, 'u', 'U', 0}, {KEY_V, 'v', 'V', 0}, {KEY_W, 'w', 'W', 0}, {KEY_X, 'x', 'X', 0},
-		{KEY_Y, 'y', 'Y', 0}, {KEY_Z, 'z', 'Z', 0},
+		{KEY_A, 'a', 'A', 0},
+		{KEY_B, 'b', 'B', 0},
+		{KEY_C, 'c', 'C', 0},
+		{KEY_D, 'd', 'D', 0},
+		{KEY_E, 'e', 'E', 0},
+		{KEY_F, 'f', 'F', 0},
+		{KEY_G, 'g', 'G', 0},
+		{KEY_H, 'h', 'H', 0},
+		{KEY_I, 'i', 'I', 0},
+		{KEY_J, 'j', 'J', 0},
+		{KEY_K, 'k', 'K', 0},
+		{KEY_L, 'l', 'L', 0},
+		{KEY_M, 'm', 'M', 0},
+		{KEY_N, 'n', 'N', 0},
+		{KEY_O, 'o', 'O', 0},
+		{KEY_P, 'p', 'P', 0},
+		{KEY_Q, 'q', 'Q', 0},
+		{KEY_R, 'r', 'R', 0},
+		{KEY_S, 's', 'S', 0},
+		{KEY_T, 't', 'T', 0},
+		{KEY_U, 'u', 'U', 0},
+		{KEY_V, 'v', 'V', 0},
+		{KEY_W, 'w', 'W', 0},
+		{KEY_X, 'x', 'X', 0},
+		{KEY_Y, 'y', 'Y', 0},
+		{KEY_Z, 'z', 'Z', 0},
 
 		{KEY_1, '1', '!', 0},
 		{KEY_2, '2', '"', '@'},
@@ -113,40 +158,109 @@ bool qdos_keypad_map(uint16_t code, bool shift, bool altgr, qdos_key_event* out)
 
 	// The calculator's own keys act rather than type.
 	switch (code) {
-		case KEY_NUMERIC_0: case KEY_KP0: out->key = QDOS_KEY_0; return true;
-		case KEY_NUMERIC_1: case KEY_KP1: out->key = QDOS_KEY_1; return true;
-		case KEY_NUMERIC_2: case KEY_KP2: out->key = QDOS_KEY_2; return true;
-		case KEY_NUMERIC_3: case KEY_KP3: out->key = QDOS_KEY_3; return true;
-		case KEY_NUMERIC_4: case KEY_KP4: out->key = QDOS_KEY_4; return true;
-		case KEY_NUMERIC_5: case KEY_KP5: out->key = QDOS_KEY_5; return true;
-		case KEY_NUMERIC_6: case KEY_KP6: out->key = QDOS_KEY_6; return true;
-		case KEY_NUMERIC_7: case KEY_KP7: out->key = QDOS_KEY_7; return true;
-		case KEY_NUMERIC_8: case KEY_KP8: out->key = QDOS_KEY_8; return true;
-		case KEY_NUMERIC_9: case KEY_KP9: out->key = QDOS_KEY_9; return true;
+	case KEY_NUMERIC_0:
+	case KEY_KP0:
+		out->key = QDOS_KEY_0;
+		return true;
+	case KEY_NUMERIC_1:
+	case KEY_KP1:
+		out->key = QDOS_KEY_1;
+		return true;
+	case KEY_NUMERIC_2:
+	case KEY_KP2:
+		out->key = QDOS_KEY_2;
+		return true;
+	case KEY_NUMERIC_3:
+	case KEY_KP3:
+		out->key = QDOS_KEY_3;
+		return true;
+	case KEY_NUMERIC_4:
+	case KEY_KP4:
+		out->key = QDOS_KEY_4;
+		return true;
+	case KEY_NUMERIC_5:
+	case KEY_KP5:
+		out->key = QDOS_KEY_5;
+		return true;
+	case KEY_NUMERIC_6:
+	case KEY_KP6:
+		out->key = QDOS_KEY_6;
+		return true;
+	case KEY_NUMERIC_7:
+	case KEY_KP7:
+		out->key = QDOS_KEY_7;
+		return true;
+	case KEY_NUMERIC_8:
+	case KEY_KP8:
+		out->key = QDOS_KEY_8;
+		return true;
+	case KEY_NUMERIC_9:
+	case KEY_KP9:
+		out->key = QDOS_KEY_9;
+		return true;
 
-		case KEY_KPDOT: out->key = QDOS_KEY_DOT; return true;
-		case KEY_KPPLUS: out->key = QDOS_KEY_ADD; return true;
-		case KEY_KPMINUS: out->key = QDOS_KEY_SUB; return true;
-		case KEY_KPASTERISK: out->key = QDOS_KEY_MUL; return true;
-		case KEY_KPSLASH: out->key = QDOS_KEY_DIV; return true;
+	case KEY_KPDOT:
+		out->key = QDOS_KEY_DOT;
+		return true;
+	case KEY_KPPLUS:
+		out->key = QDOS_KEY_ADD;
+		return true;
+	case KEY_KPMINUS:
+		out->key = QDOS_KEY_SUB;
+		return true;
+	case KEY_KPASTERISK:
+		out->key = QDOS_KEY_MUL;
+		return true;
+	case KEY_KPSLASH:
+		out->key = QDOS_KEY_DIV;
+		return true;
 
-		case KEY_ENTER: case KEY_KPENTER: out->key = QDOS_KEY_ENTER; return true;
-		case KEY_BACKSPACE: out->key = QDOS_KEY_BACKSPACE; return true;
-		case KEY_TAB: out->key = QDOS_KEY_TAB; return true;
-		case KEY_UP: out->key = QDOS_KEY_UP; return true;
-		case KEY_DOWN: out->key = QDOS_KEY_DOWN; return true;
-		case KEY_LEFT: out->key = QDOS_KEY_LEFT; return true;
-		case KEY_RIGHT: out->key = QDOS_KEY_RIGHT; return true;
-		case KEY_F1: out->key = QDOS_KEY_SOFT1; return true;
-		case KEY_F2: out->key = QDOS_KEY_SOFT2; return true;
-		case KEY_F3: out->key = QDOS_KEY_SOFT3; return true;
-		case KEY_F4: out->key = QDOS_KEY_SOFT4; return true;
-		case KEY_F5: out->key = QDOS_KEY_SOFT5; return true;
-		case KEY_ESC: out->key = QDOS_KEY_CLEAR; return true;
-		case KEY_POWER: out->key = QDOS_KEY_POWER; return true;
+	case KEY_ENTER:
+	case KEY_KPENTER:
+		out->key = QDOS_KEY_ENTER;
+		return true;
+	case KEY_BACKSPACE:
+		out->key = QDOS_KEY_BACKSPACE;
+		return true;
+	case KEY_TAB:
+		out->key = QDOS_KEY_TAB;
+		return true;
+	case KEY_UP:
+		out->key = QDOS_KEY_UP;
+		return true;
+	case KEY_DOWN:
+		out->key = QDOS_KEY_DOWN;
+		return true;
+	case KEY_LEFT:
+		out->key = QDOS_KEY_LEFT;
+		return true;
+	case KEY_RIGHT:
+		out->key = QDOS_KEY_RIGHT;
+		return true;
+	case KEY_F1:
+		out->key = QDOS_KEY_SOFT1;
+		return true;
+	case KEY_F2:
+		out->key = QDOS_KEY_SOFT2;
+		return true;
+	case KEY_F3:
+		out->key = QDOS_KEY_SOFT3;
+		return true;
+	case KEY_F4:
+		out->key = QDOS_KEY_SOFT4;
+		return true;
+	case KEY_F5:
+		out->key = QDOS_KEY_SOFT5;
+		return true;
+	case KEY_ESC:
+		out->key = QDOS_KEY_CLEAR;
+		return true;
+	case KEY_POWER:
+		out->key = QDOS_KEY_POWER;
+		return true;
 
-		default:
-			break;
+	default:
+		break;
 	}
 
 	const layout_key* table = (g_layout == QDOS_LAYOUT_SE) ? LAYOUT_SE : LAYOUT_US;
@@ -172,15 +286,25 @@ bool qdos_keypad_map(uint16_t code, bool shift, bool altgr, qdos_key_event* out)
 			return true;
 		}
 		switch (ch) {
-			case '.': out->key = QDOS_KEY_DOT; return true;
-			case '+': out->key = QDOS_KEY_ADD; return true;
-			case '-': out->key = QDOS_KEY_SUB; return true;
-			case '*': out->key = QDOS_KEY_MUL; return true;
-			case '/': out->key = QDOS_KEY_DIV; return true;
-			default:
-				out->key = QDOS_KEY_CHAR;
-				out->ch = ch;
-				return true;
+		case '.':
+			out->key = QDOS_KEY_DOT;
+			return true;
+		case '+':
+			out->key = QDOS_KEY_ADD;
+			return true;
+		case '-':
+			out->key = QDOS_KEY_SUB;
+			return true;
+		case '*':
+			out->key = QDOS_KEY_MUL;
+			return true;
+		case '/':
+			out->key = QDOS_KEY_DIV;
+			return true;
+		default:
+			out->key = QDOS_KEY_CHAR;
+			out->ch = ch;
+			return true;
 		}
 	}
 	return false;

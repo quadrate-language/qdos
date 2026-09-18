@@ -21,14 +21,16 @@ static qd_interp* fresh(void) {
 /** How many descriptors this process holds, so a leak has somewhere to show */
 static int open_fds(void) {
 	DIR* dir = opendir("/proc/self/fd");
-	if (!dir)
+	if (!dir) {
 		return -1;
+	}
 
 	int count = 0;
 	const struct dirent* ent;
 	while ((ent = readdir(dir)) != NULL) {
-		if (ent->d_name[0] != '.')
+		if (ent->d_name[0] != '.') {
 			count++;
+		}
 	}
 	closedir(dir);
 	return count;
@@ -37,8 +39,9 @@ static int open_fds(void) {
 /** Identify whatever stdout currently points at */
 static bool stdout_identity(dev_t* dev, ino_t* ino) {
 	struct stat sb;
-	if (fstat(STDOUT_FILENO, &sb) != 0)
+	if (fstat(STDOUT_FILENO, &sb) != 0) {
 		return false;
+	}
 	*dev = sb.st_dev;
 	*ino = sb.st_ino;
 	return true;
@@ -101,8 +104,9 @@ static void test_no_descriptors_are_leaked(void) {
 	const int before = open_fds();
 	CHECK(before > 0);
 
-	for (int i = 0; i < 20; i++)
+	for (int i = 0; i < 20; i++) {
 		CHECK(qdos_guarded_eval(interp, "\"AGAIN\" print"));
+	}
 
 	CHECK(open_fds() == before);
 	qd_interp_destroy(interp);
@@ -159,8 +163,9 @@ static void test_nesting_leaks_nothing(void) {
 	const int before = open_fds();
 	CHECK(before > 0);
 
-	for (int i = 0; i < 20; i++)
+	for (int i = 0; i < 20; i++) {
 		CHECK(qdos_guarded_eval(interp, "nests"));
+	}
 
 	CHECK(open_fds() == before);
 	qd_interp_destroy(interp);
@@ -262,8 +267,9 @@ static void test_fatal_errors_leak_nothing(void) {
 	const int before = open_fds();
 	CHECK(before > 0);
 
-	for (int i = 0; i < 20; i++)
+	for (int i = 0; i < 20; i++) {
 		CHECK(!qdos_guarded_eval(interp, "boom"));
+	}
 
 	CHECK(open_fds() == before);
 	qd_interp_destroy(interp);

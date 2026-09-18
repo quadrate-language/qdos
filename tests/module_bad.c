@@ -41,6 +41,7 @@ static int refuse_open(const qdos_native_api* api) {
 	(void)api;
 	return 1;
 }
+
 #define MODULE_OPEN refuse_open
 #else
 #define MODULE_OPEN NULL

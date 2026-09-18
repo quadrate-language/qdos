@@ -29,15 +29,18 @@ static void store_reset(void) {
 	memset(g_slots, 0, sizeof(g_slots));
 }
 
-static qdos_store_result mem_read(qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
+static qdos_store_result mem_read(
+		qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
 	(void)hal;
 	for (int i = 0; i < SLOTS; i++) {
 		if (g_slots[i].used && g_slots[i].scope == scope && strcmp(g_slots[i].name, name) == 0) {
-			if (g_slots[i].len > cap)
+			if (g_slots[i].len > cap) {
 				return QDOS_STORE_TOO_BIG;
+			}
 			memcpy(buf, g_slots[i].data, g_slots[i].len);
-			if (len)
+			if (len) {
 				*len = g_slots[i].len;
+			}
 			return QDOS_STORE_OK;
 		}
 	}
@@ -46,8 +49,9 @@ static qdos_store_result mem_read(qdos_hal* hal, qdos_store_scope scope, const c
 
 static qdos_store_result mem_write(qdos_hal* hal, const char* name, const void* buf, size_t len) {
 	(void)hal;
-	if (len > SLOT_BYTES)
+	if (len > SLOT_BYTES) {
 		return QDOS_STORE_TOO_BIG;
+	}
 
 	int slot = -1;
 	for (int i = 0; i < SLOTS; i++) {
@@ -56,11 +60,13 @@ static qdos_store_result mem_write(qdos_hal* hal, const char* name, const void* 
 			slot = i;
 			break;
 		}
-		if (!g_slots[i].used && slot < 0)
+		if (!g_slots[i].used && slot < 0) {
 			slot = i;
+		}
 	}
-	if (slot < 0)
+	if (slot < 0) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	snprintf(g_slots[slot].name, sizeof(g_slots[slot].name), "%s", name);
 	memcpy(g_slots[slot].data, buf, len);
@@ -71,35 +77,39 @@ static qdos_store_result mem_write(qdos_hal* hal, const char* name, const void* 
 }
 
 /** A name with a '/' in it sits in a folder; see stub_list in test_shell.c */
-static qdos_store_result mem_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
-		qdos_store_visit visit, void* user) {
+static qdos_store_result mem_list(
+		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
 	(void)hal;
 	for (int i = 0; i < SLOTS; i++) {
-		if (!g_slots[i].used || g_slots[i].scope != scope)
+		if (!g_slots[i].used || g_slots[i].scope != scope) {
 			continue;
+		}
 
 		const char* name = g_slots[i].name;
 		const char* slash = strchr(name, '/');
 
 		if (folder != NULL) {
-			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0
-					|| folder[slash - name] != '\0')
+			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0 || folder[slash - name] != '\0') {
 				continue;
-			if (!visit(slash + 1, user))
+			}
+			if (!visit(slash + 1, user)) {
 				break;
+			}
 			continue;
 		}
 
 		if (slash != NULL) {
 			char dir[QDOS_PROGRAM_NAME_MAX];
 			snprintf(dir, sizeof(dir), "%.*s/", (int)(slash - name), name);
-			if (!visit(dir, user))
+			if (!visit(dir, user)) {
 				break;
+			}
 			continue;
 		}
 
-		if (!visit(name, user))
+		if (!visit(name, user)) {
 			break;
+		}
 	}
 	return QDOS_STORE_OK;
 }
@@ -107,8 +117,9 @@ static qdos_store_result mem_list(qdos_hal* hal, qdos_store_scope scope, const c
 /** Put a program in a read-only scope, which nothing is allowed to write */
 static void seed_scope(qdos_store_scope scope, const char* name, const char* source) {
 	for (int i = 0; i < SLOTS; i++) {
-		if (g_slots[i].used)
+		if (g_slots[i].used) {
 			continue;
+		}
 		snprintf(g_slots[i].name, sizeof(g_slots[i].name), "%s.qd", name);
 		memcpy(g_slots[i].data, source, strlen(source));
 		g_slots[i].len = strlen(source);
@@ -182,9 +193,9 @@ static void test_encoding_is_explicit(void) {
 	CHECK(qdos_value_encode(&one, buf, &len));
 	CHECK(len == 16);
 	CHECK(buf[0] == 'Q' && buf[1] == 'D' && buf[2] == 'S');
-	CHECK(buf[3] == 1);						 // version
+	CHECK(buf[3] == 1); // version
 	CHECK(buf[4] == QDOS_VALUE_INT);
-	CHECK(buf[8] == 1 && buf[9] == 0);		 // little-endian payload
+	CHECK(buf[8] == 1 && buf[9] == 0); // little-endian payload
 	CHECK(buf[15] == 0);
 }
 
@@ -235,7 +246,7 @@ static void test_save_load_erase(void) {
 	CHECK(qdos_storage_load(&hal, "reg00", &out) == QDOS_STORE_OK);
 	CHECK(out.i == 42);
 
-    // Erase leaves the entry present but empty, since the HAL has no delete
+	// Erase leaves the entry present but empty, since the HAL has no delete
 	CHECK(qdos_storage_erase(&hal, "reg00") == QDOS_STORE_OK);
 	CHECK(qdos_storage_load(&hal, "reg00", &out) == QDOS_STORE_OK);
 	CHECK(out.type == QDOS_VALUE_EMPTY);
@@ -510,8 +521,9 @@ static void test_the_card_sits_between_firmware_and_user(void) {
 	CHECK(qdos_program_save(&hal, "thing", "fn thing( -- r:i64) { 3 }") == QDOS_STORE_OK);
 
 	qd_interp* interp = qd_interp_create(256);
-	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++)
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
 		CHECK(qdos_programs_restore(&hal, (qdos_store_scope)scope, interp) == 1);
+	}
 
 	qd_interp_value value;
 	CHECK(qd_interp_eval(interp, "thing"));

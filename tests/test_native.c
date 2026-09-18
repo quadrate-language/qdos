@@ -34,13 +34,14 @@ static void store_reset(void) {
 }
 
 static void store_put(qdos_store_scope scope, const char* file) {
-	if (g_scope[scope].count < STORE_MAX)
+	if (g_scope[scope].count < STORE_MAX) {
 		g_scope[scope].name[g_scope[scope].count++] = file;
+	}
 }
 
 /** A name with a '/' in it sits in a folder; see stub_list in test_shell.c */
-static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, const char* folder,
-		qdos_store_visit visit, void* user) {
+static qdos_store_result stub_list(
+		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
 	(void)hal;
 
 	for (size_t i = 0; i < g_scope[scope].count; i++) {
@@ -48,30 +49,32 @@ static qdos_store_result stub_list(qdos_hal* hal, qdos_store_scope scope, const 
 		const char* slash = strchr(name, '/');
 
 		if (folder != NULL) {
-			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0
-					|| folder[slash - name] != '\0')
+			if (slash == NULL || strncmp(name, folder, (size_t)(slash - name)) != 0 || folder[slash - name] != '\0') {
 				continue;
-			if (!visit(slash + 1, user))
+			}
+			if (!visit(slash + 1, user)) {
 				break;
+			}
 			continue;
 		}
 
 		if (slash != NULL) {
 			char dir[QDOS_PROGRAM_NAME_MAX];
 			snprintf(dir, sizeof(dir), "%.*s/", (int)(slash - name), name);
-			if (!visit(dir, user))
+			if (!visit(dir, user)) {
 				break;
+			}
 			continue;
 		}
 
-		if (!visit(name, user))
+		if (!visit(name, user)) {
 			break;
+		}
 	}
 	return QDOS_STORE_OK;
 }
 
-static bool stub_path(
-		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+static bool stub_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	(void)hal;
 	(void)scope;
 
@@ -417,9 +420,9 @@ static void test_a_bad_module_is_refused(void) {
 		// It is still listed, so the machine can say what happened to it
 		CHECK(set.count == 1);
 		CHECK(set.entry[0].module == NULL);
-		if (strstr(set.entry[0].error, BAD[i].says) == NULL)
-			fprintf(stderr, "  %s said '%s', wanted '%s'\n", BAD[i].file, set.entry[0].error,
-					BAD[i].says);
+		if (strstr(set.entry[0].error, BAD[i].says) == NULL) {
+			fprintf(stderr, "  %s said '%s', wanted '%s'\n", BAD[i].file, set.entry[0].error, BAD[i].says);
+		}
 		CHECK(strstr(set.entry[0].error, BAD[i].says) != NULL);
 
 		// And it brings no words with it
@@ -516,12 +519,13 @@ static void test_without_a_path_there_are_no_modules(void) {
 
 /** More modules than there is room for stops rather than overruns. */
 static void test_the_set_has_a_limit(void) {
-	static const char* NAMES[] = {"liba.so", "libb.so", "libc.so", "libd.so", "libe.so", "libf.so",
-			"libg.so", "libh.so"};
+	static const char* NAMES[] = {
+			"liba.so", "libb.so", "libc.so", "libd.so", "libe.so", "libf.so", "libg.so", "libh.so"};
 
 	store_reset();
-	for (size_t i = 0; i < sizeof(NAMES) / sizeof(*NAMES); i++)
+	for (size_t i = 0; i < sizeof(NAMES) / sizeof(*NAMES); i++) {
 		store_put(QDOS_SCOPE_SYSTEM, NAMES[i]);
+	}
 	store_put(QDOS_SCOPE_SYSTEM, "libdemo.so"); // one past the eight
 
 	qdos_hal hal;

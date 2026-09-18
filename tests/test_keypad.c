@@ -58,7 +58,6 @@ static void test_mapping(void) {
 	CHECK(qdos_keypad_map(KEY_F1, false, false, &ev) && ev.key == QDOS_KEY_SOFT1);
 	CHECK(qdos_keypad_map(KEY_F5, false, false, &ev) && ev.key == QDOS_KEY_SOFT5);
 
-
 	// Line mode needs a full keyboard: a keypad has no letters, but the machine
 	// is used with a USB keyboard long before it has its own keys
 	CHECK(qdos_keypad_map(KEY_SEMICOLON, true, false, &ev) && ev.key == QDOS_KEY_CHAR && ev.ch == ':');
@@ -80,7 +79,6 @@ static void test_mapping(void) {
 	// Shift itself is a modifier, never an event
 	CHECK(!qdos_keypad_map(KEY_LEFTSHIFT, false, false, &ev));
 	CHECK(!qdos_keypad_map(KEY_RIGHTSHIFT, false, false, &ev));
-
 
 	// evdev gives the key, not the label, so the layout decides the character.
 	// On a Swedish keyboard the braces a function declaration needs are on
@@ -138,8 +136,9 @@ typedef struct {
 
 static bool fake_pad_open(fake_pad* pad) {
 	int fds[2];
-	if (pipe(fds) != 0)
+	if (pipe(fds) != 0) {
 		return false;
+	}
 
 	// qdos_keypad_open() opens the device non-blocking; the read loop relies on
 	// that to stop at the end of the queue rather than waiting for more
@@ -177,12 +176,14 @@ static qdos_key polled(const fake_pad* pad, char* ch) {
 	qdos_key_event ev;
 	memset(&ev, 0, sizeof(ev));
 	if (!qdos_keypad_poll(pad->read_fd, &ev)) {
-		if (ch)
+		if (ch) {
 			*ch = 0;
+		}
 		return QDOS_KEY_NONE;
 	}
-	if (ch)
+	if (ch) {
 		*ch = ev.ch;
+	}
 	return ev.key;
 }
 
@@ -323,33 +324,45 @@ static void test_poll_ignores_a_partial_record(void) {
 /* ---------------------------------------------------------------------- */
 
 static const int INJECTED_KEYS[] = {
-	KEY_1, KEY_SPACE, KEY_2, KEY_KPPLUS, KEY_ENTER, KEY_ESC, KEY_BACKSPACE,
+		KEY_1,
+		KEY_SPACE,
+		KEY_2,
+		KEY_KPPLUS,
+		KEY_ENTER,
+		KEY_ESC,
+		KEY_BACKSPACE,
 };
 #define INJECTED_COUNT ((int)(sizeof(INJECTED_KEYS) / sizeof(INJECTED_KEYS[0])))
 
 /** Create a virtual keypad. Returns the uinput fd, or -1 if unavailable. */
 static int uinput_create(void) {
 	int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
-	if (fd < 0)
+	if (fd < 0) {
 		return -1;
+	}
 
-	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0)
+	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0) {
 		goto fail;
-	for (int i = 0; i < INJECTED_COUNT; i++)
-		if (ioctl(fd, UI_SET_KEYBIT, INJECTED_KEYS[i]) < 0)
+	}
+	for (int i = 0; i < INJECTED_COUNT; i++) {
+		if (ioctl(fd, UI_SET_KEYBIT, INJECTED_KEYS[i]) < 0) {
 			goto fail;
+		}
+	}
 
 	struct uinput_setup setup;
 	memset(&setup, 0, sizeof(setup));
 	setup.id.bustype = BUS_VIRTUAL;
-	setup.id.vendor = 0x4744;  // "GD"
+	setup.id.vendor = 0x4744; // "GD"
 	setup.id.product = 0x0501;
 	snprintf(setup.name, sizeof(setup.name), "qdos-test-keypad");
 
-	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0)
+	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0) {
 		goto fail;
-	if (ioctl(fd, UI_DEV_CREATE) < 0)
+	}
+	if (ioctl(fd, UI_DEV_CREATE) < 0) {
 		goto fail;
+	}
 
 	return fd;
 fail:
@@ -361,15 +374,17 @@ fail:
  */
 static bool uinput_event_path(int uifd, char* path, size_t cap) {
 	char sysname[64];
-	if (ioctl(uifd, UI_GET_SYSNAME(sizeof(sysname)), sysname) < 0)
+	if (ioctl(uifd, UI_GET_SYSNAME(sizeof(sysname)), sysname) < 0) {
 		return false;
+	}
 
 	char dirpath[128];
 	snprintf(dirpath, sizeof(dirpath), "/sys/devices/virtual/input/%s", sysname);
 
 	DIR* dir = opendir(dirpath);
-	if (!dir)
+	if (!dir) {
 		return false;
+	}
 
 	bool found = false;
 	const struct dirent* entry;
@@ -395,15 +410,17 @@ static void inject(int uifd, int code) {
 	ev[1].type = EV_SYN;
 	ev[1].code = SYN_REPORT;
 
-	if (write(uifd, ev, sizeof(ev)) != (ssize_t)sizeof(ev))
+	if (write(uifd, ev, sizeof(ev)) != (ssize_t)sizeof(ev)) {
 		fprintf(stderr, "  warning: injection write failed: %s\n", strerror(errno));
+	}
 }
 
 /** Wait briefly for an event, since delivery is not instant. */
 static bool poll_with_timeout(int fd, qdos_key_event* out, int attempts) {
 	for (int i = 0; i < attempts; i++) {
-		if (qdos_keypad_poll(fd, out))
+		if (qdos_keypad_poll(fd, out)) {
 			return true;
+		}
 		const struct timespec pause = {.tv_sec = 0, .tv_nsec = 10 * 1000 * 1000};
 		nanosleep(&pause, NULL);
 	}
@@ -461,13 +478,13 @@ static void test_real_input_device(void) {
 		int code;
 		qdos_key expected;
 	} script[] = {
-		{KEY_1, QDOS_KEY_1},
-		{KEY_SPACE, QDOS_KEY_CHAR},
-		{KEY_2, QDOS_KEY_2},
-		{KEY_KPPLUS, QDOS_KEY_ADD},
-		{KEY_ENTER, QDOS_KEY_ENTER},
-		{KEY_ESC, QDOS_KEY_CLEAR},
-		{KEY_BACKSPACE, QDOS_KEY_BACKSPACE},
+			{KEY_1, QDOS_KEY_1},
+			{KEY_SPACE, QDOS_KEY_CHAR},
+			{KEY_2, QDOS_KEY_2},
+			{KEY_KPPLUS, QDOS_KEY_ADD},
+			{KEY_ENTER, QDOS_KEY_ENTER},
+			{KEY_ESC, QDOS_KEY_CLEAR},
+			{KEY_BACKSPACE, QDOS_KEY_BACKSPACE},
 	};
 
 	for (size_t i = 0; i < sizeof(script) / sizeof(script[0]); i++) {

@@ -15,12 +15,14 @@
 /** Count lit pixels in a character cell. */
 static int ink_pixels(const qdos_console* con, int col, int row) {
 	int count = 0;
-	for (int y = 0; y < QDOS_CELL_H; y++)
+	for (int y = 0; y < QDOS_CELL_H; y++) {
 		for (int x = 0; x < QDOS_CELL_W; x++) {
 			const size_t i = (size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + col * QDOS_CELL_W + x;
-			if (con->fb[i] == con->ink)
+			if (con->fb[i] == con->ink) {
 				count++;
+			}
 		}
+	}
 	return count;
 }
 
@@ -58,11 +60,12 @@ static void test_putc_out_of_bounds(void) {
 	qdos_console_putc(&con, QDOS_COLS, 0, 'X');
 	qdos_console_putc(&con, 0, QDOS_ROWS, 'X');
 
-	for (size_t i = 0; i < sizeof(con.fb); i++)
+	for (size_t i = 0; i < sizeof(con.fb); i++) {
 		if (con.fb[i] != con.paper) {
 			CHECK(0 && "out-of-bounds putc touched the framebuffer");
 			return;
 		}
+	}
 	CHECK(1);
 }
 
@@ -71,8 +74,9 @@ static void test_puts_clips(void) {
 	qdos_console_init(&con);
 
 	char long_line[QDOS_COLS * 2];
-	for (size_t i = 0; i < sizeof(long_line) - 1; i++)
+	for (size_t i = 0; i < sizeof(long_line) - 1; i++) {
 		long_line[i] = 'W';
+	}
 	long_line[sizeof(long_line) - 1] = '\0';
 
 	const int drawn = qdos_console_puts(&con, 0, 0, long_line);
@@ -95,8 +99,9 @@ static bool cell_holds(const qdos_console* con, int col, int row, char ch) {
 		const uint16_t bits = qdos_font_row(ch, y);
 		for (int x = 0; x < QDOS_CELL_W; x++) {
 			const size_t i = (size_t)(row * QDOS_CELL_H + y) * QDOS_SCREEN_W + col * QDOS_CELL_W + x;
-			if ((con->fb[i] == con->ink) != ((bits & (1u << x)) != 0))
+			if ((con->fb[i] == con->ink) != ((bits & (1u << x)) != 0)) {
 				return false;
+			}
 		}
 	}
 	return true;
@@ -169,8 +174,9 @@ static void dump_font(void) {
 		printf("'%c' (%d)\n", ch, (int)ch);
 		for (int row = 0; row < QDOS_CELL_H; row++) {
 			const uint16_t bits = qdos_font_row(ch, row);
-			for (int col = 0; col < QDOS_CELL_W; col++)
+			for (int col = 0; col < QDOS_CELL_W; col++) {
 				putchar((bits & (1u << col)) ? '#' : '.');
+			}
 			putchar('\n');
 		}
 		putchar('\n');
@@ -197,9 +203,11 @@ static void test_splash(void) {
 	CHECK(g_present_calls == 1);
 
 	int lit = 0;
-	for (size_t i = 0; i < sizeof(g_presented); i++)
-		if (g_presented[i] < 0x80)
+	for (size_t i = 0; i < sizeof(g_presented); i++) {
+		if (g_presented[i] < 0x80) {
 			lit++;
+		}
+	}
 	CHECK(lit > 500); // not a blank screen
 
 	// A backend with no display must be survivable
@@ -217,13 +225,19 @@ static void test_scaled_text(void) {
 	qdos_console_puts_centered(&con, 2, "X", 3);
 
 	int lit = 0, min_x = QDOS_SCREEN_W, max_x = 0;
-	for (int y = 0; y < QDOS_SCREEN_H; y++)
-		for (int x = 0; x < QDOS_SCREEN_W; x++)
+	for (int y = 0; y < QDOS_SCREEN_H; y++) {
+		for (int x = 0; x < QDOS_SCREEN_W; x++) {
 			if (con.fb[(size_t)y * QDOS_SCREEN_W + x] == con.ink) {
 				lit++;
-				if (x < min_x) min_x = x;
-				if (x > max_x) max_x = x;
+				if (x < min_x) {
+					min_x = x;
+				}
+				if (x > max_x) {
+					max_x = x;
+				}
 			}
+		}
+	}
 
 	CHECK(lit > 0);
 	CHECK(max_x - min_x > QDOS_FONT_W); // wider than one unscaled glyph
@@ -244,9 +258,11 @@ static void test_font_symmetry(void) {
 		for (int row = 0; row < QDOS_FONT_H; row++) {
 			const uint16_t bits = qdos_font_row(*ch, row);
 			uint16_t mirror = 0;
-			for (int col = 0; col < QDOS_FONT_W; col++)
-				if (bits & (1u << col))
+			for (int col = 0; col < QDOS_FONT_W; col++) {
+				if (bits & (1u << col)) {
 					mirror |= (uint16_t)(1u << (QDOS_FONT_W - 1 - col));
+				}
+			}
 			CHECK(bits == mirror);
 		}
 	}
@@ -258,20 +274,24 @@ static int interior_gaps(char ch) {
 	int gaps = 0;
 	for (int row = 0; row < QDOS_FONT_H; row++) {
 		const uint16_t bits = qdos_font_row(ch, row);
-		if (bits == 0)
+		if (bits == 0) {
 			continue;
+		}
 
 		int first = -1, last = -1;
 		for (int col = 0; col < QDOS_FONT_W; col++) {
 			if (bits & (1u << col)) {
-				if (first < 0)
+				if (first < 0) {
 					first = col;
+				}
 				last = col;
 			}
 		}
-		for (int col = first; col < last; col++)
-			if (!(bits & (1u << col)))
+		for (int col = first; col < last; col++) {
+			if (!(bits & (1u << col))) {
 				gaps++;
+			}
+		}
 	}
 	return gaps;
 }
@@ -292,9 +312,11 @@ static void test_zero_is_not_a_blob(void) {
 
 	// And it is still a slash: the two must not be the same glyph
 	bool differs = false;
-	for (int row = 0; row < QDOS_FONT_H; row++)
-		if (qdos_font_row('0', row) != qdos_font_row('O', row))
+	for (int row = 0; row < QDOS_FONT_H; row++) {
+		if (qdos_font_row('0', row) != qdos_font_row('O', row)) {
 			differs = true;
+		}
+	}
 	CHECK(differs);
 }
 
@@ -302,11 +324,13 @@ static void test_font_baseline(void) {
 	const int baseline = 21;
 	for (const char* ch = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 						  "abcdefghijklmnopqrstuvwxyz0123456789";
-		 *ch; ch++) {
+			*ch; ch++) {
 		int bottom = -1;
-		for (int row = 0; row < QDOS_FONT_H; row++)
-			if (qdos_font_row(*ch, row))
+		for (int row = 0; row < QDOS_FONT_H; row++) {
+			if (qdos_font_row(*ch, row)) {
 				bottom = row;
+			}
+		}
 		CHECK(bottom == baseline);
 	}
 }

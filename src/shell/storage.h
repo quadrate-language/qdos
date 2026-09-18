@@ -89,8 +89,7 @@ bool qdos_module_key(const char* name, char* buf, size_t cap);
 qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char* source);
 
 /** @brief NOT_FOUND if absent or erased */
-qdos_store_result qdos_program_load(
-		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap);
+qdos_store_result qdos_program_load(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap);
 
 qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name);
 

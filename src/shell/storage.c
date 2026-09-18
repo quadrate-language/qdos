@@ -67,31 +67,31 @@ bool qdos_value_encode(const qdos_value* value, uint8_t* out, size_t* len) {
 	out[4] = (uint8_t)value->type;
 
 	switch (value->type) {
-		case QDOS_VALUE_EMPTY:
-			*len = HEADER_SIZE;
-			return true;
+	case QDOS_VALUE_EMPTY:
+		*len = HEADER_SIZE;
+		return true;
 
-		case QDOS_VALUE_INT:
-			put_u64(&out[PAYLOAD_OFFSET], (uint64_t)value->i);
-			*len = HEADER_SIZE;
-			return true;
+	case QDOS_VALUE_INT:
+		put_u64(&out[PAYLOAD_OFFSET], (uint64_t)value->i);
+		*len = HEADER_SIZE;
+		return true;
 
-		case QDOS_VALUE_FLOAT: {
-			// Via the bit pattern, so the record does not depend on struct layout.
-			uint64_t bits = 0;
-			memcpy(&bits, &value->f, sizeof(bits));
-			put_u64(&out[PAYLOAD_OFFSET], bits);
-			*len = HEADER_SIZE;
-			return true;
-		}
+	case QDOS_VALUE_FLOAT: {
+		// Via the bit pattern, so the record does not depend on struct layout.
+		uint64_t bits = 0;
+		memcpy(&bits, &value->f, sizeof(bits));
+		put_u64(&out[PAYLOAD_OFFSET], bits);
+		*len = HEADER_SIZE;
+		return true;
+	}
 
-		case QDOS_VALUE_STRING: {
-			const size_t length = strnlen(value->s, QDOS_VALUE_STRING_MAX - 1);
-			put_u64(&out[PAYLOAD_OFFSET], (uint64_t)length);
-			memcpy(&out[HEADER_SIZE], value->s, length);
-			*len = HEADER_SIZE + length;
-			return true;
-		}
+	case QDOS_VALUE_STRING: {
+		const size_t length = strnlen(value->s, QDOS_VALUE_STRING_MAX - 1);
+		put_u64(&out[PAYLOAD_OFFSET], (uint64_t)length);
+		memcpy(&out[HEADER_SIZE], value->s, length);
+		*len = HEADER_SIZE + length;
+		return true;
+	}
 	}
 	return false;
 }
@@ -108,33 +108,33 @@ bool qdos_value_decode(const uint8_t* in, size_t len, qdos_value* value) {
 	const uint64_t payload = get_u64(&in[PAYLOAD_OFFSET]);
 
 	switch (in[4]) {
-		case QDOS_VALUE_EMPTY:
-			value->type = QDOS_VALUE_EMPTY;
-			return true;
+	case QDOS_VALUE_EMPTY:
+		value->type = QDOS_VALUE_EMPTY;
+		return true;
 
-		case QDOS_VALUE_INT:
-			value->type = QDOS_VALUE_INT;
-			value->i = (int64_t)payload;
-			return true;
+	case QDOS_VALUE_INT:
+		value->type = QDOS_VALUE_INT;
+		value->i = (int64_t)payload;
+		return true;
 
-		case QDOS_VALUE_FLOAT:
-			value->type = QDOS_VALUE_FLOAT;
-			memcpy(&value->f, &payload, sizeof(value->f));
-			return true;
+	case QDOS_VALUE_FLOAT:
+		value->type = QDOS_VALUE_FLOAT;
+		memcpy(&value->f, &payload, sizeof(value->f));
+		return true;
 
-		case QDOS_VALUE_STRING: {
-			// A length that overruns the record means the store is damaged
-			if (payload >= QDOS_VALUE_STRING_MAX || len < HEADER_SIZE + payload) {
-				return false;
-			}
-			value->type = QDOS_VALUE_STRING;
-			memcpy(value->s, &in[HEADER_SIZE], (size_t)payload);
-			value->s[payload] = '\0';
-			return true;
-		}
-
-		default:
+	case QDOS_VALUE_STRING: {
+		// A length that overruns the record means the store is damaged
+		if (payload >= QDOS_VALUE_STRING_MAX || len < HEADER_SIZE + payload) {
 			return false;
+		}
+		value->type = QDOS_VALUE_STRING;
+		memcpy(value->s, &in[HEADER_SIZE], (size_t)payload);
+		value->s[payload] = '\0';
+		return true;
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -183,42 +183,47 @@ bool qdos_register_key(int64_t slot, char* buf, size_t cap) {
 /** Name the entry holding one value of a saved session. */
 /** @brief Whether a name is safe as a filename and legal as a Quadrate word */
 static bool valid_program_name(const char* name) {
-	if (!name || !*name)
+	if (!name || !*name) {
 		return false;
+	}
 
 	size_t n = 0;
 	for (const char* c = name; *c; c++, n++) {
-		const bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-						(*c >= '0' && *c <= '9') || *c == '_';
-		if (!ok)
+		const bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_';
+		if (!ok) {
 			return false;
+		}
 	}
 	return n + PROGRAM_SUFFIX_LEN < QDOS_PROGRAM_NAME_MAX;
 }
 
 bool qdos_program_key(const char* name, char* buf, size_t cap) {
-	if (!valid_program_name(name))
+	if (!valid_program_name(name)) {
 		return false;
+	}
 
 	const int written = snprintf(buf, cap, "%s%s", name, PROGRAM_SUFFIX);
 	return written > 0 && (size_t)written < cap;
 }
 
 bool qdos_app_key(const char* app, const char* leaf, char* buf, size_t cap) {
-	if (!valid_program_name(app) || leaf == NULL || *leaf == '\0')
+	if (!valid_program_name(app) || leaf == NULL || *leaf == '\0') {
 		return false;
+	}
 
 	const int written = snprintf(buf, cap, "%s/%s", app, leaf);
 	return written > 0 && (size_t)written < cap;
 }
 
 bool qdos_app_name(const char* entry, char* out, size_t cap) {
-	if (entry == NULL)
+	if (entry == NULL) {
 		return false;
+	}
 
 	const size_t len = strlen(entry);
-	if (len < 2 || entry[len - 1] != QDOS_STORE_DIR_MARK || len > cap)
+	if (len < 2 || entry[len - 1] != QDOS_STORE_DIR_MARK || len > cap) {
 		return false;
+	}
 
 	memcpy(out, entry, len - 1);
 	out[len - 1] = '\0';
@@ -228,41 +233,48 @@ bool qdos_app_name(const char* entry, char* out, size_t cap) {
 }
 
 bool qdos_app_exists(qdos_hal* hal, const char* name) {
-	if (hal == NULL || hal->store_read == NULL)
+	if (hal == NULL || hal->store_read == NULL) {
 		return false;
+	}
 
 	char key[QDOS_PROGRAM_NAME_MAX * 2];
-	if (!qdos_app_key(name, QDOS_APP_MAIN, key, sizeof(key)))
+	if (!qdos_app_key(name, QDOS_APP_MAIN, key, sizeof(key))) {
 		return false;
+	}
 
 	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
 		char probe[1];
 		size_t len = 0;
-		const qdos_store_result r =
-				hal->store_read(hal, (qdos_store_scope)scope, key, probe, sizeof(probe), &len);
+		const qdos_store_result r = hal->store_read(hal, (qdos_store_scope)scope, key, probe, sizeof(probe), &len);
 
 		// A source of any length at all is there; TOO_BIG says so loudest
-		if (r == QDOS_STORE_TOO_BIG || (r == QDOS_STORE_OK && len > 0))
+		if (r == QDOS_STORE_TOO_BIG || (r == QDOS_STORE_OK && len > 0)) {
 			return true;
+		}
 	}
 	return false;
 }
 
 bool qdos_module_name(const char* entry, char* out, size_t cap) {
-	if (entry == NULL)
+	if (entry == NULL) {
 		return false;
+	}
 
 	const size_t len = strlen(entry);
-	if (len <= MODULE_PREFIX_LEN + MODULE_SUFFIX_LEN)
+	if (len <= MODULE_PREFIX_LEN + MODULE_SUFFIX_LEN) {
 		return false;
-	if (strncmp(entry, MODULE_PREFIX, MODULE_PREFIX_LEN) != 0)
+	}
+	if (strncmp(entry, MODULE_PREFIX, MODULE_PREFIX_LEN) != 0) {
 		return false;
-	if (strcmp(entry + len - MODULE_SUFFIX_LEN, MODULE_SUFFIX) != 0)
+	}
+	if (strcmp(entry + len - MODULE_SUFFIX_LEN, MODULE_SUFFIX) != 0) {
 		return false;
+	}
 
 	const size_t stem = len - MODULE_PREFIX_LEN - MODULE_SUFFIX_LEN;
-	if (stem >= cap)
+	if (stem >= cap) {
 		return false;
+	}
 
 	memcpy(out, entry + MODULE_PREFIX_LEN, stem);
 	out[stem] = '\0';
@@ -272,8 +284,9 @@ bool qdos_module_name(const char* entry, char* out, size_t cap) {
 }
 
 bool qdos_module_key(const char* name, char* buf, size_t cap) {
-	if (!valid_program_name(name))
+	if (!valid_program_name(name)) {
 		return false;
+	}
 
 	const int written = snprintf(buf, cap, "%s%s%s", MODULE_PREFIX, name, MODULE_SUFFIX);
 	return written > 0 && (size_t)written < cap;
@@ -286,34 +299,38 @@ bool qdos_module_key(const char* name, char* buf, size_t cap) {
  * everything else. Which one a name is, the card decides.
  */
 static bool source_key(qdos_hal* hal, const char* name, char* buf, size_t cap) {
-	if (qdos_app_exists(hal, name))
+	if (qdos_app_exists(hal, name)) {
 		return qdos_app_key(name, QDOS_APP_MAIN, buf, cap);
+	}
 
 	return qdos_program_key(name, buf, cap);
 }
 
 qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char* source) {
 	char key[QDOS_PROGRAM_NAME_MAX * 2];
-	if (!source_key(hal, name, key, sizeof(key)) || !source)
+	if (!source_key(hal, name, key, sizeof(key)) || !source) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	const size_t len = strnlen(source, QDOS_PROGRAM_MAX);
-	if (len == 0 || len == QDOS_PROGRAM_MAX)
+	if (len == 0 || len == QDOS_PROGRAM_MAX) {
 		return QDOS_STORE_TOO_BIG;
+	}
 
 	return hal->store_write(hal, key, source, len);
 }
 
-qdos_store_result qdos_program_load(
-		qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+qdos_store_result qdos_program_load(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	char key[QDOS_PROGRAM_NAME_MAX * 2];
-	if (!source_key(hal, name, key, sizeof(key)) || cap == 0)
+	if (!source_key(hal, name, key, sizeof(key)) || cap == 0) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	size_t len = 0;
 	const qdos_store_result result = hal->store_read(hal, scope, key, buf, cap - 1, &len);
-	if (result != QDOS_STORE_OK)
+	if (result != QDOS_STORE_OK) {
 		return result;
+	}
 
 	buf[len] = '\0';
 	// An erased program is a zero-byte file, not a missing one.
@@ -322,8 +339,9 @@ qdos_store_result qdos_program_load(
 
 qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name) {
 	char key[QDOS_PROGRAM_NAME_MAX * 2];
-	if (!source_key(hal, name, key, sizeof(key)))
+	if (!source_key(hal, name, key, sizeof(key))) {
 		return QDOS_STORE_IO_ERROR;
+	}
 
 	return hal->store_write(hal, key, "", 0);
 }
@@ -342,26 +360,31 @@ static bool restore_one(const char* entry, void* user) {
 	// point `main`, so they would overwrite each other. It is declared when it
 	// is run, and forgotten again afterwards.
 	const size_t len = strlen(entry);
-	if (len > 0 && entry[len - 1] == QDOS_STORE_DIR_MARK)
+	if (len > 0 && entry[len - 1] == QDOS_STORE_DIR_MARK) {
 		return true;
+	}
 
-	if (len <= PROGRAM_SUFFIX_LEN || strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0)
+	if (len <= PROGRAM_SUFFIX_LEN || strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0) {
 		return true;
+	}
 
 	char name[QDOS_PROGRAM_NAME_MAX];
 	const size_t stem = len - PROGRAM_SUFFIX_LEN;
-	if (stem >= sizeof(name))
+	if (stem >= sizeof(name)) {
 		return true;
+	}
 	memcpy(name, entry, stem);
 	name[stem] = '\0';
 
 	char source[QDOS_PROGRAM_MAX];
-	if (qdos_program_load(walk->hal, walk->scope, name, source, sizeof(source)) != QDOS_STORE_OK)
+	if (qdos_program_load(walk->hal, walk->scope, name, source, sizeof(source)) != QDOS_STORE_OK) {
 		return true;
+	}
 
 	// A stored program that kills the runtime must not stop the shell booting
-	if (qdos_guarded_eval(walk->interp, source) && qd_interp_last_declared(walk->interp))
+	if (qdos_guarded_eval(walk->interp, source) && qd_interp_last_declared(walk->interp)) {
 		walk->declared++;
+	}
 
 	return true;
 }
@@ -377,9 +400,15 @@ typedef struct {
 /** Mark an entry as found in this scope */
 static void mark_origin(qdos_program_entry* e, qdos_store_scope scope) {
 	switch (scope) {
-		case QDOS_SCOPE_SYSTEM: e->system = true; break;
-		case QDOS_SCOPE_INBOX: e->inbox = true; break;
-		default: e->user = true; break;
+	case QDOS_SCOPE_SYSTEM:
+		e->system = true;
+		break;
+	case QDOS_SCOPE_INBOX:
+		e->inbox = true;
+		break;
+	default:
+		e->user = true;
+		break;
 	}
 }
 
@@ -391,13 +420,14 @@ static bool gather_one(const char* entry, void* userdata) {
 
 	if (!app) {
 		const size_t len = strlen(entry);
-		if (len <= PROGRAM_SUFFIX_LEN
-				|| strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0)
+		if (len <= PROGRAM_SUFFIX_LEN || strcmp(entry + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) != 0) {
 			return true;
+		}
 
 		const size_t stem = len - PROGRAM_SUFFIX_LEN;
-		if (stem >= QDOS_PROGRAM_NAME_MAX)
+		if (stem >= QDOS_PROGRAM_NAME_MAX) {
 			return true;
+		}
 
 		memcpy(name, entry, stem);
 		name[stem] = '\0';
@@ -407,8 +437,9 @@ static bool gather_one(const char* entry, void* userdata) {
 	// dropped program is still listed unless its contents are looked at. A
 	// folder with nothing to run is not an app either.
 	char source[QDOS_PROGRAM_MAX];
-	if (qdos_program_load(w->hal, w->scope, name, source, sizeof(source)) != QDOS_STORE_OK)
+	if (qdos_program_load(w->hal, w->scope, name, source, sizeof(source)) != QDOS_STORE_OK) {
 		return true;
+	}
 
 	for (size_t i = 0; i < w->count; i++) {
 		if (strcmp(w->out[i].name, name) == 0) {
@@ -417,8 +448,9 @@ static bool gather_one(const char* entry, void* userdata) {
 		}
 	}
 
-	if (w->count >= w->cap)
+	if (w->count >= w->cap) {
 		return false;
+	}
 
 	qdos_program_entry* e = &w->out[w->count];
 	memset(e, 0, sizeof(*e));
@@ -431,10 +463,12 @@ static bool gather_one(const char* entry, void* userdata) {
 
 /** @brief Nearest first, the same order in which one shadows another */
 static int entry_rank(const qdos_program_entry* entry) {
-	if (entry->user)
+	if (entry->user) {
 		return 0;
-	if (entry->inbox)
+	}
+	if (entry->inbox) {
 		return 1;
+	}
 	return 2;
 }
 
@@ -448,8 +482,9 @@ static int entry_order(const void* a, const void* b) {
 }
 
 size_t qdos_programs_gather(qdos_hal* hal, qdos_program_entry* out, size_t cap) {
-	if (!hal->store_list || cap == 0)
+	if (!hal->store_list || cap == 0) {
 		return 0;
+	}
 
 	gather_walk walk = {.hal = hal, .out = out, .cap = cap, .count = 0, .scope = QDOS_SCOPE_SYSTEM};
 	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
@@ -479,13 +514,13 @@ bool qdos_program_is_inbox(qdos_hal* hal, const char* name) {
 }
 
 bool qdos_program_is_readonly(qdos_hal* hal, const char* name) {
-	return qdos_program_in_scope(hal, QDOS_SCOPE_SYSTEM, name)
-			|| qdos_program_in_scope(hal, QDOS_SCOPE_INBOX, name);
+	return qdos_program_in_scope(hal, QDOS_SCOPE_SYSTEM, name) || qdos_program_in_scope(hal, QDOS_SCOPE_INBOX, name);
 }
 
 int qdos_programs_restore(qdos_hal* hal, qdos_store_scope scope, qd_interp* interp) {
-	if (!hal->store_list)
+	if (!hal->store_list) {
 		return -1;
+	}
 
 	// A stored file that runs rather than declares would otherwise leave its
 	// values on the stack, and do it again on every boot. Trim back to what
@@ -499,8 +534,9 @@ int qdos_programs_restore(qdos_hal* hal, qdos_store_scope scope, qd_interp* inte
 	qd_context* ctx = qd_interp_context(interp);
 	while (qd_interp_depth(interp) > before) {
 		qd_stack_element_t discard;
-		if (qd_stack_pop(ctx->st, &discard) != QD_STACK_OK)
+		if (qd_stack_pop(ctx->st, &discard) != QD_STACK_OK) {
 			break;
+		}
 	}
 	return walk.declared;
 }
@@ -537,24 +573,24 @@ qdos_store_result qdos_storage_save_session(qdos_hal* hal, qd_interp* interp) {
 		qdos_value value;
 		memset(&value, 0, sizeof(value));
 		switch (from->type) {
-			case QD_STACK_TYPE_INT:
-				value.type = QDOS_VALUE_INT;
-				value.i = from->value.i;
-				break;
-			case QD_STACK_TYPE_FLOAT:
-				value.type = QDOS_VALUE_FLOAT;
-				value.f = from->value.f;
-				break;
-			case QD_STACK_TYPE_STR: {
-				const char* text = (from->value.s != NULL) ? qd_string_data(from->value.s) : NULL;
-				value.type = QDOS_VALUE_STRING;
-				snprintf(value.s, sizeof(value.s), "%s", (text != NULL) ? text : "");
-				break;
-			}
-			case QD_STACK_TYPE_PTR:
-				// A pointer means nothing after a power cycle
-				value.type = QDOS_VALUE_EMPTY;
-				break;
+		case QD_STACK_TYPE_INT:
+			value.type = QDOS_VALUE_INT;
+			value.i = from->value.i;
+			break;
+		case QD_STACK_TYPE_FLOAT:
+			value.type = QDOS_VALUE_FLOAT;
+			value.f = from->value.f;
+			break;
+		case QD_STACK_TYPE_STR: {
+			const char* text = (from->value.s != NULL) ? qd_string_data(from->value.s) : NULL;
+			value.type = QDOS_VALUE_STRING;
+			snprintf(value.s, sizeof(value.s), "%s", (text != NULL) ? text : "");
+			break;
+		}
+		case QD_STACK_TYPE_PTR:
+			// A pointer means nothing after a power cycle
+			value.type = QDOS_VALUE_EMPTY;
+			break;
 		}
 
 		char key[32];
@@ -596,10 +632,18 @@ qdos_store_result qdos_storage_restore_session(qdos_hal* hal, qd_interp* interp)
 		}
 
 		switch (value.type) {
-			case QDOS_VALUE_INT: qd_push_i(ctx, value.i); break;
-			case QDOS_VALUE_FLOAT: qd_push_f(ctx, value.f); break;
-			case QDOS_VALUE_STRING: qd_push_s(ctx, value.s); break;
-			case QDOS_VALUE_EMPTY: qd_push_i(ctx, 0); break;
+		case QDOS_VALUE_INT:
+			qd_push_i(ctx, value.i);
+			break;
+		case QDOS_VALUE_FLOAT:
+			qd_push_f(ctx, value.f);
+			break;
+		case QDOS_VALUE_STRING:
+			qd_push_s(ctx, value.s);
+			break;
+		case QDOS_VALUE_EMPTY:
+			qd_push_i(ctx, 0);
+			break;
 		}
 	}
 	return QDOS_STORE_OK;

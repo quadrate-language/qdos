@@ -50,8 +50,9 @@ static bool make_dirs(void) {
 static void write_helper(int code) {
 	FILE* f = fopen(g_helper, "w");
 	CHECK(f != NULL);
-	if (!f)
+	if (!f) {
 		return;
+	}
 
 	fprintf(f, "#!/bin/sh\necho \"$1\" >> %s\nexit %d\n", g_helper_log, code);
 	fclose(f);
@@ -64,8 +65,9 @@ static void helper_log(char* out, size_t cap) {
 	out[0] = '\0';
 
 	FILE* f = fopen(g_helper_log, "r");
-	if (!f)
+	if (!f) {
 		return;
+	}
 
 	const size_t got = fread(out, 1, cap - 1, f);
 	out[got] = '\0';
@@ -77,13 +79,15 @@ static void remove_tree(const char* dir) {
 	if (d != NULL) {
 		const struct dirent* ent;
 		while ((ent = readdir(d)) != NULL) {
-			if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+			if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
 				continue;
+			}
 
 			char path[512];
 			snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
-			if (unlink(path) != 0)
+			if (unlink(path) != 0) {
 				remove_tree(path);
+			}
 		}
 		closedir(d);
 	}
@@ -129,8 +133,9 @@ static void seed(const char* dir, const char* name, const char* text) {
 
 	FILE* f = fopen(path, "wb");
 	CHECK(f != NULL);
-	if (!f)
+	if (!f) {
 		return;
+	}
 	CHECK(fwrite(text, 1, strlen(text), f) == strlen(text));
 	fclose(f);
 }
@@ -242,7 +247,6 @@ static void test_a_name_cannot_leave_the_store(void) {
 	hal.shutdown(&hal);
 }
 
-
 /** Each scope is its own directory, and a read says which one it means. */
 static void test_the_scopes_are_separate(void) {
 	qdos_hal hal;
@@ -339,16 +343,18 @@ typedef struct {
 
 static bool collect(const char* name, void* user) {
 	visitor* v = user;
-	if (v->count < SEEN_MAX)
+	if (v->count < SEEN_MAX) {
 		snprintf(v->names[v->count], sizeof(v->names[0]), "%s", name);
+	}
 	v->count++;
 	return !(v->stop_after > 0 && v->count >= v->stop_after);
 }
 
 static bool saw(const visitor* v, const char* name) {
 	for (int i = 0; i < v->count && i < SEEN_MAX; i++) {
-		if (strcmp(v->names[i], name) == 0)
+		if (strcmp(v->names[i], name) == 0) {
 			return true;
+		}
 	}
 	return false;
 }
@@ -362,8 +368,7 @@ static void test_an_app_folder_is_written_and_listed(void) {
 
 	char buf[64];
 	size_t len = 0;
-	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "doom/main.qd", buf, sizeof(buf), &len)
-			== QDOS_STORE_OK);
+	CHECK(hal.store_read(&hal, QDOS_SCOPE_USER, "doom/main.qd", buf, sizeof(buf), &len) == QDOS_STORE_OK);
 	CHECK(len == 17);
 
 	// The card shows the folder with the mark on it, not what is inside it
@@ -480,8 +485,9 @@ static void test_usb_runs_the_helper(void) {
 	qdos_hal hal;
 	device_hal(&hal);
 	CHECK(hal.usb_export != NULL);
-	if (!hal.usb_export)
+	if (!hal.usb_export) {
 		return;
+	}
 
 	char log[128];
 	CHECK(hal.usb_export(&hal, true) == 0);
@@ -502,8 +508,9 @@ static void test_a_failing_helper_is_reported(void) {
 	qdos_hal hal;
 	device_hal(&hal);
 	CHECK(hal.usb_export != NULL);
-	if (!hal.usb_export)
+	if (!hal.usb_export) {
 		return;
+	}
 
 	CHECK(hal.usb_export(&hal, true) == -1);
 
@@ -539,8 +546,9 @@ static void test_usb_is_not_offered_for_a_helper_that_cannot_run(void) {
 }
 
 int main(void) {
-	if (!make_dirs())
+	if (!make_dirs()) {
 		return 1;
+	}
 
 	// init() has no panel to find here and says so on stderr, once per test
 	printf("device_store: the framebuffer complaints below are the point\n");
