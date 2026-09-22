@@ -7,7 +7,10 @@
 
 #include "../src/hal/sim/keypad_ui.h"
 #include "../src/hal/sim/padfont.h"
+#include "../src/shell/mathwords.h"
+#include "../src/shell/wordlist.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 
 static bool is_modifier(const qdos_pad_button* b, qdos_pad_layer want) {
@@ -936,6 +939,62 @@ static int dump_ppm(const char* path, qdos_pad_layer layer, const qdos_pad_butto
 	return 0;
 }
 
+/**
+ * Every Quadrate word the symbol layer types is a word the interpreter knows.
+ *
+ * The language drops instructions from time to time -- `roll` and `xor` both
+ * went when the bitwise operators moved into the bits module -- and on a pad
+ * where fifty keys were fought over, one that types a word nobody defines is a
+ * key spent on an error message.
+ */
+static void test_every_word_on_the_symbol_layer_exists(void) {
+	// Syntax, not vocabulary: these never appear in the word list
+	static const char* const SYNTAX[] = {"fn", "if", "else", "loop", "break", "i64", "f64", "str"};
+
+	// The vocabulary the shell has: the interpreter's, plus the math words
+	// QDOS registers itself because lib/math is a compiled-tier module
+	qd_interp* interp = qd_interp_create(4096);
+	qdos_register_math(interp);
+
+	qdos_wordlist words;
+	qdos_wordlist_gather(interp, &words);
+	CHECK(words.count > 0);
+
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			const char* text = qdos_pad_button_at(col, row)->symbol.text;
+			char token[QDOS_WORDLIST_NAME];
+			if (text == NULL || sscanf(text, "%31s", token) != 1) {
+				continue;
+			}
+
+			// Operators and punctuation are not looked up
+			if (isalpha((unsigned char)token[0]) == 0) {
+				continue;
+			}
+
+			bool skip = false;
+			for (size_t i = 0; i < sizeof(SYNTAX) / sizeof(SYNTAX[0]); i++) {
+				skip = skip || strcmp(token, SYNTAX[i]) == 0;
+			}
+			if (skip) {
+				continue;
+			}
+
+			bool found = false;
+			for (size_t i = 0; i < words.count; i++) {
+				found = found || strcmp(words.name[i], token) == 0;
+			}
+			if (!found) {
+				fprintf(stderr, "padui: '%s' is on the keypad and not in the vocabulary\n", token);
+			}
+			CHECK(found);
+		}
+	}
+
+	qd_interp_destroy(interp);
+}
+
 int main(int argc, char** argv) {
 	if (argc > 2 && strcmp(argv[1], "--dump") == 0) {
 		const qdos_pad_layer layer = (argc > 3 && strcmp(argv[3], "alpha") == 0)	? QDOS_PAD_ALPHA
@@ -967,6 +1026,7 @@ int main(int argc, char** argv) {
 	test_digits_survive_every_layer();
 	test_the_alphabet_is_complete();
 	test_what_the_letters_displaced_is_still_reachable();
+	test_every_word_on_the_symbol_layer_exists();
 	test_a_space_is_reachable();
 	test_default_layer_is_the_calculator();
 	test_default_layer_reaches_the_calculator();

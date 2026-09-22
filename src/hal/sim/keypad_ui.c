@@ -81,12 +81,15 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 
 		/*
 		 * The stack, which is Quadrate's own row. Above it, in yellow, is what else
-		 * can be done to the stack: shuffling, undoing, and the registers it is put
-		 * away in. STO and RCL take the digit after them.
+		 * can be done to the stack: shuffling, naming, undoing, and the registers it
+		 * is put away in. STO and RCL take the digit after them.
+		 *
+		 * `->` sits where `roll` did, which is where the language went: the deep
+		 * shuffling words were removed in favour of naming what you took.
 		 */
 		{BTN(KEY("dup", QDOS_KEY_DUP), TXT("O", "o"), TXT("nip", " nip ")),
 				BTN(KEY("drop", QDOS_KEY_DROP), TXT("P", "p"), KEY("UNDO", QDOS_KEY_UNDO)),
-				BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("roll", " roll ")),
+				BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("->", " -> ")),
 				BTN(KEY("over", QDOS_KEY_OVER), TXT("R", "r"), KEY("STO", QDOS_KEY_STO)),
 				BTN(KEY("rot", QDOS_KEY_ROT), TXT("S", "s"), KEY("RCL", QDOS_KEY_RCL))},
 
@@ -108,7 +111,7 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 		{BTN(KEY(QDOS_GLYPH_UP, QDOS_KEY_UP), NONE, KEY(QDOS_GLYPH_LEFT, QDOS_KEY_LEFT)),
 				BTN(KEY("7", QDOS_KEY_7), NONE, TXT("and", " and ")),
 				BTN(KEY("8", QDOS_KEY_8), NONE, TXT("or", " or ")),
-				BTN(KEY("9", QDOS_KEY_9), NONE, TXT("xor", " xor ")),
+				BTN(KEY("9", QDOS_KEY_9), NONE, TXT("shr", " shr ")),
 				BTN(KEY(QDOS_GLYPH_TIMES, QDOS_KEY_MUL), TXT("W", "w"), TXT("<", "<"))},
 
 		// Underscore on shift-minus, where both keyboards this reads from put it
