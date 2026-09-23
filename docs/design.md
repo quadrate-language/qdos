@@ -192,7 +192,10 @@ version to match. Modules are a firmware-image feature.
 
 The store speaks in bytes everywhere else, and this is the one thing that
 cannot: `dlopen` takes a path. Hence `hal->store_path`, NULL on a backend with
-no filesystem, and then the machine simply has no modules.
+no filesystem, and then the machine simply has no modules. Android adds one
+wrinkle: it maps nothing executable out of shared storage, where its inbox is,
+so with `QDOS_NATIVE_CACHE` set each module is copied into that private
+directory and opened from there.
 
 #### There is no graphics mode
 

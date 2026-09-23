@@ -11,8 +11,11 @@
 #include <quadrate/rt/runtime.h>
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Shims, not the runtime's own functions: a module never sees a qd_context. */
@@ -443,6 +446,75 @@ static void release(qdos_native_entry* entry) {
 	entry->error[0] = '\0';
 }
 
+static bool make_dir(const char* dir) {
+	return mkdir(dir, 0700) == 0 || errno == EEXIST;
+}
+
+/**
+ * @brief The file to dlopen: the module itself, or a copy of it
+ *
+ * Android maps nothing executable out of shared storage, where its inbox is,
+ * so with QDOS_NATIVE_CACHE set each module is copied into that private
+ * directory first, laid out as the stores are: `<cache>/<scope>/doom/libdoom.so`.
+ * The copy is renamed into place, so a module still mapped from an earlier
+ * load keeps the file it has.
+ */
+static bool loadable(qdos_store_scope scope, const char* key, const char* path, char* buf, size_t cap) {
+	const char* cache = getenv("QDOS_NATIVE_CACHE");
+	if (cache == NULL || *cache == '\0') {
+		const int written = snprintf(buf, cap, "%s", path);
+		return written > 0 && (size_t)written < cap;
+	}
+
+	char dir[512];
+	int written = snprintf(dir, sizeof(dir), "%s/%d", cache, (int)scope);
+	if (written <= 0 || (size_t)written >= sizeof(dir) || !make_dir(cache) || !make_dir(dir)) {
+		return false;
+	}
+
+	const char* slash = strchr(key, '/');
+	if (slash != NULL) {
+		const size_t len = strlen(dir);
+		written = snprintf(dir + len, sizeof(dir) - len, "/%.*s", (int)(slash - key), key);
+		if (written <= 0 || (size_t)written >= sizeof(dir) - len || !make_dir(dir)) {
+			return false;
+		}
+	}
+
+	char tmp[520];
+	written = snprintf(buf, cap, "%s/%d/%s", cache, (int)scope, key);
+	if (written <= 0 || (size_t)written >= cap ||
+			snprintf(tmp, sizeof(tmp), "%s.tmp", buf) >= (int)sizeof(tmp)) {
+		return false;
+	}
+
+	FILE* in = fopen(path, "rb");
+	if (in == NULL) {
+		return false;
+	}
+	FILE* out = fopen(tmp, "wb");
+	if (out == NULL) {
+		fclose(in);
+		return false;
+	}
+
+	char chunk[8192];
+	size_t n;
+	bool ok = true;
+	while (ok && (n = fread(chunk, 1, sizeof(chunk), in)) > 0) {
+		ok = fwrite(chunk, 1, n, out) == n;
+	}
+	ok = ok && !ferror(in);
+	fclose(in);
+	ok = (fclose(out) == 0) && ok;
+
+	if (!ok || rename(tmp, buf) != 0) {
+		unlink(tmp);
+		return false;
+	}
+	return true;
+}
+
 typedef struct {
 	qdos_natives* set;
 	qdos_hal* hal;
@@ -499,7 +571,10 @@ static bool load_one(const char* file, void* userdata) {
 	write_text(walk->hal, NATIVE_LOADING_KEY, name);
 
 	// RTLD_NOW: an unresolved symbol is a refusal now, not mid-calculation
-	void* handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+	char open_path[512];
+	void* handle = loadable(walk->scope, key, path, open_path, sizeof(open_path))
+			? dlopen(open_path, RTLD_NOW | RTLD_LOCAL)
+			: NULL;
 	if (handle == NULL) {
 		snprintf(entry->error, sizeof(entry->error), "WILL NOT LOAD");
 		write_text(walk->hal, NATIVE_LOADING_KEY, "");

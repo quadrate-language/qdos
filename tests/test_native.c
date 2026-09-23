@@ -6,6 +6,9 @@
  * descriptor, dynamic linker, function table, and a word called from Quadrate.
  */
 
+// setenv and mkdtemp on top of a strict c11 build
+#define _POSIX_C_SOURCE 200809L
+
 #include "check.h"
 
 #include "shell/native.h"
@@ -15,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef MODULE_DIR
 #define MODULE_DIR "."
@@ -245,6 +249,38 @@ static void test_a_module_inside_an_app_belongs_to_it(void) {
 
 	qd_interp_destroy(interp);
 	qdos_natives_unload(&set);
+}
+
+/** Android cannot map a module out of its inbox, so it is opened from a copy. */
+static void test_a_module_can_be_opened_from_a_copy(void) {
+	store_reset();
+	store_put(QDOS_SCOPE_INBOX, "doom/libdemo.so");
+
+	char cache[] = "/tmp/qdos-native-XXXXXX";
+	CHECK(mkdtemp(cache) != NULL);
+	setenv("QDOS_NATIVE_CACHE", cache, 1);
+
+	qdos_hal hal;
+	stub_hal(&hal);
+
+	qdos_natives set;
+	memset(&set, 0, sizeof(set));
+	CHECK(qdos_natives_load(&set, &hal, QDOS_SCOPE_INBOX) == 1);
+	CHECK(set.entry[0].error[0] == '\0');
+
+	char copy[512];
+	snprintf(copy, sizeof(copy), "%s/%d/doom/libdemo.so", cache, (int)QDOS_SCOPE_INBOX);
+	CHECK(access(copy, R_OK) == 0);
+
+	qdos_natives_unload(&set);
+	unsetenv("QDOS_NATIVE_CACHE");
+
+	unlink(copy);
+	snprintf(copy, sizeof(copy), "%s/%d/doom", cache, (int)QDOS_SCOPE_INBOX);
+	rmdir(copy);
+	snprintf(copy, sizeof(copy), "%s/%d", cache, (int)QDOS_SCOPE_INBOX);
+	rmdir(copy);
+	rmdir(cache);
 }
 
 /** One loose on the card belongs to nothing, and is listed in its own right. */
@@ -543,6 +579,7 @@ int main(void) {
 	test_module_names();
 	test_a_module_brings_words();
 	test_a_module_inside_an_app_belongs_to_it();
+	test_a_module_can_be_opened_from_a_copy();
 	test_a_module_on_the_card_belongs_to_no_app();
 	test_a_word_can_fail();
 	test_the_signature_is_checked();
