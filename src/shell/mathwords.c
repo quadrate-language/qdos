@@ -295,54 +295,60 @@ static int w_e(qd_context* ctx, void* user) {
 #define UNARY "(x:f64 -- r:f64)"
 #define BINARY "(a:f64 b:f64 -- r:f64)"
 
-void qdos_register_math(qd_interp* interp) {
-	static const struct {
-		const char* name;
-		const char* signature;
-		qd_interp_native_fn fn;
-	} WORDS[] = {
-			{"sinh", UNARY, w_sinh},
-			{"cosh", UNARY, w_cosh},
-			{"tanh", UNARY, w_tanh},
-			{"asinh", UNARY, w_asinh},
-			{"sq", UNARY, w_sq},
-			{"cb", UNARY, w_cb},
-			{"cbrt", UNARY, w_cbrt},
-			{"exp", UNARY, w_exp},
-			{"exp2", UNARY, w_exp2},
-			{"ceil", UNARY, w_ceil},
-			{"floor", UNARY, w_floor},
-			{"round", UNARY, w_round},
-			{"trunc", UNARY, w_trunc},
-			{"abs", UNARY, w_abs},
-			{"sin", UNARY, w_sin},
-			{"cos", UNARY, w_cos},
-			{"tan", UNARY, w_tan},
-			{"asin", UNARY, w_asin},
-			{"acos", UNARY, w_acos},
-			{"atan", UNARY, w_atan},
-			{"sqrt", UNARY, w_sqrt},
-			{"ln", UNARY, w_ln},
-			{"log10", UNARY, w_log10},
-			// What a calculator means by log, so the cap can say it
-			{"log", UNARY, w_log10},
-			{"log2", UNARY, w_log2},
-			{"acosh", UNARY, w_acosh},
-			{"atanh", UNARY, w_atanh},
-			{"inv", UNARY, w_inv},
-			{"fac", UNARY, w_fac},
-			{"pow", BINARY, w_pow},
-			{"hypot", BINARY, w_hypot},
-			{"min", BINARY, w_min},
-			{"max", BINARY, w_max},
-			{"fmod", BINARY, w_fmod},
-			{"divide", BINARY, w_divide},
-			{"atan2", BINARY, w_atan2},
-			{"pi", "( -- r:f64)", w_pi},
-			{"e", "( -- r:f64)", w_e},
-	};
+static const struct {
+	const char* name;
+	const char* signature;
+	qd_interp_native_fn fn;
+} WORDS[] = {
+		{"sinh", UNARY, w_sinh},
+		{"cosh", UNARY, w_cosh},
+		{"tanh", UNARY, w_tanh},
+		{"asinh", UNARY, w_asinh},
+		{"sq", UNARY, w_sq},
+		{"cb", UNARY, w_cb},
+		{"cbrt", UNARY, w_cbrt},
+		{"exp", UNARY, w_exp},
+		{"exp2", UNARY, w_exp2},
+		{"ceil", UNARY, w_ceil},
+		{"floor", UNARY, w_floor},
+		{"round", UNARY, w_round},
+		{"trunc", UNARY, w_trunc},
+		{"abs", UNARY, w_abs},
+		{"sin", UNARY, w_sin},
+		{"cos", UNARY, w_cos},
+		{"tan", UNARY, w_tan},
+		{"asin", UNARY, w_asin},
+		{"acos", UNARY, w_acos},
+		{"atan", UNARY, w_atan},
+		{"sqrt", UNARY, w_sqrt},
+		{"ln", UNARY, w_ln},
+		{"log10", UNARY, w_log10},
+		// What a calculator means by log, so the cap can say it
+		{"log", UNARY, w_log10},
+		{"log2", UNARY, w_log2},
+		{"acosh", UNARY, w_acosh},
+		{"atanh", UNARY, w_atanh},
+		{"inv", UNARY, w_inv},
+		{"fac", UNARY, w_fac},
+		{"pow", BINARY, w_pow},
+		{"hypot", BINARY, w_hypot},
+		{"min", BINARY, w_min},
+		{"max", BINARY, w_max},
+		{"fmod", BINARY, w_fmod},
+		{"divide", BINARY, w_divide},
+		{"atan2", BINARY, w_atan2},
+		{"pi", "( -- r:f64)", w_pi},
+		{"e", "( -- r:f64)", w_e},
+};
 
+void qdos_register_math(qd_interp* interp) {
 	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++) {
 		qd_interp_register(interp, WORDS[i].name, WORDS[i].signature, WORDS[i].fn, NULL);
+	}
+}
+
+void qdos_math_visit(qdos_math_visitor visit, void* user) {
+	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++) {
+		visit(user, WORDS[i].name, WORDS[i].signature);
 	}
 }

@@ -58,12 +58,8 @@ typedef enum {
 	QDOS_KEY_MOD,
 	QDOS_KEY_ROT,
 	QDOS_KEY_OVER,
-	QDOS_KEY_ASIN,
-	QDOS_KEY_ACOS,
-	QDOS_KEY_ATAN,
-	QDOS_KEY_EXP,
 #define QDOS_KEY_FN_FIRST QDOS_KEY_SIN
-#define QDOS_KEY_FN_LAST QDOS_KEY_EXP
+#define QDOS_KEY_FN_LAST QDOS_KEY_OVER
 
 	/* Editing and control */
 	QDOS_KEY_ENTER,
@@ -100,6 +96,26 @@ typedef enum {
 	/* Any other printable character, ASCII value in qdos_key_event.ch. How
 	 * the full language reaches a keypad with no letters on it. */
 	QDOS_KEY_CHAR,
+
+	/*
+	 * Added since, and only ever added here. These numbers are what
+	 * `qdos::key` hands a Quadrate program and what a native module compares
+	 * against, and neither is rebuilt when QDOS is: a key put in the middle
+	 * renumbers every one after it, and DOOM's ESC becomes something else.
+	 */
+
+	/* More words with a key of their own, a second run beside FN_FIRST..LAST */
+	QDOS_KEY_ASIN,
+	QDOS_KEY_ACOS,
+	QDOS_KEY_ATAN,
+	QDOS_KEY_EXP,
+#define QDOS_KEY_FN2_FIRST QDOS_KEY_ASIN
+#define QDOS_KEY_FN2_LAST QDOS_KEY_EXP
+
+	QDOS_KEY_TRACE, ///< Follow the curve on a graph
+	QDOS_KEY_FIT,	///< Scale a graph's y to what it shows
+	QDOS_KEY_STD,	///< A graph's standard window
+	QDOS_KEY_GRAPH, ///< Pick a word to plot
 
 	QDOS_KEY__COUNT
 } qdos_key;

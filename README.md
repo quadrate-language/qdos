@@ -58,7 +58,7 @@ work at the prompt is not that, and would otherwise fill the store with every
 display; the last of them is the angle mode, and reads `DEG` or `RAD` rather
 than naming itself — it is the one setting that changes an answer without
 saying so, and a label that is the setting is already the annunciator. `STO`
-and `RCL` are shifted keys on the stack row and take the digit after them,
+and `RCL` are keys of their own beside the digits and take the digit after them,
 reaching registers 0 to 9; the other ninety are `n sto` and `n rcl` written
 out. Where the keypad has more than one face, which one is live shows beside
 the prompt (`:A `), because a keycap cannot light up.
@@ -67,6 +67,21 @@ the prompt (`:A `), because a keycap cannot light up.
 saving, `forget` removes one. Programs load from three scopes — system, inbox
 (uploaded over USB or on the card), user — and a user copy shadows the others.
 The stack and the registers survive a power cycle.
+
+`PLOT`, beside `APPS`, lists every word that can be plotted -- one taking one
+or two numbers and leaving one, read off its signature -- the prompt's and the
+programs' first, then the built-in maths (`sqrt`, `sin`, `hypot`, ...), and
+draws the one picked, in 2D or 3D as its shape says.
+
+`"f" graph` plots a word that takes x and leaves y, one sample per pixel
+column, with y scaled to fit. The arrows pan, `+` and `-` zoom, and the soft
+keys trace the curve (x and y read out under it), fit y again, or go back to
+the standard window of -10 to 10. The calculator's stack is left as it was.
+
+`"f" graph3` plots a word that takes x and y and leaves z, as a wireframe over
+-10 to 10 on both, sampled once on a 24x24 grid. The arrows turn and tilt it
+and `+` and `-` zoom; none of that runs the word again, so it turns as fast as
+it can be drawn. Hidden lines go by painting the cells back to front, filled.
 
 ## Apps
 

@@ -1315,6 +1315,333 @@ static void test_the_clock_turns_over_while_idle(void) {
 	CHECK(strstr(band, "10:00") != NULL);
 }
 
+/* The graph's readout sits where a message does, small */
+#define READOUT_Y0_T ERROR_Y0_T
+
+static bool plot_has_ink(const uint8_t* fb) {
+	int lit = 0;
+	for (int y = (ROW_STATUS_T + 1) * QDOS_CELL_H; y < (ROW_CONTENT_LAST_T + 1) * QDOS_CELL_H - 1; y++) {
+		for (int x = 0; x < QDOS_SCREEN_W; x++) {
+			lit += fb[(size_t)y * QDOS_SCREEN_W + x] < 0x80 ? 1 : 0;
+		}
+	}
+	return lit > QDOS_SCREEN_W; // more than an axis
+}
+
+/** `"f" graph` plots the word, says what and where, and offers trace. */
+static void test_graph_plots_a_word(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_more(script, &n, "\"sq\" graph");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(plot_has_ink(fb));
+	CHECK(status_band_is_black(fb));
+
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "sq") == line);
+	CHECK(strstr(line, "X -10:10") != NULL);
+	// Fitted to x^2 at the column centres, 0.025 to 9.975 squared, with 5% either side
+	CHECK(strstr(line, "Y -4.974:104.5") != NULL);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "TRACE") != NULL);
+	CHECK(strstr(row, "FIT") != NULL);
+}
+
+/** Plotting runs the word hundreds of times and leaves the stack as it found it. */
+static void test_graph_leaves_the_stack_alone(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_more(script, &n, "\"sq\" graph");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL);
+	CHECK(strstr(row, "42") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "2:") == NULL); // and nothing under it
+}
+
+/** Trace puts x and y in the readout, and the arrows walk it along the curve. */
+static void test_graph_trace_reads_the_curve(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "fn twice(x:f64 -- y:f64) { x 2 * }");
+	type_more(script, &n, "\"twice\" graph");
+	key(script, &n, QDOS_KEY_TRACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// The middle column of -10..10 over 400 is x = 0.025
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "X=0.025  Y=0.05") == 0);
+
+	key(script, &n, QDOS_KEY_RIGHT);
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "X=0.075  Y=0.15") == 0);
+}
+
+/** A word that is not there says so and leaves the calculator as it was. */
+static void test_graph_of_an_unknown_word(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"nosuch\" graph");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "nosuch") != NULL);
+	CHECK(error_cell_is(fb, 0, row[0], true));
+
+	char soft[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, soft, sizeof(soft));
+	CHECK(strstr(soft, "TRACE") == NULL);
+}
+
+/** One that does not take x and leave y is told what it has to do. */
+static void test_graph_of_the_wrong_shape(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "fn two(x:f64 -- a:f64 b:f64) { x x }");
+	type_more(script, &n, "\"two\" graph");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "MUST TAKE X, LEAVE Y") != NULL);
+
+	// And none of what it left behind is on the stack
+	char value[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, value, sizeof(value));
+	CHECK(strstr(value, "1:") == NULL);
+}
+
+/** `"f" graph3` draws the surface and says where it is seen from. */
+static void test_graph3_plots_a_surface(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "fn rip(x:f64 y:f64 -- z:f64) { x x * y y * + sqrt sin }");
+	type_more(script, &n, "\"rip\" graph3");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(plot_has_ink(fb));
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "rip  AZ 30 EL 25  Z -0.996:1") == line);
+
+	char soft[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, soft, sizeof(soft));
+	CHECK(strstr(soft, "STD") != NULL);
+
+	// Turned and tilted by the arrows, which only redraw it
+	key(script, &n, QDOS_KEY_LEFT);
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_UP);
+	store_reset(); // or the session saved by the run before comes back
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "AZ 15 EL 45") != NULL);
+
+	// Round past zero it reads as a whole turn, and STD brings it back
+	key(script, &n, QDOS_KEY_LEFT);
+	key(script, &n, QDOS_KEY_LEFT);
+	store_reset(); // or the session saved by the run before comes back
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "AZ 345") != NULL);
+	key(script, &n, QDOS_KEY_STD);
+	store_reset(); // or the session saved by the run before comes back
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "AZ 30 EL 25") != NULL);
+
+	// And the stack is as it was
+	key(script, &n, QDOS_KEY_CLEAR);
+	store_reset(); // or the session saved by the run before comes back
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "2:") == NULL);
+}
+
+/** A word taking only x is a curve, not a surface, and is told so. */
+static void test_graph3_of_the_wrong_shape(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_more(script, &n, "\"sq\" graph3");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "MUST TAKE X Y, LEAVE Z") != NULL);
+}
+
+/** PLOT sits by APPS and lists what can be plotted, from the prompt and the card. */
+static void test_the_graph_menu_lists_what_can_be_plotted(void) {
+	store_reset();
+	seed_system("waves", "fn wave(x:f64 -- y:f64) { x sin }\nfn helper( -- r:i64) { 5 }");
+
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_more(script, &n, "fn bowl(x:f64 y:f64 -- z:f64) { x x * y y * + }");
+	key(script, &n, QDOS_KEY_CLEAR); // out of line mode, back to the calculator
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Where CLR was, next to APPS
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "PLOT") != NULL && strstr(row, "PLOT") < strstr(row, "APPS"));
+	CHECK(strstr(row, "PLOTAPPS") == NULL); // a gap between them
+	CHECK(strstr(row, "CLR") == NULL);
+
+	key(script, &n, QDOS_KEY_SOFT1);
+	store_reset();
+	seed_system("waves", "fn wave(x:f64 -- y:f64) { x sin }\nfn helper( -- r:i64) { 5 }");
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "PLOT") == row);
+	CHECK(strstr(row, "1/") != NULL);
+
+	// The user's own first, in the order declared, then the card's; helper
+	// takes nothing, so is not one. The built-in sq is not listed twice.
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "sq") && strstr(row, "2D"));
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "bowl") && strstr(row, "3D"));
+	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	CHECK(strstr(row, "wave") && strstr(row, "2D"));
+	read_row(fb, ROW_CONTENT_FIRST_T + 3, row, sizeof(row));
+	CHECK(strstr(row, "helper") == NULL);
+	CHECK(strstr(row, "sq") == NULL);
+}
+
+/** Picking plots it the right way, and ESC comes back to the list, then leaves it. */
+static void test_picking_from_the_graph_menu(void) {
+	qdos_key_event script[200];
+	size_t n = 0;
+	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_more(script, &n, "fn bowl(x:f64 y:f64 -- z:f64) { x x * y y * + }");
+	key(script, &n, QDOS_KEY_CLEAR); // out of line mode, back to the calculator
+	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_DOWN);	 // bowl, the second declared
+	key(script, &n, QDOS_KEY_SOFT4); // PICK
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	store_reset();
+	run_script(script, n, fb);
+
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "bowl  AZ 30") == line);
+
+	key(script, &n, QDOS_KEY_CLEAR);
+	store_reset();
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "2/") != NULL); // still on it
+
+	key(script, &n, QDOS_KEY_CLEAR);
+	store_reset();
+	run_script(script, n, fb);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "APPS") != NULL);
+}
+
+/**
+ * The built-in maths is on the list too, so sqrt can be plotted and not only
+ * isqrt: a card whose only square root was the integer one plotted steps.
+ */
+static void test_the_graph_menu_offers_the_builtin_maths(void) {
+	store_reset();
+	seed_system("isqrt", "fn isqrt(n:i64 -- r:i64) { 0 }");
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// The card's isqrt first, then the built-ins in the order mathwords.c
+	// registers them, where sqrt is the twenty-first
+	const int steps = 21;
+	for (int i = 0; i < steps; i++) {
+		key(script, &n, QDOS_KEY_DOWN);
+	}
+	store_reset();
+	seed_system("isqrt", "fn isqrt(n:i64 -- r:i64) { 0 }");
+	run_script(script, n, fb);
+
+	// Scrolled so the selection is the last row shown
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "22/") != NULL);
+	read_row(fb, ROW_CONTENT_LAST_T, row, sizeof(row));
+	CHECK(strstr(row, "sqrt") != NULL && strstr(row, "2D") != NULL);
+	CHECK(cell_is(fb, 1, ROW_CONTENT_LAST_T, 's', true));
+
+	key(script, &n, QDOS_KEY_SOFT4); // PICK
+	key(script, &n, QDOS_KEY_TRACE);
+	for (int i = 0; i < 37; i++) {
+		key(script, &n, QDOS_KEY_RIGHT);
+	}
+	store_reset();
+	seed_system("isqrt", "fn isqrt(n:i64 -- r:i64) { 0 }");
+	run_script(script, n, fb);
+
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "X=1.875  Y=1.3693064") == 0);
+}
+
 /** Forgetting something that was never declared says so. */
 static void test_forget_unknown(void) {
 	store_reset();
@@ -4588,6 +4915,16 @@ int main(void) {
 	test_unmatched_closer_still_submits();
 	test_forget_a_word();
 	test_forget_unknown();
+	test_graph_plots_a_word();
+	test_graph_leaves_the_stack_alone();
+	test_graph_trace_reads_the_curve();
+	test_graph_of_an_unknown_word();
+	test_graph_of_the_wrong_shape();
+	test_graph3_plots_a_surface();
+	test_graph3_of_the_wrong_shape();
+	test_the_graph_menu_lists_what_can_be_plotted();
+	test_picking_from_the_graph_menu();
+	test_the_graph_menu_offers_the_builtin_maths();
 	test_the_status_band_shows_clock_and_battery();
 	test_the_status_band_stays_when_it_has_nothing();
 	test_the_clock_turns_over_while_idle();

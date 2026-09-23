@@ -58,6 +58,9 @@ void qdos_console_rule(qdos_console* con, int row);
 /** @brief One character in the editor's small font, top-left at pixel @p x, @p y */
 void qdos_console_putc_small(qdos_console* con, int x, int y, char ch);
 
+/** @brief A string in the small font from pixel @p x, @p y; clipped at the right edge */
+void qdos_console_puts_small(qdos_console* con, int x, int y, const char* text);
+
 /** @brief Invert a rectangle of pixels, clipped to the panel */
 void qdos_console_invert_rect(qdos_console* con, int x, int y, int w, int h);
 

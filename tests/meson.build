@@ -71,6 +71,12 @@ test_editor = executable('test_editor', 'test_editor.c',
 		link_language: 'cpp')
 test('editor', test_editor)
 
+test_graph = executable('test_graph', 'test_graph.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('graph', test_graph)
+
 test_mathwords = executable('test_mathwords', 'test_mathwords.c',
 		include_directories: qdos_inc,
 		dependencies: [qdos_core_dep],

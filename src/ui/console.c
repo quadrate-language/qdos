@@ -153,6 +153,16 @@ void qdos_console_putc_small(qdos_console* con, int x, int y, char ch) {
 	}
 }
 
+void qdos_console_puts_small(qdos_console* con, int x, int y, const char* text) {
+	if (!con || !text) {
+		return;
+	}
+
+	for (const char* p = text; *p && x + QDOS_SMALL_FONT_W <= QDOS_SCREEN_W; p++, x += QDOS_SMALL_FONT_W) {
+		qdos_console_putc_small(con, x, y, *p);
+	}
+}
+
 void qdos_console_invert_rect(qdos_console* con, int x, int y, int w, int h) {
 	if (!con) {
 		return;

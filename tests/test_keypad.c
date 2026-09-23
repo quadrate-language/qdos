@@ -21,6 +21,31 @@
 #include <time.h>
 #include <unistd.h>
 
+/**
+ * The key codes do not move. They are what `qdos::key` gives a Quadrate
+ * program and what a native module compares against, and neither is rebuilt
+ * with QDOS: DOOM's controls are these numbers written out. A new key goes at
+ * the end of the enum, never in the middle.
+ */
+static void test_key_codes_do_not_move(void) {
+	CHECK(QDOS_KEY_0 == 1 && QDOS_KEY_9 == 10);
+	CHECK(QDOS_KEY_DOT == 11);
+	CHECK(QDOS_KEY_ADD == 12 && QDOS_KEY_DIV == 15);
+	CHECK(QDOS_KEY_SIN == 20 && QDOS_KEY_OVER == 35);
+	CHECK(QDOS_KEY_ENTER == 36);
+	CHECK(QDOS_KEY_BACKSPACE == 37);
+	CHECK(QDOS_KEY_CLEAR == 39);
+	CHECK(QDOS_KEY_POWER == 40);
+	CHECK(QDOS_KEY_UP == 41 && QDOS_KEY_DOWN == 42 && QDOS_KEY_LEFT == 43 && QDOS_KEY_RIGHT == 44);
+	CHECK(QDOS_KEY_RCL == 56);
+	CHECK(QDOS_KEY_SOFT1 == 57 && QDOS_KEY_SOFT5 == 61);
+	CHECK(QDOS_KEY_CHAR == 62);
+
+	// And what came after, from where it came
+	CHECK(QDOS_KEY_ASIN == 63);
+	CHECK(QDOS_KEY_GRAPH == 70);
+}
+
 static void test_mapping(void) {
 	qdos_key_event ev;
 
@@ -502,6 +527,7 @@ static void test_real_input_device(void) {
 }
 
 int main(void) {
+	test_key_codes_do_not_move();
 	test_mapping();
 	test_poll_guards();
 	test_poll_filters_the_queue();
