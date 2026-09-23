@@ -55,6 +55,26 @@ static void api_fail(qdos_native_ctx* ctx, const char* message) {
 static qdos_hal* g_hal;
 static uint8_t* g_canvas;
 
+/** PWR came while a program had the keypad; cleared on the next rearm */
+static bool g_break;
+
+bool qdos_natives_key(qdos_hal* hal, qdos_key_event* out) {
+	if (g_break || !hal->poll_key(hal, out)) {
+		return false;
+	}
+
+	// Never the program's to ignore: it is how one that will not stop is stopped
+	if (out->key == QDOS_KEY_POWER) {
+		g_break = true;
+		return false;
+	}
+	return true;
+}
+
+bool qdos_natives_broken(void) {
+	return g_break;
+}
+
 void qdos_natives_bind(qdos_hal* hal, uint8_t* canvas) {
 	g_hal = hal;
 	g_canvas = canvas;
@@ -85,7 +105,7 @@ static bool api_key(qdos_native_ctx* ctx, qdos_key* key, char* ch) {
 	}
 
 	qdos_key_event event;
-	if (!g_hal->poll_key(g_hal, &event)) {
+	if (!qdos_natives_key(g_hal, &event)) {
 		return false;
 	}
 
@@ -146,7 +166,7 @@ static bool api_path(qdos_native_ctx* ctx, const char* name, char* buf, size_t c
 
 static bool api_running(qdos_native_ctx* ctx) {
 	(void)ctx;
-	return (g_hal != NULL) && g_hal->running(g_hal);
+	return (g_hal != NULL) && g_hal->running(g_hal) && !g_break;
 }
 
 static const qdos_native_api API = {
@@ -179,6 +199,16 @@ void qdos_natives_on_call(void (*fn)(void* user), void* user) {
 
 void qdos_natives_rearm(void) {
 	g_called = false;
+	g_break = false;
+}
+
+/** @brief A module stopped by PWR returns as asked; the program above it must stop too */
+static int broken_or(qd_context* ctx, int result) {
+	if (g_break) {
+		qd_set_error_msg(ctx, "BREAK");
+		return 1;
+	}
+	return result;
 }
 
 /** @brief The set the registered words came from, for finding what owns one */
@@ -218,7 +248,7 @@ static int call_word(qd_context* ctx, void* userdata) {
 	const int result = word->fn((qdos_native_ctx*)ctx, &API);
 	g_app = was;
 
-	return result;
+	return broken_or(ctx, result);
 }
 
 /* See qdos_natives_recover() in native.h for why these exist. */
@@ -535,7 +565,7 @@ static int call_main(qd_context* ctx, void* userdata) {
 	const int result = module->main((qdos_native_ctx*)ctx, &API);
 	g_app = was;
 
-	return result;
+	return broken_or(ctx, result);
 }
 
 int qdos_natives_register(const qdos_natives* set, qd_interp* interp) {

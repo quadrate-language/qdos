@@ -98,7 +98,18 @@ size_t qdos_natives_blocked_count(const qdos_natives* set);
  * than the stack. Called at most once between rearms.
  */
 void qdos_natives_on_call(void (*fn)(void* user), void* user);
+
+/** @brief Also clears a break */
 void qdos_natives_rearm(void);
+
+/**
+ * @brief The next key for a running program, which PWR never is
+ *
+ * PWR breaks the program instead: this and api->key return nothing more,
+ * api->running() goes false, and the next native word fails with BREAK.
+ */
+bool qdos_natives_key(qdos_hal* hal, qdos_key_event* out);
+bool qdos_natives_broken(void);
 
 /** @brief Hand modules the panel to draw on and the keypad to read */
 void qdos_natives_bind(qdos_hal* hal, uint8_t* canvas);

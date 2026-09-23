@@ -79,6 +79,9 @@ typedef struct {
 	/** Held down by the mouse, drawn sunk until the button comes back up */
 	const qdos_pad_button* pressed;
 
+	/** Android has taken the surface away, so frames are kept but not shown */
+	bool background;
+
 	/*
 	 * SDL_WaitEvent takes no extra descriptor, so the card's watch gets a
 	 * thread that pushes an event to wake the loop. A timeout on the wait
@@ -203,6 +206,28 @@ static bool sim_store_changed(qdos_hal* hal) {
 
 static const char* dir_for(qdos_store_scope scope);
 
+/**
+ * @brief Android may kill the process at any point once it is in the background
+ *
+ * A watch, because SDL never queues these: it hands them to watches on this
+ * thread, from inside the pump, so the shell is between keys.
+ */
+static bool sim_watch_lifecycle(void* user, SDL_Event* event) {
+	qdos_hal* hal = (qdos_hal*)user;
+	sim_state* st = (sim_state*)hal->impl;
+
+	if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+		st->background = true;
+		if (hal->save != NULL) {
+			hal->save(hal->save_user);
+		}
+	} else if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+		// Drawn once the window says it is back, which is queued
+		st->background = false;
+	}
+	return true;
+}
+
 static int sim_init(qdos_hal* hal) {
 	sim_state* st = (sim_state*)hal->impl;
 
@@ -210,6 +235,14 @@ static int sim_init(qdos_hal* hal) {
 		fprintf(stderr, "qdos: SDL_Init failed: %s\n", SDL_GetError());
 		return 1;
 	}
+
+	SDL_AddEventWatch(sim_watch_lifecycle, hal);
+
+#ifdef SDL_PLATFORM_ANDROID
+	// SDL 3.4's Android wait queues this sentinel on every pass, and queueing
+	// wakes the wait, so it never sleeps: a whole core, at an idle prompt
+	SDL_SetEventEnabled(SDL_EVENT_POLL_SENTINEL, false);
+#endif
 
 	st->scale = SIM_SCALE_DEFAULT;
 	const char* scale_env = getenv("QDOS_SIM_SCALE");
@@ -239,10 +272,21 @@ static int sim_init(qdos_hal* hal) {
 		return 1;
 	}
 
+#ifdef SDL_PLATFORM_ANDROID
+	// A phone is rarely a whole multiple of the case, so it fills the width
+	// and the pixel-art filter keeps the stems even at the fraction
+	SDL_SetRenderLogicalPresentation(st->renderer, WINDOW_W, WINDOW_H, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+	SDL_SetTextureScaleMode(st->texture, SDL_SCALEMODE_PIXELART);
+#else
+	SDL_SetRenderLogicalPresentation(st->renderer, WINDOW_W, WINDOW_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+
 	// Nearest-neighbour: real pixels, not smoothed.
 	SDL_SetTextureScaleMode(st->texture, SDL_SCALEMODE_NEAREST);
 
+	// On a phone this raises the system keyboard over the keypad, which has
+	// letters of its own
 	SDL_StartTextInput(st->window);
+#endif
 
 	mkdir(dir_for(QDOS_SCOPE_INBOX), 0755);
 
@@ -304,6 +348,10 @@ static void sim_shutdown(qdos_hal* hal) {
 static void push_frame(sim_state* st) {
 	qdos_frame_draw(st->rgb, WINDOW_W);
 	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_PAD_X, QDOS_PAD_Y, st->layer, st->pressed);
+
+	if (st->background) {
+		return;
+	}
 
 	SDL_UpdateTexture(st->texture, NULL, st->rgb, WINDOW_W * 3);
 	SDL_RenderClear(st->renderer);
@@ -387,7 +435,8 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 			break;
 
 		case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-			const qdos_pad_button* b = qdos_pad_at((int)event.button.x / st->scale, (int)event.button.y / st->scale);
+			SDL_ConvertEventToRenderCoordinates(st->renderer, &event);
+			const qdos_pad_button* b = qdos_pad_at((int)event.button.x, (int)event.button.y);
 			if (b == NULL) {
 				break;
 			}
@@ -441,6 +490,12 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 		case SDL_EVENT_QUIT:
 			st->running = false;
 			return false;
+
+		// The surface was lost, and nothing else would repaint an idle shell
+		case SDL_EVENT_WINDOW_RESTORED:
+		case SDL_EVENT_WINDOW_EXPOSED:
+			push_frame(st);
+			break;
 
 		case SDL_EVENT_TEXT_INPUT:
 			if (event.text.text[0]) {

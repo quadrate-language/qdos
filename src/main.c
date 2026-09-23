@@ -13,6 +13,10 @@
 
 #ifdef QDOS_WITH_SIM
 #include "hal/sim/sim_sdl3.h"
+#ifdef __ANDROID__
+// SDLActivity calls SDL_main, which this renames main to
+#include <SDL3/SDL_main.h>
+#endif
 #endif
 
 #ifdef QDOS_WITH_DEVICE

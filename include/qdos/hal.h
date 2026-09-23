@@ -154,6 +154,15 @@ struct qdos_hal {
 	/** @brief Charge left, 0 to 100, or -1 with no battery to ask. NULL likewise. */
 	int (*battery)(qdos_hal* hal);
 
+	/**
+	 * @brief Set by the shell, for a backend that can be killed without warning
+	 *
+	 * Called to save the session now. Only from inside poll_key or wait, which
+	 * the shell reaches between keys. NULL until there is a session to save.
+	 */
+	void (*save)(void* user);
+	void* save_user;
+
 	void* impl; ///< Backend private state
 };
 

@@ -1632,7 +1632,6 @@ static void check_program(qdos_shell* sh) {
  * behind in the vocabulary when it does.
  */
 static int run_app(qd_context* ctx, void* userdata) {
-	(void)ctx;
 	qdos_shell* sh = ((app_word*)userdata)->sh;
 	const char* name = ((app_word*)userdata)->name;
 
@@ -1658,6 +1657,12 @@ static int run_app(qd_context* ctx, void* userdata) {
 	}
 
 	qd_interp_destroy(app);
+
+	// Stopped rather than finished, so whatever ran the app stops too
+	if (qdos_natives_broken()) {
+		qd_set_error_msg(ctx, "BREAK");
+		return 1;
+	}
 	return 0;
 }
 
@@ -3417,7 +3422,11 @@ static int native_key(qd_context* ctx, void* userdata) {
 	qdos_shell* sh = userdata;
 
 	qdos_key_event event;
-	if (!sh->hal->poll_key(sh->hal, &event)) {
+	if (!qdos_natives_key(sh->hal, &event)) {
+		if (qdos_natives_broken()) {
+			qd_set_error_msg(ctx, "BREAK");
+			return 1;
+		}
 		qd_push_i(ctx, 0);
 		qd_push_i(ctx, 0);
 		return qd_push_i(ctx, 0);
@@ -3542,7 +3551,7 @@ static void reload_card(qdos_shell* sh) {
 	set_message(sh, message, false);
 }
 
-static void save_session_before_native(void* user) {
+static void save_session_now(void* user) {
 	qdos_shell* sh = (qdos_shell*)user;
 	qdos_storage_save_session(sh->hal, sh->interp);
 }
@@ -3579,7 +3588,7 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 		qdos_natives_load(&sh->natives, hal, (qdos_store_scope)scope);
 	}
 	qdos_natives_register(&sh->natives, sh->interp);
-	qdos_natives_on_call(save_session_before_native, sh);
+	qdos_natives_on_call(save_session_now, sh);
 
 	// In scope order, so each one shadows the one before it
 	qdos_programs_restore(hal, QDOS_SCOPE_SYSTEM, sh->interp);
@@ -3609,6 +3618,10 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 		set_message(sh, message, true);
 	}
 
+	// Only once the session is back, or the first save would be of nothing
+	hal->save = save_session_now;
+	hal->save_user = sh;
+
 	return sh;
 }
 
@@ -3616,6 +3629,8 @@ void qdos_shell_destroy(qdos_shell* sh) {
 	if (!sh) {
 		return;
 	}
+
+	sh->hal->save = NULL;
 
 	// Interpreter first: its registrations point into the modules
 	qd_interp_destroy(sh->interp);

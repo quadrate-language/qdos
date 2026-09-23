@@ -4596,6 +4596,51 @@ static void test_a_program_can_take_a_key(void) {
 	CHECK(strstr(row, "1:") != NULL);
 }
 
+/** PWR stops a program that only ever asks for keys, and not the machine. */
+static void test_power_breaks_a_program(void) {
+	store_reset();
+	seed_system("spin", "fn spin( -- ) { loop { qdos::key drop drop drop } }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "spin");
+	key(script, &n, QDOS_KEY_POWER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "BREAK") != NULL);
+
+	// Still on: the next line is evaluated, and the break does not linger
+	key(script, &n, QDOS_KEY_CLEAR);
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+}
+
+/** An app is stopped the same way, and what it printed does not hide that. */
+static void test_power_breaks_an_app(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "game", "fn main( -- ) { \"BANNER\" print loop { qdos::key drop drop drop } }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "game");
+	key(script, &n, QDOS_KEY_POWER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "BREAK") != NULL);
+}
+
 /** Leaving without writing, once it has asked. */
 static void test_edit_discards(void) {
 	store_reset();
@@ -5224,6 +5269,8 @@ int main(void) {
 	test_a_program_owns_the_screen_while_it_runs();
 	test_a_program_can_ask_the_machine();
 	test_a_program_can_take_a_key();
+	test_power_breaks_a_program();
+	test_power_breaks_an_app();
 	test_a_program_arriving_on_the_card_is_picked_up();
 	test_a_program_arriving_is_callable();
 	test_a_module_arriving_asks_for_a_restart();

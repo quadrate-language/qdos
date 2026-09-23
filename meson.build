@@ -161,8 +161,13 @@ if get_option('static')
 	qdos_link_args += '-static'
 endif
 
-executable('qdos',
+# SDLActivity loads the shell as libmain.so and calls into it, so on Android it
+# is a library rather than a program
+is_android = host_machine.system() == 'android'
+
+build_target(is_android ? 'main' : 'qdos',
 		qdos_sources,
+		target_type: is_android ? 'shared_library' : 'executable',
 		include_directories: qdos_inc,
 		dependencies: qdos_deps,
 		c_args: qdos_args,
