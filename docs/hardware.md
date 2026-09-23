@@ -90,10 +90,13 @@ it are in `config.txt`, commented.
 
 ## The keypad
 
-**5 columns × 10 rows = 50 keys**, three layers: the plain face, an ALPHA lock
+**54 keys in 10 rows**, three layers: the plain face, an ALPHA lock
 for letters, and a SYMBOL one-shot for Quadrate's syntax. `QDOS_PAD_COLS` and
 `QDOS_PAD_ROWS` in `src/hal/sim/keypad_ui.h` are the simulator's mirror of the
 physical pad, and `src/hal/sim/keypad_ui.c` holds the legend for every key.
+The soft row and the five rows of the numeric block are five keys wide; the
+four function rows between them are six, with the arrows an inverted T at
+their right, as on an HP 48.
 
 | | |
 |---|---|
@@ -102,12 +105,13 @@ physical pad, and `src/hal/sim/keypad_ui.c` holds the legend for every key.
 | Expander | Adafruit GPIO Expander Bonnet (**MCP23017**) on I²C, so SPI0 stays with the panel |
 | Kernel | `CONFIG_GPIO_MCP23S08`, `CONFIG_I2C_BCM2835`, `CONFIG_I2C_CHARDEV` |
 
-A 5×10 matrix needs 15 lines, which is why the expander is there rather than the
-header alone.
+A 6×10 matrix needs 16 lines, which is why the expander is there rather than the
+header alone — and it is all 16 of the MCP23017's, with none left over. The
+five-key rows leave their sixth column unwired.
 
 **Open:** the pin assignment. The placeholder in `config.txt` reads
 `dtoverlay=matrix-keypad,rows=5,cols=5` — a stand-in, not the pad. It has to
-become 10 rows by 5 columns against the expander's gpiochip before it means
+become 10 rows by 6 columns against the expander's gpiochip before it means
 anything.
 
 Until the pad exists, input is a **USB keyboard**. `QDOS_KEYMAP` selects `us` or

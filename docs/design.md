@@ -126,7 +126,7 @@ and only text is cut — marked, and from the end.
 
 ### Four rules the keypad follows
 
-Fifty keys on three faces, and the layout is decided by what a face must never
+Fifty-four keys on three faces, and the layout is decided by what a face must never
 take away from you.
 
 - **The digits are digits on every layer.** A name has numbers in it — `i64`,
@@ -134,9 +134,11 @@ take away from you.
   unlocking part-way through a word. It used to swallow 4, 5, 7, 8 and 9 while
   leaving 0 to 3 and 6 alone, which is not a rule anyone could hold. The
   alphabet now runs A–S in reading order and then T to Z down the operator
-  column, which is idle while a name is being typed. That is the whole of the
-  free space: 50 keys, less 12 for navigation and the soft row, less the eleven
-  digits and the space bar, is exactly 26.
+  column, which is idle while a name is being typed. The four function rows
+  are six keys wide, as on an HP 48, so the arrows fit among them as an
+  inverted T: 54 keys, less 14 for navigation and the soft row, less the eleven
+  digits and the space bar, is 28 — the alphabet, and STO and RCL beside the
+  digits they take.
 - **What the letters displaced keeps a shift key.** `:` and `_` are inside the
   names themselves — 91,500 and 39,628 occurrences across the Quadrate tree
   against 174 semicolons, none of them syntax — so both sit on the shift layer,
@@ -278,6 +280,12 @@ that blinks forever is a timer that fires forever, and settling is what lets the
 wait go back to having no timeout. The blink itself is close to free — the Sharp
 panel holds its image unpowered and costs only what is clocked into it, and the
 driver is already sending a VCOM message every second in software VCOM mode.
+
+The status band is the one exception, and it is bounded: while there is a clock
+to show, the shell wakes at the turn of each minute to repaint it, and while
+there is only a battery, once a minute to look at it. One wakeup a minute
+against none. With the clock unset and no battery -- the Pi has no RTC -- the
+band says nothing and the wait goes back to having no timeout.
 
 Auto-off is the only thing here that saves real power, because the Pi Zero W has
 no usable suspend: blanking the display would save microwatts against an SoC

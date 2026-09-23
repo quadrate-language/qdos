@@ -3,9 +3,10 @@
 # quadrate
 #
 # Only the libraries QDOS needs are built: the runtime, the compiler front-end
-# and the AST interpreter. build_tools=false drops the command-line tools and
-# with them LLVM; build_stdlib=false drops the standard library modules and with
-# them OpenSSL and zlib. Neither is wanted in a calculator.
+# and the AST interpreter, plus the one standard library module QDOS links.
+# build_tools=false drops the command-line tools and with them LLVM;
+# stdlib_modules=math drops every other module and with them OpenSSL. Neither is
+# wanted in a calculator.
 #
 # The archives are staged by hand rather than by `meson install`, because
 # Quadrate's build does not install its static libraries -- its own release
@@ -25,7 +26,7 @@ QUADRATE_DEPENDENCIES = host-pkgconf
 
 QUADRATE_CONF_OPTS = \
 	-Dbuild_tools=false \
-	-Dbuild_stdlib=false \
+	-Dstdlib_modules=math \
 	-Dbuild_tests=false \
 	-Dbuild_examples=false \
 	-Dwerror=false

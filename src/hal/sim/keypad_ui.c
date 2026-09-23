@@ -31,9 +31,10 @@
 
 /*
  * Laid out the way a scientific calculator is: the entry row, then digits in a
- * 3x3 block with the operators down the right, Enter at the foot of them, and
- * navigation down the left, sitting at the bottom where a thumb expects them.
- * The menu keys stay under the display.
+ * 3x3 block with the operators down the right, Enter at the foot of them, all
+ * at the bottom where a thumb expects them. The menu keys stay under the
+ * display, and the arrows sit at the right of the function rows, as on a
+ * graphing calculator, where they are found without looking.
  *
  * A cap in lower case is exactly the word it stands for, so it can be typed as
  * it is written; a cap in capitals is QDOS's own -- an abbreviation too long to
@@ -58,45 +59,57 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 				BTN(KEY("", QDOS_KEY_SOFT3), NONE, NONE), BTN(KEY("", QDOS_KEY_SOFT4), NONE, NONE),
 				BTN(KEY("", QDOS_KEY_SOFT5), NONE, KEY("PWR", QDOS_KEY_POWER))},
 
-		// Reciprocal, root and square, then the logarithms
+		/*
+		 * Six across from here to the numeric block. The arrows are keys of the
+		 * matrix like any other, set as an inverted T at the right the way an HP
+		 * 48 has them: up over down, left and right either side. No shift on them,
+		 * and ALPHA leaves them be, so a locked layer can still move.
+		 */
 		{BTN(KEY("1/x", QDOS_KEY_INV), TXT("A", "a"), TXT("(", "(")),
 				BTN(KEY(QDOS_GLYPH_SQRT, QDOS_KEY_SQRT), TXT("B", "b"), TXT(")", ")")),
-				BTN(KEY("x" QDOS_PAD_GLYPH_SQUARED, QDOS_KEY_SQ), TXT("C", "c"), TXT("{", "{")),
-				BTN(KEY("ln", QDOS_KEY_LN), TXT("D", "d"), TXT("}", "}")),
-				BTN(KEY("log", QDOS_KEY_LOG), TXT("E", "e"), TXT("\"", "\""))},
+				BTN(KEY("x" QDOS_PAD_GLYPH_SQUARED, QDOS_KEY_SQ), TXT("C", "c"), TXT("\"", "\"")),
+				BTN(KEY("ln", QDOS_KEY_LN), TXT("D", "d"), TXT("{", "{")),
+				BTN(KEY(QDOS_GLYPH_UP, QDOS_KEY_UP), NONE, NONE),
+				BTN(KEY("log", QDOS_KEY_LOG), TXT("E", "e"), TXT("}", "}"))},
 
-		// The trigonometry
+		// The trigonometry, beside the rest of the arrows
 		{BTN(KEY("sin", QDOS_KEY_SIN), TXT("F", "f"), TXT("fn", "fn ")),
 				BTN(KEY("cos", QDOS_KEY_COS), TXT("G", "g"), TXT("--", " -- ")),
 				BTN(KEY("tan", QDOS_KEY_TAN), TXT("H", "h"), TXT("i64", "i64")),
-				BTN(KEY("pow", QDOS_KEY_POW), TXT("I", "i"), TXT("f64", "f64")),
-				BTN(KEY("abs", QDOS_KEY_ABS), TXT("J", "j"), TXT("str", "str"))},
+				BTN(KEY(QDOS_GLYPH_LEFT, QDOS_KEY_LEFT), NONE, NONE),
+				BTN(KEY(QDOS_GLYPH_DOWN, QDOS_KEY_DOWN), NONE, NONE),
+				BTN(KEY(QDOS_GLYPH_RIGHT, QDOS_KEY_RIGHT), NONE, NONE)},
 
-		// Rounding and the remainder, with control flow printed above them
-		{BTN(KEY("floor", QDOS_KEY_FLOOR), TXT("K", "k"), TXT("if", "if ")),
-				BTN(KEY("ceil", QDOS_KEY_CEIL), TXT("L", "l"), TXT("else", " else ")),
-				BTN(KEY("round", QDOS_KEY_ROUND), TXT("M", "m"), TXT("loop", "loop ")),
-				BTN(KEY("%", QDOS_KEY_MOD), TXT("N", "n"), TXT("BRK", " break ")),
-				BTN(TXT(QDOS_PAD_GLYPH_SPACE, " "), NONE, TXT(",", ","))},
+		// The inverses under the trigonometry, e^x for ln, then powers and the
+		// remainder, with control flow printed above
+		{BTN(KEY("asin", QDOS_KEY_ASIN), TXT("I", "i"), TXT("f64", "f64")),
+				BTN(KEY("acos", QDOS_KEY_ACOS), TXT("J", "j"), TXT("str", "str")),
+				BTN(KEY("atan", QDOS_KEY_ATAN), TXT("K", "k"), TXT("if", "if ")),
+				BTN(KEY("exp", QDOS_KEY_EXP), TXT("L", "l"), TXT("else", " else ")),
+				BTN(KEY("pow", QDOS_KEY_POW), TXT("M", "m"), TXT("loop", "loop ")),
+				BTN(KEY("%", QDOS_KEY_MOD), TXT("N", "n"), TXT("BRK", " break "))},
 
 		/*
 		 * The stack, which is Quadrate's own row. Above it, in yellow, is what else
-		 * can be done to the stack: shuffling, naming, undoing, and the registers it
-		 * is put away in. STO and RCL take the digit after them.
+		 * can be done to the stack: shuffling, naming and undoing.
 		 *
 		 * `->` sits where `roll` did, which is where the language went: the deep
-		 * shuffling words were removed in favour of naming what you took.
+		 * shuffling words were removed in favour of naming what you took. So were
+		 * over and rot, to CAT, and abs and round have their keys.
 		 */
 		{BTN(KEY("dup", QDOS_KEY_DUP), TXT("O", "o"), TXT("nip", " nip ")),
 				BTN(KEY("drop", QDOS_KEY_DROP), TXT("P", "p"), KEY("UNDO", QDOS_KEY_UNDO)),
 				BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("->", " -> ")),
-				BTN(KEY("over", QDOS_KEY_OVER), TXT("R", "r"), KEY("STO", QDOS_KEY_STO)),
-				BTN(KEY("rot", QDOS_KEY_ROT), TXT("S", "s"), KEY("RCL", QDOS_KEY_RCL))},
+				BTN(KEY("abs", QDOS_KEY_ABS), TXT("R", "r"), NONE),
+				BTN(KEY("round", QDOS_KEY_ROUND), TXT("S", "s"), NONE),
+				BTN(TXT(QDOS_PAD_GLYPH_SPACE, " "), NONE, TXT("nl", " nl "))},
 
-		// Entry and editing. ALPHA sits beside delete, being the other thing you
-		// reach for mid-word. DEL rather than an arrow: the arrows move the cursor,
-		// and one glyph cannot mean both.
-		{BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, TXT(";", ";")), MOD(CAP_ALPHA, QDOS_PAD_ALPHA),
+		/*
+		 * Five across again, for the numeric block. Entry and editing: ALPHA sits
+		 * beside delete, being the other thing you reach for mid-word. DEL rather
+		 * than an arrow: the arrows move the cursor, and one glyph cannot mean both.
+		 */
+		{BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, TXT("print", " print ")), MOD(CAP_ALPHA, QDOS_PAD_ALPHA),
 				BTN(KEY(QDOS_GLYPH_PLUSMINUS, QDOS_KEY_NEG), TXT("T", "t"), TXT("[", "[")),
 				BTN(KEY("TAB", QDOS_KEY_TAB), TXT("U", "u"), TXT("]", "]")),
 				BTN(KEY(QDOS_GLYPH_DIVIDE, QDOS_KEY_DIV), TXT("V", "v"), TXT("shl", " shl "))},
@@ -107,24 +120,25 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 		 * keys away meant leaving the layer to finish the word. The letters that
 		 * used to sit here are down the operator column, which is idle while a
 		 * name is being typed.
+		 *
+		 * The registers down the left. STO and RCL take the digit after them, and
+		 * that digit is right beside them.
 		 */
-		{BTN(KEY(QDOS_GLYPH_UP, QDOS_KEY_UP), NONE, KEY(QDOS_GLYPH_LEFT, QDOS_KEY_LEFT)),
-				BTN(KEY("7", QDOS_KEY_7), NONE, TXT("and", " and ")),
+		{BTN(KEY("STO", QDOS_KEY_STO), NONE, NONE), BTN(KEY("7", QDOS_KEY_7), NONE, TXT("and", " and ")),
 				BTN(KEY("8", QDOS_KEY_8), NONE, TXT("or", " or ")),
 				BTN(KEY("9", QDOS_KEY_9), NONE, TXT("shr", " shr ")),
 				BTN(KEY(QDOS_GLYPH_TIMES, QDOS_KEY_MUL), TXT("W", "w"), TXT("<", "<"))},
 
 		// Underscore on shift-minus, where both keyboards this reads from put it
-		{BTN(KEY(QDOS_GLYPH_DOWN, QDOS_KEY_DOWN), NONE, KEY(QDOS_GLYPH_RIGHT, QDOS_KEY_RIGHT)),
-				BTN(KEY("4", QDOS_KEY_4), NONE, TXT("not", " not ")),
+		{BTN(KEY("RCL", QDOS_KEY_RCL), NONE, NONE), BTN(KEY("4", QDOS_KEY_4), NONE, TXT("not", " not ")),
 				BTN(KEY("5", QDOS_KEY_5), NONE, TXT("==", " == ")), BTN(KEY("6", QDOS_KEY_6), NONE, TXT("!=", " != ")),
 				BTN(KEY("-", QDOS_KEY_SUB), TXT("X", "x"), TXT("_", "_"))},
 
 		// The shift key, in the left column of the numeric block under the thumb,
-		// between the down arrow and the way out
+		// between the registers and the way out
 		{MOD(CAP_SYMBOL, QDOS_PAD_SYMBOL), BTN(KEY("1", QDOS_KEY_1), NONE, TXT(">", ">")),
 				BTN(KEY("2", QDOS_KEY_2), NONE, TXT("<=", " <= ")), BTN(KEY("3", QDOS_KEY_3), NONE, TXT(">=", " >= ")),
-				BTN(KEY("+", QDOS_KEY_ADD), TXT("Y", "y"), TXT("DEC", " -- "))},
+				BTN(KEY("+", QDOS_KEY_ADD), TXT("Y", "y"), TXT("for", " for "))},
 
 		/*
 		 * Enter in the corner under the thumb, at the foot of the operator column,
@@ -578,15 +592,15 @@ static void draw_case(const canvas* cv) {
  * and the bevel swaps ends. That reversal is what reads as a press -- moving it
  * two pixels on its own would just look like a misdraw.
  */
-static void draw_key(const canvas* cv, int x, int y, key_group group, key_tint tint, bool pressed) {
+static void draw_key(const canvas* cv, int x, int y, int w, int h, key_group group, key_tint tint, bool pressed) {
 	if (pressed) {
 		// Down on its own shadow, so what is left is contact, not cast
-		rounded_shade(cv, x, y + 1, QDOS_KEY_W, QDOS_KEY_H, 88);
+		rounded_shade(cv, x, y + 1, w, h, 88);
 	} else {
 		// Two offset shades rather than one, so the edge falls off instead of
 		// stopping. They multiply where they overlap, the darkest part.
-		rounded_shade(cv, x - 1, y + 3, QDOS_KEY_W + 2, QDOS_KEY_H, 84);
-		rounded_shade(cv, x, y + 2, QDOS_KEY_W, QDOS_KEY_H, 66);
+		rounded_shade(cv, x - 1, y + 3, w + 2, h, 84);
+		rounded_shade(cv, x, y + 2, w, h, 66);
 	}
 
 	uint8_t face_top[3], face_bottom[3];
@@ -607,12 +621,37 @@ static void draw_key(const canvas* cv, int x, int y, key_group group, key_tint t
 		mix(face_bottom, KEYLINE, 1, 3, edge_bottom);
 	}
 
-	rounded_outline(cv, x, y, QDOS_KEY_W, QDOS_KEY_H, KEYLINE);
-	rounded_gradient(cv, x + 1, y + 1, QDOS_KEY_W - 2, QDOS_KEY_H - 2, grad_top, grad_bottom);
+	rounded_outline(cv, x, y, w, h, KEYLINE);
+	rounded_gradient(cv, x + 1, y + 1, w - 2, h - 2, grad_top, grad_bottom);
 
 	const int inset = CORNER[1];
-	fill(cv, x + 1 + inset, y + 1, QDOS_KEY_W - 2 - 2 * inset, 1, edge_top);
-	fill(cv, x + 1 + inset, y + QDOS_KEY_H - 2, QDOS_KEY_W - 2 - 2 * inset, 1, edge_bottom);
+	fill(cv, x + 1 + inset, y + 1, w - 2 - 2 * inset, 1, edge_top);
+	fill(cv, x + 1 + inset, y + h - 2, w - 2 - 2 * inset, 1, edge_bottom);
+}
+
+/* Keys per row: the soft row, four function rows of six, the numeric block */
+static const int ROW_COLS[QDOS_PAD_ROWS] = {5, 6, 6, 6, 6, 5, 5, 5, 5, 5};
+
+int qdos_pad_row_cols(int row) {
+	return (row < 0 || row >= QDOS_PAD_ROWS) ? 0 : ROW_COLS[row];
+}
+
+// Rounded up, so that a pixel's column is simply x * cols / width
+int qdos_pad_cell_left(int col, int row) {
+	const int cols = ROW_COLS[row];
+	return (col * QDOS_PAD_W + cols - 1) / cols;
+}
+
+void qdos_pad_key_rect(const qdos_pad_button* b, int* x, int* y, int* w, int* h) {
+	const int i = (int)(b - &KEYPAD[0][0]);
+	const int col = i % QDOS_PAD_COLS, row = i / QDOS_PAD_COLS;
+	const int left = qdos_pad_cell_left(col, row);
+
+	// One width for the whole row, though its cells differ by a pixel
+	*w = QDOS_PAD_W / ROW_COLS[row] - 2 * QDOS_KEY_INSET_X;
+	*h = QDOS_KEY_H;
+	*x = left + (qdos_pad_cell_left(col + 1, row) - left - *w) / 2;
+	*y = row * QDOS_PAD_BUTTON_H + QDOS_KEY_INSET_TOP;
 }
 
 void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer layer, const qdos_pad_button* pressed) {
@@ -628,11 +667,13 @@ void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer l
 	draw_case(&cv);
 
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < ROW_COLS[row]; col++) {
 			const qdos_pad_button* b = &KEYPAD[row][col];
 			const bool down = (b == pressed);
-			const int x = x0 + col * QDOS_PAD_BUTTON_W + QDOS_KEY_INSET_X;
-			const int y = y0 + row * QDOS_PAD_BUTTON_H + QDOS_KEY_INSET_TOP + (down ? QDOS_KEY_TRAVEL : 0);
+			int x, y, kw, kh;
+			qdos_pad_key_rect(b, &x, &y, &kw, &kh);
+			x += x0;
+			y += y0 + (down ? QDOS_KEY_TRAVEL : 0);
 
 			qdos_pad_layer selects;
 			const bool is_modifier = qdos_pad_modifier(b, &selects);
@@ -658,12 +699,13 @@ void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer l
 			// having to press shift and look.
 			if (b->symbol.label != NULL) {
 				const int sw = qdos_padfont_advance(QDOS_PADFACE_SHIFT, b->symbol.label);
-				const int sx = x0 + col * QDOS_PAD_BUTTON_W + (QDOS_PAD_BUTTON_W - sw) / 2;
+				const int left = qdos_pad_cell_left(col, row);
+				const int sx = x0 + left + (qdos_pad_cell_left(col + 1, row) - left - sw) / 2;
 				label(&cv, QDOS_PADFACE_SHIFT, sx, y0 + row * QDOS_PAD_BUTTON_H + QDOS_SHIFT_LABEL_BASELINE,
 						b->symbol.label, layer == QDOS_PAD_SYMBOL ? SHIFT_INK : SHIFT_INK_DIM);
 			}
 
-			draw_key(&cv, x, y, group_of(b, row), tint, down);
+			draw_key(&cv, x, y, kw, kh, group_of(b, row), tint, down);
 
 			const char* text = live ? shown->label : b->plain.label;
 			if (text == NULL) {
@@ -675,8 +717,7 @@ void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer l
 			// riding high to make room below
 			const int width = qdos_padfont_advance(QDOS_PADFACE_CAP, text);
 			const int cap = qdos_padfont_cap_height(QDOS_PADFACE_CAP);
-			label(&cv, QDOS_PADFACE_CAP, x + (QDOS_KEY_W - width) / 2, y + (QDOS_KEY_H + cap) / 2, text,
-					live ? TEXT : TEXT_DIM);
+			label(&cv, QDOS_PADFACE_CAP, x + (kw - width) / 2, y + (kh + cap) / 2, text, live ? TEXT : TEXT_DIM);
 		}
 	}
 }
@@ -759,11 +800,12 @@ const qdos_pad_button* qdos_pad_at(int x, int y) {
 		return NULL;
 	}
 
-	return &KEYPAD[py / QDOS_PAD_BUTTON_H][px_ / QDOS_PAD_BUTTON_W];
+	const int row = py / QDOS_PAD_BUTTON_H;
+	return &KEYPAD[row][px_ * ROW_COLS[row] / QDOS_PAD_W];
 }
 
 const qdos_pad_button* qdos_pad_button_at(int col, int row) {
-	if (col < 0 || row < 0 || col >= QDOS_PAD_COLS || row >= QDOS_PAD_ROWS) {
+	if (col < 0 || row < 0 || row >= QDOS_PAD_ROWS || col >= ROW_COLS[row]) {
 		return NULL;
 	}
 	return &KEYPAD[row][col];

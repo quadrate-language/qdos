@@ -15,18 +15,25 @@
 extern "C" {
 #endif
 
-#define QDOS_PAD_COLS 5
+/*
+ * Rows are five keys or six, as on an HP 48: six across the function rows,
+ * five across the soft row and the numeric block. QDOS_PAD_COLS is the
+ * matrix's, the widest row; a five-key row leaves its sixth column unwired.
+ */
+#define QDOS_PAD_COLS 6
+#define QDOS_PAD_NARROW 5
 #define QDOS_PAD_ROWS 10
 
 /*
- * The column pitch is the display's, not a choice: five soft labels across 25
- * columns is 80 pixels each, so a label sits squarely over the key it names.
+ * The soft row's pitch is the display's, not a choice: five soft labels across
+ * 25 columns is 80 pixels each, so a label sits squarely over the key it names.
+ * Six would not divide the columns, which is why that row stays at five.
  * The row pitch is a choice, and it is tall enough to give a key its full
  * height with the shift legend printed above it rather than carved out of it.
  */
-#define QDOS_PAD_BUTTON_W (QDOS_SCREEN_W / QDOS_PAD_COLS)
+#define QDOS_PAD_BUTTON_W (QDOS_SCREEN_W / QDOS_PAD_NARROW)
 #define QDOS_PAD_BUTTON_H 46
-#define QDOS_PAD_W (QDOS_PAD_COLS * QDOS_PAD_BUTTON_W)
+#define QDOS_PAD_W QDOS_SCREEN_W
 #define QDOS_PAD_H (QDOS_PAD_ROWS * QDOS_PAD_BUTTON_H)
 
 /**
@@ -82,8 +89,8 @@ extern "C" {
  */
 #define QDOS_SHIFT_LABEL_BASELINE 10
 
-/** @brief How wide a keycap may set before it touches the edge of the key */
-#define QDOS_KEY_LABEL_W (QDOS_KEY_W - 6)
+/** @brief How wide a keycap may set before it touches the edge of a key @p w wide */
+#define QDOS_KEY_LABEL_W(w) ((w) - 6)
 
 /**
  * @brief How far a key sinks while it is held, in pixels
@@ -150,7 +157,17 @@ void qdos_frame_draw(uint8_t* rgb, int stride_px);
 /** @brief Button at a window coordinate, panel included in y */
 const qdos_pad_button* qdos_pad_at(int x, int y);
 
+/** @brief NULL past the end of the row, which for a five-key row is column 5 */
 const qdos_pad_button* qdos_pad_button_at(int col, int row);
+
+/** @brief How many keys @p row has: QDOS_PAD_NARROW or QDOS_PAD_COLS */
+int qdos_pad_row_cols(int row);
+
+/** @brief The first pixel column of @p col's cell in @p row, from the pad's left edge */
+int qdos_pad_cell_left(int col, int row);
+
+/** @brief Where @p b's key face is drawn, relative to the pad's top-left pixel, unpressed */
+void qdos_pad_key_rect(const qdos_pad_button* b, int* x, int* y, int* w, int* h);
 
 /**
  * @brief The action a press should send on this layer

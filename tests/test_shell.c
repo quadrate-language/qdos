@@ -37,6 +37,7 @@ typedef struct {
 	uint32_t ms;	  ///< Fake monotonic clock
 	uint32_t ms_step; ///< What each wait() adds: idling is what passes time
 
+	int last_timeout;	///< What the shell last asked wait() for
 	size_t waits;		///< wait() calls so far
 	size_t wait_budget; ///< Passes to keep running for after the script is spent
 } stub_state;
@@ -94,8 +95,8 @@ static uint32_t stub_ticks_ms(qdos_hal* hal) {
 }
 
 static void stub_wait(qdos_hal* hal, int timeout_ms) {
-	(void)timeout_ms;
 	stub_state* st = hal->impl;
+	st->last_timeout = timeout_ms;
 	st->waits++;
 	st->ms += st->ms_step;
 }
@@ -127,6 +128,12 @@ static const char* g_card_name;
 static const char* g_card_source;
 static const char* g_card_module;
 
+/* A wall clock, which runs with the fake monotonic one, and a battery. Off by default. */
+static bool g_has_clock;
+static int g_clock_start; ///< Seconds since midnight when the shell starts
+static int g_battery;	  ///< -1 for a backend that asks and finds none
+static bool g_has_battery;
+
 /* A keypad with more than one face, which only some backends have */
 static qdos_keypad_mod g_modifier;
 static bool g_has_modifier;
@@ -138,6 +145,8 @@ static void store_reset(void) {
 	g_usb_fails = false; // or one failing-gadget test poisons every later one
 	g_usb_calls = 0;
 	g_modifier = QDOS_MOD_NONE;
+	g_has_clock = false;
+	g_has_battery = false;
 	g_has_modifier = false;
 	g_card_arrival = false;
 	g_card_name = NULL;
@@ -371,6 +380,16 @@ static bool stub_store_path(qdos_hal* hal, qdos_store_scope scope, const char* n
 	return written > 0 && (size_t)written < cap;
 }
 
+static bool stub_time_of_day(qdos_hal* hal, int* seconds) {
+	*seconds = (g_clock_start + (int)(((stub_state*)hal->impl)->ms / 1000)) % 86400;
+	return true;
+}
+
+static int stub_battery(qdos_hal* hal) {
+	(void)hal;
+	return g_battery;
+}
+
 static void stub_hal(qdos_hal* hal, stub_state* st) {
 	memset(hal, 0, sizeof(*hal));
 	hal->init = stub_init;
@@ -387,13 +406,16 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->store_path = stub_store_path;
 	hal->store_changed = stub_store_changed;
 	hal->usb_export = g_usb_supported ? stub_usb_export : NULL;
+	hal->time_of_day = g_has_clock ? stub_time_of_day : NULL;
+	hal->battery = g_has_battery ? stub_battery : NULL;
 	hal->impl = st;
 }
 
 /* Where the shell draws things, mirroring shell.c's layout. */
 #define SOFT_WIDTH_T (QDOS_COLS / 5)
-#define ROW_HEADER_T 0
-#define ROW_CONTENT_FIRST_T 1
+#define ROW_STATUS_T 0
+#define ROW_HEADER_T 1
+#define ROW_CONTENT_FIRST_T 2
 #define ROW_CONTENT_LAST_T (QDOS_ROWS - 3)
 #define ROW_TOP_VALUE ROW_CONTENT_LAST_T
 /* A message takes the input line rather than a row of its own */
@@ -405,6 +427,13 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 #define ROW_SETTING_DECIMALS (ROW_CONTENT_FIRST_T + 1)
 #define ROW_SETTING_AUTO_OFF (ROW_CONTENT_FIRST_T + 2)
 #define ROW_SETTING_USB (ROW_CONTENT_FIRST_T + 3)
+
+/* The editor's pane, in the small font between the header's rule and its own */
+#define EDIT_PANE_TOP_T (ROW_CONTENT_FIRST_T * QDOS_CELL_H)
+#define EDIT_PANE_H_T ((ROW_CONTENT_LAST_T + 1) * QDOS_CELL_H - 1 - EDIT_PANE_TOP_T)
+#define EDIT_ROWS_T (EDIT_PANE_H_T / QDOS_SMALL_FONT_H)
+#define EDIT_COLS_T (QDOS_SCREEN_W / QDOS_SMALL_FONT_W)
+#define EDIT_Y0_T (EDIT_PANE_TOP_T + (EDIT_PANE_H_T - EDIT_ROWS_T * QDOS_SMALL_FONT_H) / 2)
 
 /** Press one key. */
 static void key(qdos_key_event* script, size_t* n, qdos_key k) {
@@ -572,6 +601,78 @@ static size_t run_script_idling(
 }
 
 /** Does any content row of this screen hold this text? */
+/** A small-font cell whose glyph starts at pixel row @p y0 */
+static bool small_cell_is(const uint8_t* fb, int col, int y0, char ch, bool inverted) {
+	for (int y = 0; y < QDOS_SMALL_FONT_H; y++) {
+		const uint8_t bits = qdos_small_font_row(ch, y);
+		for (int x = 0; x < QDOS_SMALL_FONT_W; x++) {
+			const size_t i = (size_t)(y0 + y) * QDOS_SCREEN_W + col * QDOS_SMALL_FONT_W + x;
+			const bool dark = fb[i] < 0x80;
+			if ((inverted ? !dark : dark) != ((bits & (1u << x)) != 0)) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+/** Read small-font text starting at pixel row @p y0 back, as read_row() does a row */
+static void read_small(const uint8_t* fb, int y0, char* out, size_t cap) {
+	size_t len = 0;
+	for (int col = 0; col < EDIT_COLS_T && len + 1 < cap; col++) {
+		char found = ' ';
+		for (char ch = '!'; ch <= '~'; ch++) {
+			if (small_cell_is(fb, col, y0, ch, false) || small_cell_is(fb, col, y0, ch, true)) {
+				found = ch;
+				break;
+			}
+		}
+		out[len++] = found;
+	}
+	while (len > 0 && out[len - 1] == ' ') {
+		len--;
+	}
+	out[len] = '\0';
+}
+
+static void read_edit_line(const uint8_t* fb, int line, char* out, size_t cap) {
+	read_small(fb, EDIT_Y0_T + line * QDOS_SMALL_FONT_H, out, cap);
+}
+
+/* An error is small, centred in the message line */
+#define ERROR_Y0_T (ROW_MESSAGE_LINE * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2)
+
+static void read_error(const uint8_t* fb, char* out, size_t cap) {
+	read_small(fb, ERROR_Y0_T, out, cap);
+}
+
+static bool error_cell_is(const uint8_t* fb, int col, char ch, bool inverted) {
+	return small_cell_is(fb, col, ERROR_Y0_T, ch, inverted);
+}
+
+/* The band's text, small and centred in the top row */
+#define STATUS_Y0_T (ROW_STATUS_T * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2)
+
+static bool status_band_is_black(const uint8_t* fb) {
+	for (int y = ROW_STATUS_T * QDOS_CELL_H; y < (ROW_STATUS_T + 1) * QDOS_CELL_H; y++) {
+		if (fb[(size_t)y * QDOS_SCREEN_W] >= 0x80 || fb[(size_t)y * QDOS_SCREEN_W + QDOS_SCREEN_W - 1] >= 0x80) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool edit_pane_has(const uint8_t* fb, const char* text) {
+	char line[EDIT_COLS_T + 1];
+	for (int i = 0; i < EDIT_ROWS_T; i++) {
+		read_edit_line(fb, i, line, sizeof(line));
+		if (strstr(line, text) != NULL) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static bool page_has(const uint8_t* fb, const char* text) {
 	char row[QDOS_COLS + 1];
 	for (int r = ROW_CONTENT_FIRST_T; r <= ROW_CONTENT_LAST_T; r++) {
@@ -724,7 +825,7 @@ static void test_operator_error_is_shown(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "ZERO DIVISOR") != NULL);
 }
 
@@ -837,7 +938,7 @@ static void test_recall_of_empty_register(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "EMPTY") != NULL);
 }
 
@@ -855,7 +956,7 @@ static void test_clear_a_register(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "EMPTY") != NULL);
 }
 
@@ -978,7 +1079,7 @@ static void test_a_lost_stack_says_so(void) {
 	run_script(NULL, 0, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "LOST FROM STACK") != NULL);
 
 	// What was below it is still there
@@ -1084,7 +1185,7 @@ static void test_unmatched_closer_still_submits(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(row[0] != '\0'); // an error, rather than a line that cannot be sent
 
 	// The error is on the input line, so the prompt is not: still line mode
@@ -1107,8 +1208,111 @@ static void test_forget_a_word(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "not defined") != NULL); // gone after forgetting
+}
+
+/** An error is small, so one longer than the 24 columns of the large font still ends on screen. */
+static void test_a_long_error_is_not_cut_at_24(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"somewhatlongname\" forget");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strlen(row) > QDOS_COLS);
+	CHECK(strstr(row, "somewhatlongname") != NULL);
+	CHECK(strstr(row, "IS NOT DECLARED") != NULL);
+	CHECK(error_cell_is(fb, 0, row[0], true));
+
+	// The band runs the width of the panel, past the end of the text
+	const int y = ROW_MESSAGE_LINE * QDOS_CELL_H;
+	CHECK(fb[(size_t)y * QDOS_SCREEN_W + QDOS_SCREEN_W - 1] < 0x80);
+	CHECK(fb[(size_t)(y + QDOS_CELL_H - 1) * QDOS_SCREEN_W + QDOS_SCREEN_W - 1] < 0x80);
+}
+
+/** The clock on the left of the band and the charge on the right, white on black. */
+static void test_the_status_band_shows_clock_and_battery(void) {
+	store_reset();
+	g_has_clock = true;
+	g_clock_start = 14 * 3600 + 32 * 60 + 10;
+	g_has_battery = true;
+	g_battery = 87;
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "5");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(status_band_is_black(fb));
+
+	char band[EDIT_COLS_T + 1];
+	read_small(fb, STATUS_Y0_T, band, sizeof(band));
+	CHECK(strncmp(band, " 14:32", 6) == 0);
+	CHECK(strlen(band) == EDIT_COLS_T - 1); // ends a cell in from the edge
+	CHECK(strcmp(band + strlen(band) - 3, "87%") == 0);
+	CHECK(small_cell_is(fb, 1, STATUS_Y0_T, '1', true));
+}
+
+/** No clock set and no battery, and the band is still there, saying nothing. */
+static void test_the_status_band_stays_when_it_has_nothing(void) {
+	store_reset();
+	g_has_battery = true;
+	g_battery = -1;
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "5");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(status_band_is_black(fb));
+	char band[EDIT_COLS_T + 1];
+	read_small(fb, STATUS_Y0_T, band, sizeof(band));
+	CHECK(band[0] == '\0');
+}
+
+/** Left alone, the shell wakes at the turn of the minute, and only then. */
+static void test_the_clock_turns_over_while_idle(void) {
+	store_reset();
+	g_has_clock = true;
+	g_clock_start = 9 * 3600 + 59 * 60 + 45; // 15 seconds to the hour
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "5");
+
+	stub_state st;
+	memset(&st, 0, sizeof(st));
+	st.script = script;
+	st.count = n;
+	st.wait_budget = n + 1;
+	st.ms_step = 11000; // past the cursor settling, so the blink is not what is due
+
+	qdos_hal hal;
+	stub_hal(&hal, &st);
+	qdos_shell* sh = qdos_shell_create(&hal);
+	qdos_shell_run(sh);
+	qdos_shell_destroy(sh);
+
+	// 11 seconds on is 09:59:56, so asleep for the 4 left in the minute
+	CHECK(st.last_timeout == 4000);
+
+	// And when it does, the band shows the new one
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	int presents = 0;
+	run_script_idling(script, n, 20000, 2, fb, &presents);
+	char band[EDIT_COLS_T + 1];
+	read_small(fb, STATUS_Y0_T, band, sizeof(band));
+	CHECK(strstr(band, "10:00") != NULL);
 }
 
 /** Forgetting something that was never declared says so. */
@@ -1123,7 +1327,7 @@ static void test_forget_unknown(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "IS NOT DECLARED") != NULL);
 }
 
@@ -1156,7 +1360,7 @@ static void test_a_declared_word_is_not_written_to_the_card(void) {
 	type_line(second, &n, "answer");
 	run_script(second, n, fb);
 
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "not defined") != NULL);
 }
 
@@ -1178,7 +1382,7 @@ static void test_forget_outlives_the_reboot(void) {
 	run_script(second, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "not defined") != NULL);
 }
 
@@ -1396,7 +1600,7 @@ static void test_an_app_leaves_nothing_behind(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "not defined") != NULL);
 }
 
@@ -1492,7 +1696,7 @@ static void test_forget_refuses_system(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "IS BUILT IN") != NULL);
 }
 
@@ -1532,11 +1736,36 @@ static void test_edit_opens_editor(void) {
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
 	CHECK(strstr(row, "hyp") != NULL);
 
-	// The body is laid out over the stack area, a line per row
-	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
-	CHECK(strstr(row, "fn hyp") != NULL);
-	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
-	CHECK(strstr(row, "5") != NULL);
+	// The body is laid out over the stack area, a line per row, small
+	char line[EDIT_COLS_T + 1];
+	read_edit_line(fb, 0, line, sizeof(line));
+	CHECK(strstr(line, "fn hyp") != NULL);
+	read_edit_line(fb, 1, line, sizeof(line));
+	CHECK(strstr(line, "5") != NULL);
+}
+
+/** The small font is the point: eight lines of fifty columns, not six of 24. */
+static void test_edit_shows_eight_lines_of_fifty(void) {
+	store_reset();
+	seed_system("wide", "fn wide( -- ) {\n"
+						"\t1\n\t2\n\t3\n\t4\n\t5\n"
+						"\"0123456789012345678901234567890123456789\" print\n"
+						"}");
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "\"wide\" edit");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(EDIT_ROWS_T == 8 && EDIT_COLS_T == 50);
+
+	char line[EDIT_COLS_T + 1];
+	read_edit_line(fb, 6, line, sizeof(line));
+	CHECK(strcmp(line, "\"0123456789012345678901234567890123456789\" print") == 0);
+	read_edit_line(fb, 7, line, sizeof(line));
+	CHECK(strcmp(line, "}") == 0);
 }
 
 /** An unknown name starts a new program rather than failing. */
@@ -1550,9 +1779,9 @@ static void test_edit_starts_new(void) {
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
-	CHECK(strstr(row, "fn fresh") != NULL);
+	char line[EDIT_COLS_T + 1];
+	read_edit_line(fb, 0, line, sizeof(line));
+	CHECK(strstr(line, "fn fresh") != NULL);
 }
 
 /** Saving evaluates and stores; the program then runs. */
@@ -1627,10 +1856,10 @@ static void test_edit_check_reports_error(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(row[0] != '\0');
 	CHECK(strstr(row, "COMPILES") == NULL);
-	CHECK(cell_is(fb, 0, ROW_MESSAGE_LINE, row[0], true)); // inverted, so flagged
+	CHECK(error_cell_is(fb, 0, row[0], true)); // inverted, so flagged
 
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
 	CHECK(strstr(row, "bad") != NULL);
@@ -1654,10 +1883,10 @@ static void test_edit_check_finds_an_undefined_word(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "'ok' NOT DEFINED") != NULL);
 	CHECK(strstr(row, "COMPILES") == NULL);
-	CHECK(cell_is(fb, 0, ROW_MESSAGE_LINE, row[0], true)); // inverted, so flagged
+	CHECK(error_cell_is(fb, 0, row[0], true)); // inverted, so flagged
 
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
 	CHECK(strstr(row, "boom") != NULL);
@@ -1954,7 +2183,7 @@ static void test_about_returns(void) {
 	CHECK(strstr(row, "INFO") != NULL); // the calculator's own soft row
 }
 
-/** Rotate reaches the third entry, which nothing else on the keypad can. */
+/** Rotate reaches the third entry. Off the keypad now, but still a key. */
 static void test_rot_in_calculator_mode(void) {
 	store_reset();
 
@@ -2024,6 +2253,28 @@ static void test_over_in_calculator_mode(void) {
 	CHECK(strstr(row, "7") != NULL);
 	read_row(fb, ROW_TOP_VALUE - 2, row, sizeof(row));
 	CHECK(strstr(row, "7") != NULL); // still where it was
+}
+
+/** e^x and the inverse trigonometry have keys, and apply to x like the rest */
+static void test_exp_and_asin_in_calculator_mode(void) {
+	store_reset();
+	qdos_math_set_degrees(false);
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_EXP);
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ASIN);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1.5707") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "2.7182") != NULL);
 }
 
 /**
@@ -2300,10 +2551,10 @@ static void test_a_message_borrows_the_input_line(void) {
 
 	// The error sits where the prompt was, and is inverted because it is one
 	char row[QDOS_COLS + 1];
-	read_row(errored, ROW_INPUT_LINE, row, sizeof(row));
+	read_error(errored, row, sizeof(row));
 	CHECK(strstr(row, "ZERO DIVISOR") != NULL);
 	CHECK(row[0] != ':');
-	CHECK(cell_is(errored, 0, ROW_INPUT_LINE, row[0], true));
+	CHECK(error_cell_is(errored, 0, row[0], true));
 
 	// One key later the line is the user's again, with that key on it
 	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
@@ -2312,21 +2563,21 @@ static void test_a_message_borrows_the_input_line(void) {
 	CHECK(strchr(row, '7') != NULL);
 }
 
-/** The row the message used to keep for itself is the stack's now. */
+/** The stack fills every row between the status band and the input line. */
 static void test_the_stack_reaches_the_reclaimed_row(void) {
 	store_reset();
 
 	qdos_key_event script[64];
 	size_t n = 0;
-	type_line(script, &n, "1 2 3 4 5 6 7 8"); // one more than the old layout held
+	type_line(script, &n, "1 2 3 4 5 6 7");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	// All eight are on screen, the deepest at the very top row
+	// All seven are on screen, the deepest right under the band
 	char row[QDOS_COLS + 1];
-	read_row(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "8:") != NULL);
+	read_row(fb, ROW_STATUS_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "7:") != NULL);
 	CHECK(strstr(row, "...") == NULL);
 
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
@@ -2344,15 +2595,15 @@ static void test_a_deeper_stack_still_marks_itself(void) {
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	// Ten deep, seven rows of values, so three are not on screen
+	// Ten deep, six rows of values under the marker, so four are not on screen
 	char row[QDOS_COLS + 1];
-	read_row(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "3 MORE") != NULL);
+	read_row(fb, ROW_STATUS_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "4 MORE") != NULL);
 
 	// The row under it is a numbered value, not something the marker ate
-	read_row(fb, 1, row, sizeof(row));
-	CHECK(strstr(row, "7:") != NULL);
-	CHECK(strstr(row, "4") != NULL);
+	read_row(fb, ROW_STATUS_T + 2, row, sizeof(row));
+	CHECK(strstr(row, "6:") != NULL);
+	CHECK(strstr(row, "5") != NULL);
 
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "1:") != NULL);
@@ -2514,7 +2765,7 @@ static void test_forget_refuses_an_uploaded_program(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "ON THE CARD") != NULL);
 }
 
@@ -2679,7 +2930,7 @@ static void test_a_failed_usb_switch_is_reported(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "WOULD NOT SWITCH") != NULL);
 
 	// And the row still reads OFF, because nothing was handed over
@@ -3153,7 +3404,7 @@ static void test_a_failed_line_is_kept(void) {
 	run_script_mid(script, n, n - 1, fb, mid);
 
 	char row[QDOS_COLS + 1];
-	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(mid, row, sizeof(row));
 	CHECK(strstr(row, "not defined") != NULL);
 
 	// The next key shows the line again, still holding what was typed
@@ -3199,7 +3450,7 @@ static void test_infix_is_refused_with_the_postfix(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "5 3 -") != NULL);
 
 	// Nothing was evaluated, so nothing reached the stack
@@ -3219,7 +3470,7 @@ static void test_unspaced_infix_is_refused(void) {
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "5 3 -") != NULL);
 }
 
@@ -3524,7 +3775,7 @@ static void test_a_module_that_faulted_is_not_opened_again(void) {
 	run_script(NULL, 0, boot);
 
 	char row[QDOS_COLS + 1];
-	read_row(boot, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(boot, row, sizeof(row));
 	CHECK(strstr(row, "FAULTED") != NULL);
 	CHECK(strstr(row, "demo") != NULL);
 
@@ -3537,7 +3788,7 @@ static void test_a_module_that_faulted_is_not_opened_again(void) {
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "demo::double") != NULL);
 	CHECK(strstr(row, "not def") != NULL);
 }
@@ -3916,7 +4167,7 @@ static void test_edit_asks_before_losing_work(void) {
 
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
 	CHECK(strstr(row, "typed") != NULL);
-	CHECK(page_has(fb, "1 2 +"));
+	CHECK(edit_pane_has(fb, "1 2 +"));
 }
 
 /** Nothing typed is nothing to lose, so it just leaves. */
@@ -4221,8 +4472,12 @@ static void test_soft_key_opens_apps(void) {
 
 	// and in the list its labels have changed
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, QDOS_GLYPH_DOWN) != NULL);
+	CHECK(strstr(row, "PICK") != NULL);
 	CHECK(strstr(row, "EDIT") != NULL);
+
+	// and no arrows among them, the keypad having its own
+	CHECK(strstr(row, QDOS_GLYPH_DOWN) == NULL);
+	CHECK(strstr(row, QDOS_GLYPH_UP) == NULL);
 }
 
 /** open in the list edits the selected program. */
@@ -4245,8 +4500,8 @@ static void test_soft_open_edits_selection(void) {
 	CHECK(strstr(row, "SAVE") != NULL);
 }
 
-/** f2 is down and f3 is up, so the pair reads like vim's j and k. */
-static void test_soft_down_then_up(void) {
+/** The list moves on the arrow keys, and f2 and f3 no longer stand in for them. */
+static void test_list_moves_on_the_arrow_keys(void) {
 	store_reset();
 	seed_system("aaa", "fn aaa( -- r:i64) { 1 }");
 	seed_system("bbb", "fn bbb( -- r:i64) { 2 }");
@@ -4254,7 +4509,7 @@ static void test_soft_down_then_up(void) {
 	qdos_key_event script[16];
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SOFT2); // apps
-	key(script, &n, QDOS_KEY_SOFT2); // down
+	key(script, &n, QDOS_KEY_DOWN);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -4265,8 +4520,16 @@ static void test_soft_down_then_up(void) {
 
 	n = 0;
 	key(script, &n, QDOS_KEY_SOFT2); // apps
-	key(script, &n, QDOS_KEY_SOFT2); // down
-	key(script, &n, QDOS_KEY_SOFT3); // up
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_UP);
+	run_script(script, n, fb);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "1/2") != NULL);
+
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT2); // apps
+	key(script, &n, QDOS_KEY_SOFT2);
+	key(script, &n, QDOS_KEY_SOFT3);
 	run_script(script, n, fb);
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
 	CHECK(strstr(row, "1/2") != NULL);
@@ -4325,6 +4588,10 @@ int main(void) {
 	test_unmatched_closer_still_submits();
 	test_forget_a_word();
 	test_forget_unknown();
+	test_the_status_band_shows_clock_and_battery();
+	test_the_status_band_stays_when_it_has_nothing();
+	test_the_clock_turns_over_while_idle();
+	test_a_long_error_is_not_cut_at_24();
 	test_entry_survives_mode_switch();
 	test_native_words_reach_the_hal();
 	test_recall_of_empty_register();
@@ -4354,6 +4621,7 @@ int main(void) {
 	test_forget_refuses_system();
 	test_forget_reverts_to_system();
 	test_edit_opens_editor();
+	test_edit_shows_eight_lines_of_fifty();
 	test_edit_starts_new();
 	test_edit_saves();
 	test_edit_refuses_broken();
@@ -4407,6 +4675,7 @@ int main(void) {
 	test_rot_in_calculator_mode();
 	test_rot_three_times_is_a_full_turn();
 	test_over_in_calculator_mode();
+	test_exp_and_asin_in_calculator_mode();
 	test_about_shows_the_version();
 	test_about_returns();
 	test_user_word_shadows_builtin();
@@ -4428,7 +4697,7 @@ int main(void) {
 	test_soft_labels_follow_mode();
 	test_soft_key_opens_apps();
 	test_soft_open_edits_selection();
-	test_soft_down_then_up();
+	test_list_moves_on_the_arrow_keys();
 	test_f1_is_always_the_way_out();
 	test_cursor_inserts();
 	test_backspace_at_cursor();

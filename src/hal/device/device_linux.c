@@ -8,6 +8,7 @@
 
 #include "device_linux.h"
 
+#include "../wallclock.h"
 #include "framebuffer.h"
 #include "keypad.h"
 
@@ -443,6 +444,60 @@ static qdos_store_result device_store_list(
 }
 
 /** Hand the inbox partition to a host, or take it back. */
+/* One line of a sysfs attribute, newline dropped */
+static bool read_attribute(const char* dir, const char* name, char* out, size_t cap) {
+	char path[512];
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	FILE* f = fopen(path, "r");
+	if (f == NULL) {
+		return false;
+	}
+	const bool ok = fgets(out, (int)cap, f) != NULL;
+	fclose(f);
+	out[strcspn(out, "\n")] = '\0';
+	return ok;
+}
+
+int qdos_power_supply_capacity(const char* root) {
+	DIR* d = opendir(root);
+	if (d == NULL) {
+		return -1;
+	}
+
+	// A charger is a supply too, and has no capacity to report
+	int capacity = -1;
+	for (struct dirent* e = readdir(d); e != NULL && capacity < 0; e = readdir(d)) {
+		if (e->d_name[0] == '.') {
+			continue;
+		}
+
+		char dir[384], value[32];
+		snprintf(dir, sizeof(dir), "%s/%s", root, e->d_name);
+		if (!read_attribute(dir, "type", value, sizeof(value)) || strcmp(value, "Battery") != 0 ||
+				!read_attribute(dir, "capacity", value, sizeof(value))) {
+			continue;
+		}
+
+		char* end;
+		const long n = strtol(value, &end, 10);
+		if (end != value && n >= 0 && n <= 100) {
+			capacity = (int)n;
+		}
+	}
+	closedir(d);
+	return capacity;
+}
+
+static int device_battery(qdos_hal* hal) {
+	(void)hal;
+	return qdos_power_supply_capacity("/sys/class/power_supply");
+}
+
+static bool device_time_of_day(qdos_hal* hal, int* seconds) {
+	(void)hal;
+	return qdos_wallclock(seconds);
+}
+
 static int device_usb_export(qdos_hal* hal, bool on) {
 	device_state* st = (device_state*)hal->impl;
 
@@ -491,5 +546,7 @@ void qdos_device_hal(qdos_hal* hal) {
 	hal->store_path = device_store_path;
 	hal->store_changed = device_store_changed;
 	hal->usb_export = device_usb_export; // init() clears it if there is no helper
+	hal->time_of_day = device_time_of_day;
+	hal->battery = device_battery;
 	hal->impl = &g_device;
 }

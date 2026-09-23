@@ -27,7 +27,7 @@ static bool is_any_modifier(const qdos_pad_button* b) {
 
 static void test_every_slot_is_filled(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			CHECK(b != NULL);
 
@@ -51,7 +51,8 @@ static void test_every_slot_is_filled(void) {
 			}
 		}
 	}
-	CHECK(qdos_pad_button_at(QDOS_PAD_COLS, 0) == NULL);
+	CHECK(qdos_pad_button_at(QDOS_PAD_COLS, 1) == NULL);
+	CHECK(qdos_pad_button_at(QDOS_PAD_NARROW, 0) == NULL);
 	CHECK(qdos_pad_button_at(0, QDOS_PAD_ROWS) == NULL);
 }
 
@@ -62,7 +63,7 @@ static void test_every_slot_is_filled(void) {
  */
 static void test_labels_fit_their_button(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
 
@@ -71,11 +72,13 @@ static void test_labels_fit_their_button(void) {
 					continue;
 				}
 
+				int kx, ky, kw, kh;
+				qdos_pad_key_rect(b, &kx, &ky, &kw, &kh);
 				const int w = qdos_padfont_advance(QDOS_PADFACE_CAP, layers[l]->label);
-				if (w > QDOS_KEY_LABEL_W) {
-					fprintf(stderr, "  '%s' sets %dpx, key holds %d\n", layers[l]->label, w, QDOS_KEY_LABEL_W);
+				if (w > QDOS_KEY_LABEL_W(kw)) {
+					fprintf(stderr, "  '%s' sets %dpx, key holds %d\n", layers[l]->label, w, QDOS_KEY_LABEL_W(kw));
 				}
-				CHECK(w <= QDOS_KEY_LABEL_W);
+				CHECK(w <= QDOS_KEY_LABEL_W(kw));
 
 				// A cap that measures nothing draws nothing, which is only
 				// right for the soft keys
@@ -94,17 +97,18 @@ static void test_labels_fit_their_button(void) {
  */
 static void test_shift_legends_fit_above_their_key(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const char* legend = qdos_pad_button_at(col, row)->symbol.label;
 			if (legend == NULL) {
 				continue;
 			}
 
+			const int cell = qdos_pad_cell_left(col + 1, row) - qdos_pad_cell_left(col, row);
 			const int w = qdos_padfont_advance(QDOS_PADFACE_SHIFT, legend);
-			if (w > QDOS_PAD_BUTTON_W - 4) {
-				fprintf(stderr, "  legend '%s' sets %dpx, cell holds %d\n", legend, w, QDOS_PAD_BUTTON_W - 4);
+			if (w > cell - 4) {
+				fprintf(stderr, "  legend '%s' sets %dpx, cell holds %d\n", legend, w, cell - 4);
 			}
-			CHECK(w > 0 && w <= QDOS_PAD_BUTTON_W - 4);
+			CHECK(w > 0 && w <= cell - 4);
 
 			// Every glyph, top and bottom, against the band it has to sit in
 			for (const char* p = legend; *p; p++) {
@@ -142,7 +146,7 @@ static void test_a_legend_sits_nearer_its_own_key(void) {
 /** Every character a keycap uses has a glyph, or the cap comes out short. */
 static void test_the_font_has_every_keycap_character(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
 
@@ -181,10 +185,10 @@ static void test_the_font_has_every_keycap_character(void) {
  * looks like an oversight, which is exactly why it is asserted here.
  */
 static void test_the_soft_keys_have_blank_caps(void) {
-	static const qdos_key SOFT[QDOS_PAD_COLS] = {
+	static const qdos_key SOFT[QDOS_PAD_NARROW] = {
 			QDOS_KEY_SOFT1, QDOS_KEY_SOFT2, QDOS_KEY_SOFT3, QDOS_KEY_SOFT4, QDOS_KEY_SOFT5};
 
-	for (int col = 0; col < QDOS_PAD_COLS; col++) {
+	for (int col = 0; col < QDOS_PAD_NARROW; col++) {
 		const qdos_pad_button* b = qdos_pad_button_at(col, 0);
 
 		// Blank, but not absent: it still sends its key
@@ -201,7 +205,7 @@ static void test_the_soft_keys_have_blank_caps(void) {
 	// is a cap that has gone missing.
 	int blank = 0, blank_soft = 0, blank_shift = 0;
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			if (b->plain.label[0] != '\0') {
 				continue;
@@ -215,9 +219,9 @@ static void test_the_soft_keys_have_blank_caps(void) {
 			}
 		}
 	}
-	CHECK(blank_soft == QDOS_PAD_COLS);
+	CHECK(blank_soft == QDOS_PAD_NARROW);
 	CHECK(blank_shift == 1);
-	CHECK(blank == QDOS_PAD_COLS + 1);
+	CHECK(blank == QDOS_PAD_NARROW + 1);
 }
 
 /**
@@ -290,22 +294,22 @@ static void test_hit_testing(void) {
 	// The very first and very last pixel of the pad belong to the corner keys
 	CHECK(qdos_pad_at(QDOS_PAD_X, QDOS_PAD_Y) == qdos_pad_button_at(0, 0));
 	CHECK(qdos_pad_at(QDOS_PAD_X + QDOS_PAD_W - 1, QDOS_PAD_Y + QDOS_PAD_H - 1) ==
-			qdos_pad_button_at(QDOS_PAD_COLS - 1, QDOS_PAD_ROWS - 1));
+			qdos_pad_button_at(qdos_pad_row_cols(QDOS_PAD_ROWS - 1) - 1, QDOS_PAD_ROWS - 1));
 
-	// Every cell, hit at its centre
+	// Every cell, hit at its centre and at both of its edges, since a boundary
+	// off by one is invisible -- and a row of six has no whole-pixel pitch
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
-			const int x = QDOS_PAD_X + col * QDOS_PAD_BUTTON_W + QDOS_PAD_BUTTON_W / 2;
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
+			const int left = QDOS_PAD_X + qdos_pad_cell_left(col, row);
+			const int right = QDOS_PAD_X + qdos_pad_cell_left(col + 1, row) - 1;
+			const int mid = QDOS_PAD_Y + row * QDOS_PAD_BUTTON_H + QDOS_PAD_BUTTON_H / 2;
+			CHECK(qdos_pad_at(left, mid) == qdos_pad_button_at(col, row));
+			CHECK(qdos_pad_at(right, mid) == qdos_pad_button_at(col, row));
+
+			const int x = (left + right) / 2;
 			const int y = QDOS_PAD_Y + row * QDOS_PAD_BUTTON_H + QDOS_PAD_BUTTON_H / 2;
 			CHECK(qdos_pad_at(x, y) == qdos_pad_button_at(col, row));
 		}
-	}
-
-	// And at both edges of a cell, since a boundary off by one is invisible
-	for (int col = 0; col < QDOS_PAD_COLS; col++) {
-		const int left = QDOS_PAD_X + col * QDOS_PAD_BUTTON_W;
-		CHECK(qdos_pad_at(left, QDOS_PAD_Y + 5) == qdos_pad_button_at(col, 0));
-		CHECK(qdos_pad_at(left + QDOS_PAD_BUTTON_W - 1, QDOS_PAD_Y + 5) == qdos_pad_button_at(col, 0));
 	}
 }
 
@@ -444,7 +448,7 @@ static void test_every_key_can_be_pressed(void) {
 	memset(buf + bytes, 0xAA, 16);
 
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			memset(buf, 0, bytes);
 			qdos_pad_draw(buf, w, QDOS_PAD_X, QDOS_PAD_Y, QDOS_PAD_PLAIN, qdos_pad_button_at(col, row));
 
@@ -588,7 +592,7 @@ static void test_frame_paints_only_the_border(void) {
 }
 
 static void test_shift_layer(void) {
-	// Left column of the numeric block, between the down arrow and the way
+	// Left column of the numeric block, between the registers and the way
 	// out, under the thumb
 	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
 
@@ -598,7 +602,7 @@ static void test_shift_layer(void) {
 	// One key per layer and no more, or the state machine has two masters
 	int alpha = 0, symbol = 0;
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			if (is_modifier(b, QDOS_PAD_ALPHA)) {
 				alpha++;
@@ -625,7 +629,7 @@ static void test_shift_layer(void) {
 }
 
 /**
- * The numeric block: navigation down the left, the digits in a 3x3, the
+ * The numeric block: the registers down the left, the digits in a 3x3, the
  * operators down the right, and enter at the head of the left column -- all of
  * it at the bottom of the pad, with nothing below the numpad.
  */
@@ -653,18 +657,52 @@ static void test_numeric_block(void) {
 	CHECK(qdos_pad_button_at(4, 9)->plain.key == QDOS_KEY_ENTER);
 
 	CHECK(qdos_pad_button_at(0, 5)->plain.key == QDOS_KEY_BACKSPACE);
-	CHECK(qdos_pad_button_at(0, 6)->plain.key == QDOS_KEY_UP);
-	CHECK(qdos_pad_button_at(0, 7)->plain.key == QDOS_KEY_DOWN);
+	CHECK(qdos_pad_button_at(0, 6)->plain.key == QDOS_KEY_STO);
+	CHECK(qdos_pad_button_at(0, 7)->plain.key == QDOS_KEY_RCL);
 	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
 	CHECK(qdos_pad_button_at(0, 9)->plain.key == QDOS_KEY_CLEAR);
 
 	// Off is the far corner from ESC, which is what backs out of a stray shift
 	CHECK(qdos_pad_button_at(4, 0)->symbol.key == QDOS_KEY_POWER);
 	CHECK(qdos_pad_button_at(0, 9)->symbol.label == NULL);
+}
 
-	// The arrows there is no room for on the face
-	CHECK(qdos_pad_button_at(0, 6)->symbol.key == QDOS_KEY_LEFT);
-	CHECK(qdos_pad_button_at(0, 7)->symbol.key == QDOS_KEY_RIGHT);
+/**
+ * The rows are six across above the numeric block and five in it and the soft
+ * row, and the arrows are an inverted T at the right of the top two.
+ */
+static void test_the_arrows_are_an_inverted_t(void) {
+	static const int WIDTHS[QDOS_PAD_ROWS] = {5, 6, 6, 6, 6, 5, 5, 5, 5, 5};
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		CHECK(qdos_pad_row_cols(row) == WIDTHS[row]);
+
+		// A row fills the pad edge to edge, whatever its pitch
+		CHECK(qdos_pad_cell_left(0, row) == 0);
+		CHECK(qdos_pad_cell_left(qdos_pad_row_cols(row), row) == QDOS_PAD_W);
+	}
+
+	const qdos_pad_button* up = qdos_pad_button_at(4, 1);
+	const qdos_pad_button* left = qdos_pad_button_at(3, 2);
+	const qdos_pad_button* down = qdos_pad_button_at(4, 2);
+	const qdos_pad_button* right = qdos_pad_button_at(5, 2);
+	CHECK(up->plain.key == QDOS_KEY_UP);
+	CHECK(left->plain.key == QDOS_KEY_LEFT);
+	CHECK(down->plain.key == QDOS_KEY_DOWN);
+	CHECK(right->plain.key == QDOS_KEY_RIGHT);
+
+	// Up sits squarely over down, in the matrix and on the case
+	int ux, uy, uw, uh, dx, dy, dw, dh;
+	qdos_pad_key_rect(up, &ux, &uy, &uw, &uh);
+	qdos_pad_key_rect(down, &dx, &dy, &dw, &dh);
+	CHECK(ux == dx && uw == dw);
+	CHECK(dy == uy + QDOS_PAD_BUTTON_H);
+
+	// A locked ALPHA still moves the cursor, and shift does not take them
+	const qdos_pad_button* arrows[4] = {up, left, down, right};
+	for (int i = 0; i < 4; i++) {
+		CHECK(qdos_pad_action_for(arrows[i], QDOS_PAD_ALPHA) == &arrows[i]->plain);
+		CHECK(arrows[i]->symbol.label == NULL);
+	}
 }
 
 /** Every digit types a digit on every layer: names have numbers in them. */
@@ -674,7 +712,7 @@ static void test_digits_survive_every_layer(void) {
 
 	int found = 0;
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 
 			bool is_digit = false;
@@ -698,7 +736,7 @@ static void test_the_alphabet_is_complete(void) {
 	int seen[26] = {0};
 
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_action* a = &qdos_pad_button_at(col, row)->alpha;
 			if (a->label == NULL || a->text == NULL) {
 				continue;
@@ -724,7 +762,7 @@ static void test_what_the_letters_displaced_is_still_reachable(void) {
 	for (size_t w = 0; w < sizeof(wanted) / sizeof(*wanted); w++) {
 		int found = 0;
 		for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-			for (int col = 0; col < QDOS_PAD_COLS; col++) {
+			for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 				const qdos_pad_action* s = &qdos_pad_button_at(col, row)->symbol;
 				if (s->text != NULL && strcmp(s->text, wanted[w]) == 0) {
 					found++;
@@ -739,7 +777,7 @@ static void test_what_the_letters_displaced_is_still_reachable(void) {
 static void test_a_space_is_reachable(void) {
 	int spaces = 0;
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			if (b->plain.text != NULL && strcmp(b->plain.text, " ") == 0) {
 				spaces++;
@@ -756,7 +794,7 @@ static void test_a_space_is_reachable(void) {
 static void test_default_layer_is_the_calculator(void) {
 	int functions = 0, syntax = 0;
 	for (int row = 1; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			if (b->plain.key >= QDOS_KEY_FN_FIRST && b->plain.key <= QDOS_KEY_FN_LAST) {
 				functions++;
@@ -780,7 +818,7 @@ static void test_default_layer_is_the_calculator(void) {
  */
 static void test_default_layer_reaches_the_calculator(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			if (b->plain.text == NULL) {
 				continue;
@@ -797,7 +835,7 @@ static void test_default_layer_reaches_the_calculator(void) {
 static void test_alpha_layer_has_the_alphabet(void) {
 	int seen[26] = {0};
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_action* a = &qdos_pad_button_at(col, row)->alpha;
 			if (a->label == NULL || a->text == NULL) {
 				continue;
@@ -824,7 +862,7 @@ static void test_alpha_keeps_the_editing_keys(void) {
 	for (size_t i = 0; i < sizeof(NEEDED) / sizeof(*NEEDED); i++) {
 		bool found = false;
 		for (int row = 0; row < QDOS_PAD_ROWS && !found; row++) {
-			for (int col = 0; col < QDOS_PAD_COLS && !found; col++) {
+			for (int col = 0; col < qdos_pad_row_cols(row) && !found; col++) {
 				const qdos_pad_button* b = qdos_pad_button_at(col, row);
 				if (b->plain.key != NEEDED[i]) {
 					continue;
@@ -840,7 +878,7 @@ static void test_alpha_keeps_the_editing_keys(void) {
 /** A modifier is not a key: pressing it must never type anything. */
 static void test_modifiers_send_nothing(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			if (!is_any_modifier(b)) {
 				continue;
@@ -873,7 +911,7 @@ static void trimmed(const char* text, char* out, size_t cap) {
  */
 static void test_cap_case_says_whether_it_is_the_word(void) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
 			const qdos_pad_action* layers[3] = {&b->plain, &b->alpha, &b->symbol};
 
@@ -949,7 +987,7 @@ static int dump_ppm(const char* path, qdos_pad_layer layer, const qdos_pad_butto
  */
 static void test_every_word_on_the_symbol_layer_exists(void) {
 	// Syntax, not vocabulary: these never appear in the word list
-	static const char* const SYNTAX[] = {"fn", "if", "else", "loop", "break", "i64", "f64", "str"};
+	static const char* const SYNTAX[] = {"fn", "if", "else", "loop", "for", "break", "i64", "f64", "str"};
 
 	// The vocabulary the shell has: the interpreter's, plus the math words
 	// QDOS registers itself because lib/math is a compiled-tier module
@@ -961,7 +999,7 @@ static void test_every_word_on_the_symbol_layer_exists(void) {
 	CHECK(words.count > 0);
 
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
-		for (int col = 0; col < QDOS_PAD_COLS; col++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const char* text = qdos_pad_button_at(col, row)->symbol.text;
 			char token[QDOS_WORDLIST_NAME];
 			if (text == NULL || sscanf(text, "%31s", token) != 1) {
@@ -1023,6 +1061,7 @@ int main(int argc, char** argv) {
 	test_frame_paints_only_the_border();
 	test_shift_layer();
 	test_numeric_block();
+	test_the_arrows_are_an_inverted_t();
 	test_digits_survive_every_layer();
 	test_the_alphabet_is_complete();
 	test_what_the_letters_displaced_is_still_reachable();

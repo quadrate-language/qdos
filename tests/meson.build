@@ -114,6 +114,9 @@ if python.found()
 	test('font', python,
 			args: [meson.project_source_root() / 'tools/genfont.py', '--check'],
 			workdir: meson.project_source_root())
+	test('smallfont', python,
+			args: [meson.project_source_root() / 'tools/gensmallfont.py', '--check'],
+			workdir: meson.project_source_root())
 endif
 
 # The store half of the device backend is plain file handling, so it is tested

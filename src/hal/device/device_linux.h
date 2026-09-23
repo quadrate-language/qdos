@@ -15,6 +15,22 @@ extern "C" {
 /** @brief Fill in @p hal with the Linux framebuffer/evdev backend */
 void qdos_device_hal(qdos_hal* hal);
 
+/**
+ * @brief Charge left in the first battery under @p root, 0 to 100
+ *
+ * @p root is /sys/class/power_supply on the machine; a parameter so a test can
+ * lay out its own. -1 when no supply there is a battery that reports one.
+ */
+int qdos_power_supply_capacity(const char* root);
+
+/**
+ * @brief Charge left in the first battery under @p root, 0 to 100
+ *
+ * @p root is /sys/class/power_supply on the machine; a parameter so a test can
+ * lay out its own. -1 when no supply there is a battery that reports one.
+ */
+int qdos_power_supply_capacity(const char* root);
+
 #ifdef __cplusplus
 }
 #endif

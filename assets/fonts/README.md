@@ -1,6 +1,6 @@
 # Fonts
 
-Two of them, for two different jobs.
+Two of them here, for two different jobs, and a third that is only a bitmap.
 
 ## VCR_OSD_MONO_1.001.ttf
 
@@ -36,3 +36,15 @@ DejaVu Sans, a Bitstream Vera derivative. The licence is in
 that a modified version not be sold on its own and not carry the reserved font
 names. Copied from `/usr/share/fonts/TTF/` so regenerating does not depend on
 what happens to be installed.
+
+## Terminus 8x16 (no file here)
+
+The editor's font, drawn in the program pane so it shows 10 lines of 50
+columns instead of 7 of 24. `assets/font8x16.txt` is the source, packed into
+`src/ui/font8x16.c` by `tools/gensmallfont.py`.
+
+Terminus Font 4.20 by Dimitar Toshkov Zhekov, GPL-2.0-or-later, imported from
+the Linux console's `Lat2-Terminus16.psfu.gz` with
+`tools/gensmallfont.py --import`. Printable ASCII only. Terminus is drawn one
+bit per pixel at this cell, so unlike the panel font nothing was corrected by
+hand, and no TTF is kept: the bitmap is the whole font.

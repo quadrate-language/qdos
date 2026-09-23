@@ -38,12 +38,15 @@
  * no glyph reaches that far, so it underlines a row of content rather than
  * taking a row of its own -- the panel has ten and cannot spare two for lines.
  */
-/* The list and the editor caption themselves; the calculator does not need to */
-#define ROW_HEADER 0
-#define ROW_CONTENT_FIRST 1
+/* The clock and the battery, on a black band above everything else */
+#define ROW_STATUS 0
 
-/* Numbered rows already say how deep the stack is, so it starts at the top */
-#define ROW_STACK_FIRST 0
+/* The list and the editor caption themselves; the calculator does not need to */
+#define ROW_HEADER 1
+#define ROW_CONTENT_FIRST 2
+
+/* Numbered rows already say how deep the stack is, so it starts under the band */
+#define ROW_STACK_FIRST 1
 #define ROW_CONTENT_LAST (QDOS_ROWS - 3)
 #define ROW_INPUT (QDOS_ROWS - 2)
 
@@ -54,6 +57,13 @@
  * the line back -- see handle_key().
  */
 #define ROW_MESSAGE ROW_INPUT
+
+/* An error is set in the small font: errors are the long ones, and a diagnostic
+ * cut at 24 columns rarely still says where the problem is */
+#define MESSAGE_COLS (QDOS_SCREEN_W / QDOS_SMALL_FONT_W)
+
+/* How often the band looks at the battery when there is no clock to follow */
+#define STATUS_POLL_MS 60000
 
 /* Last row, so the labels sit against the edge the function keys are under */
 #define ROW_SOFT (QDOS_ROWS - 1)
@@ -196,8 +206,9 @@ struct qdos_shell {
 	size_t input_len;
 	size_t input_cursor;
 
-	char message[QDOS_COLS + 1]; ///< Error or status under the stack
+	char message[MESSAGE_COLS + 1]; ///< Error or status under the stack
 	bool message_is_error;
+	char status[16]; ///< What the status band last showed, to know when it is stale
 
 	bool cursor_on; ///< Which half of the blink the cursor is in
 
@@ -553,17 +564,17 @@ static const soft_key SOFT[7][SOFT_KEYS] = {
 				{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_ANGLE}},
 		[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
 				{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_ANGLE}},
-		// down then up, so the pair sits like vim's j and k
-		[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
-				{"PICK", QDOS_KEY_ENTER}, {"EDIT", QDOS_KEY_OPEN}},
+		// No arrows here or below: the keypad has its own
+		[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"PICK", QDOS_KEY_ENTER},
+				{"EDIT", QDOS_KEY_OPEN}},
 		// ESC, as everywhere else: DROP is a keypad word that empties the stack
 		[QDOS_MODE_EDIT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"CHECK", QDOS_KEY_CHECK},
 				{"", QDOS_KEY_NONE}, {"SAVE", QDOS_KEY_SAVE}},
 		[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"SET", QDOS_KEY_SETTINGS},
 				{"LOG", QDOS_KEY_DEBUG}, {"", QDOS_KEY_NONE}},
-		[QDOS_MODE_SETTINGS] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
+		[QDOS_MODE_SETTINGS] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
 				{"CHG", QDOS_KEY_ENTER}, {"LOG", QDOS_KEY_DEBUG}},
-		[QDOS_MODE_DEBUG] = {{"ESC", QDOS_KEY_CLEAR}, {QDOS_GLYPH_DOWN, QDOS_KEY_DOWN}, {QDOS_GLYPH_UP, QDOS_KEY_UP},
+		[QDOS_MODE_DEBUG] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
 				{"CLR", QDOS_KEY_BACKSPACE}, {"SET", QDOS_KEY_SETTINGS}},
 };
 
@@ -921,6 +932,10 @@ static const char* const FUNCTION_WORD[] = {
 		"mod",
 		"rot",
 		"over",
+		"asin",
+		"acos",
+		"atan",
+		"exp",
 };
 
 static const char* function_word(qdos_key key) {
@@ -1481,7 +1496,16 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 }
 
-#define EDIT_ROWS (ROW_CONTENT_LAST - ROW_CONTENT_FIRST + 1)
+/*
+ * The program is drawn in the small font, between the rule under the header and
+ * the one closing the pane: 10 lines of 50 rather than 7 of 24. The header,
+ * messages and soft labels stay at reading size, being read at a glance.
+ */
+#define EDIT_PANE_TOP (ROW_CONTENT_FIRST * QDOS_CELL_H)
+#define EDIT_PANE_H ((ROW_CONTENT_LAST + 1) * QDOS_CELL_H - 1 - EDIT_PANE_TOP)
+#define EDIT_ROWS (EDIT_PANE_H / QDOS_SMALL_FONT_H)
+#define EDIT_COLS (QDOS_SCREEN_W / QDOS_SMALL_FONT_W)
+#define EDIT_Y0 (EDIT_PANE_TOP + (EDIT_PANE_H - EDIT_ROWS * QDOS_SMALL_FONT_H) / 2)
 
 static void edit_scroll_into_view(qdos_shell* sh) {
 	size_t line, col;
@@ -2082,7 +2106,7 @@ static void render_edit(qdos_shell* sh, qdos_console* con) {
 	qdos_console_rule(con, ROW_HEADER);
 
 	// One horizontal offset for the whole pane, so columns stay aligned
-	const size_t width = QDOS_COLS - 1;
+	const size_t width = EDIT_COLS - 1;
 	const size_t left = (col >= width) ? col - width + 1 : 0;
 
 	for (size_t i = 0; i < EDIT_ROWS; i++) {
@@ -2092,14 +2116,15 @@ static void render_edit(qdos_shell* sh, qdos_console* con) {
 			break;
 		}
 
-		const int row = ROW_CONTENT_FIRST + (int)i;
+		const int y = EDIT_Y0 + (int)i * QDOS_SMALL_FONT_H;
 		for (size_t c = 0; left + c < len && c < width; c++) {
 			const char ch = text[left + c];
-			qdos_console_putc(con, (int)c, row, ch == '\t' ? ' ' : ch);
+			qdos_console_putc_small(con, (int)c * QDOS_SMALL_FONT_W, y, ch == '\t' ? ' ' : ch);
 		}
 
 		if (sh->ed_top + i == line && sh->cursor_on) {
-			qdos_console_invert(con, (int)(col - left), row, 1);
+			qdos_console_invert_rect(
+					con, (int)(col - left) * QDOS_SMALL_FONT_W, y, QDOS_SMALL_FONT_W, QDOS_SMALL_FONT_H);
 		}
 	}
 
@@ -2252,16 +2277,71 @@ static void render_message(qdos_shell* sh, qdos_console* con) {
 		return;
 	}
 
-	qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
-	if (sh->message_is_error) {
-		qdos_console_invert(con, 0, ROW_MESSAGE, (int)strlen(sh->message));
+	if (!sh->message_is_error) {
+		qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
+		return;
 	}
+
+	// Centred in the row, on a band the full width of the panel, so an error
+	// reads as one at a glance however short it is
+	const int y = ROW_MESSAGE * QDOS_CELL_H;
+	const int len = (int)strlen(sh->message);
+	for (int i = 0; i < len; i++) {
+		qdos_console_putc_small(con, i * QDOS_SMALL_FONT_W, y + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, sh->message[i]);
+	}
+	qdos_console_invert_rect(con, 0, y, QDOS_SCREEN_W, QDOS_CELL_H);
+}
+
+/** @brief The time and the charge as the band would show them; either may be empty */
+static void status_text(const qdos_shell* sh, char* clock, size_t clock_cap, char* charge, size_t charge_cap) {
+	clock[0] = '\0';
+	charge[0] = '\0';
+
+	int seconds;
+	if (sh->hal->time_of_day != NULL && sh->hal->time_of_day(sh->hal, &seconds)) {
+		snprintf(clock, clock_cap, "%02d:%02d", seconds / 3600, seconds / 60 % 60);
+	}
+
+	const int percent = (sh->hal->battery != NULL) ? sh->hal->battery(sh->hal) : -1;
+	if (percent >= 0) {
+		snprintf(charge, charge_cap, "%d%%", percent);
+	}
+}
+
+/* Whether the band says something other than it did at the last repaint */
+static bool status_stale(const qdos_shell* sh) {
+	char clock[8], charge[8], both[16];
+	status_text(sh, clock, sizeof(clock), charge, sizeof(charge));
+	snprintf(both, sizeof(both), "%s|%s", clock, charge);
+	return strcmp(both, sh->status) != 0;
+}
+
+/*
+ * The band is there on every screen whether or not it has anything to say, so
+ * nothing below it moves when the clock is set or a battery turns up.
+ */
+static void render_status(qdos_shell* sh, qdos_console* con) {
+	char clock[8], charge[8];
+	status_text(sh, clock, sizeof(clock), charge, sizeof(charge));
+	snprintf(sh->status, sizeof(sh->status), "%s|%s", clock, charge);
+
+	const int y = ROW_STATUS * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2;
+	const int margin = QDOS_SMALL_FONT_W;
+	for (int i = 0; clock[i] != '\0'; i++) {
+		qdos_console_putc_small(con, margin + i * QDOS_SMALL_FONT_W, y, clock[i]);
+	}
+	const int right = QDOS_SCREEN_W - margin - (int)strlen(charge) * QDOS_SMALL_FONT_W;
+	for (int i = 0; charge[i] != '\0'; i++) {
+		qdos_console_putc_small(con, right + i * QDOS_SMALL_FONT_W, y, charge[i]);
+	}
+	qdos_console_invert_rect(con, 0, ROW_STATUS * QDOS_CELL_H, QDOS_SCREEN_W, QDOS_CELL_H);
 }
 
 /** @brief Repaint the whole display */
 static void render(qdos_shell* sh) {
 	qdos_console* con = &sh->con;
 	qdos_console_clear(con);
+	render_status(sh, con);
 
 	if (sh->mode == QDOS_MODE_EDIT) {
 		render_edit(sh, con);
@@ -2528,13 +2608,13 @@ static int native_forget(qd_context* ctx, void* userdata) {
 	// brings the shipped version back
 	if (!declared_here(sh, name) && qdos_program_is_readonly(sh->hal, name) && !qdos_program_is_user(sh->hal, name)) {
 		const bool card = qdos_program_is_inbox(sh->hal, name);
-		snprintf(message, sizeof(message), "'%.10s' IS %s", name, card ? "ON THE CARD" : "BUILT IN");
+		snprintf(message, sizeof(message), "'%.30s' IS %s", name, card ? "ON THE CARD" : "BUILT IN");
 		qd_set_error_msg(ctx, message);
 		return 1;
 	}
 
 	if (!qd_interp_undeclare(sh->interp, name)) {
-		snprintf(message, sizeof(message), "'%.12s' IS NOT DECLARED", name);
+		snprintf(message, sizeof(message), "'%.32s' IS NOT DECLARED", name);
 		qd_set_error_msg(ctx, message);
 		return 1;
 	}
@@ -2770,8 +2850,8 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	}
 
 	if (faulted) {
-		char message[QDOS_COLS + 1];
-		snprintf(message, sizeof(message), "'%.12s' FAULTED", sh->natives.faulted);
+		char message[MESSAGE_COLS + 1];
+		snprintf(message, sizeof(message), "'%.40s' FAULTED", sh->natives.faulted);
 		set_message(sh, message, true);
 	}
 
@@ -2842,6 +2922,8 @@ void qdos_shell_run(qdos_shell* sh) {
 		if (settled && !sh->cursor_on) {
 			sh->cursor_on = true;
 			render(sh);
+		} else if (status_stale(sh)) {
+			render(sh);
 		} else if (!settled && has_cursor(sh) && (now - last_blink) >= CURSOR_BLINK_MS) {
 			last_blink = now;
 			sh->cursor_on = !sh->cursor_on;
@@ -2878,6 +2960,15 @@ void qdos_shell_run(qdos_shell* sh) {
 		if (!settled && has_cursor(sh)) {
 			const uint32_t since = now - last_blink;
 			timeout = (since >= CURSOR_BLINK_MS) ? 0 : (int)(CURSOR_BLINK_MS - since);
+		}
+		// The one wakeup a calculator left alone does take: once a minute, and
+		// only while there is a clock or a battery to show
+		int seconds;
+		if (sh->hal->time_of_day != NULL && sh->hal->time_of_day(sh->hal, &seconds)) {
+			const int until = (60 - seconds % 60) * 1000;
+			timeout = (timeout < 0 || until < timeout) ? until : timeout;
+		} else if (sh->hal->battery != NULL && sh->hal->battery(sh->hal) >= 0) {
+			timeout = (timeout < 0 || STATUS_POLL_MS < timeout) ? STATUS_POLL_MS : timeout;
 		}
 		if (off_after > 0) {
 			const uint32_t due = sh->off_warned ? off_after : off_after - AUTO_OFF_WARN_MS;

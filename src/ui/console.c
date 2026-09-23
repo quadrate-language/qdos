@@ -132,6 +132,46 @@ void qdos_console_rule(qdos_console* con, int row) {
 	memset(&con->fb[(size_t)y * QDOS_SCREEN_W], con->ink, QDOS_SCREEN_W);
 }
 
+void qdos_console_putc_small(qdos_console* con, int x, int y, char ch) {
+	if (!con) {
+		return;
+	}
+
+	for (int gy = 0; gy < QDOS_SMALL_FONT_H; gy++) {
+		const int py = y + gy;
+		if (py < 0 || py >= QDOS_SCREEN_H) {
+			continue;
+		}
+		const uint8_t bits = qdos_small_font_row(ch, gy);
+		for (int gx = 0; gx < QDOS_SMALL_FONT_W; gx++) {
+			const int px = x + gx;
+			if (px < 0 || px >= QDOS_SCREEN_W) {
+				continue;
+			}
+			con->fb[(size_t)py * QDOS_SCREEN_W + px] = (bits & (1u << gx)) ? con->ink : con->paper;
+		}
+	}
+}
+
+void qdos_console_invert_rect(qdos_console* con, int x, int y, int w, int h) {
+	if (!con) {
+		return;
+	}
+
+	for (int py = y; py < y + h; py++) {
+		if (py < 0 || py >= QDOS_SCREEN_H) {
+			continue;
+		}
+		for (int px = x; px < x + w; px++) {
+			if (px < 0 || px >= QDOS_SCREEN_W) {
+				continue;
+			}
+			uint8_t* p = &con->fb[(size_t)py * QDOS_SCREEN_W + px];
+			*p = (uint8_t)(0xFF - *p);
+		}
+	}
+}
+
 void qdos_console_puts_centered(qdos_console* con, int row, const char* text, int scale) {
 	if (!con || !text || scale < 1) {
 		return;

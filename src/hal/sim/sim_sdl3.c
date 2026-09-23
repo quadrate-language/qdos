@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "../wallclock.h"
 #include "keypad_ui.h"
 
 #include <dirent.h>
@@ -177,6 +178,20 @@ static int SDLCALL sim_watch_thread(void* data) {
 		SDL_PushEvent(&wake);
 	}
 	return 0;
+}
+
+static bool sim_time_of_day(qdos_hal* hal, int* seconds) {
+	(void)hal;
+	return qdos_wallclock(seconds);
+}
+
+/* The desktop's own battery would say nothing about the calculator's, so the
+ * simulator has one that never drains */
+#define SIM_BATTERY 100
+
+static int sim_battery(qdos_hal* hal) {
+	(void)hal;
+	return SIM_BATTERY;
 }
 
 static bool sim_store_changed(qdos_hal* hal) {
@@ -717,5 +732,7 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->store_path = sim_store_path;
 	hal->usb_export = sim_usb_export;
 	hal->store_changed = sim_store_changed;
+	hal->time_of_day = sim_time_of_day;
+	hal->battery = sim_battery;
 	hal->impl = &g_sim;
 }

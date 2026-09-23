@@ -142,6 +142,18 @@ struct qdos_hal {
 	 */
 	int (*usb_export)(qdos_hal* hal, bool on);
 
+	/**
+	 * @brief Seconds since local midnight, from the wall clock
+	 *
+	 * False while the clock has not been set: the Pi has no RTC, so until
+	 * something sets the time it reads as 1970, and showing a time of day then
+	 * would be showing a wrong one. NULL where the backend has no clock.
+	 */
+	bool (*time_of_day)(qdos_hal* hal, int* seconds);
+
+	/** @brief Charge left, 0 to 100, or -1 with no battery to ask. NULL likewise. */
+	int (*battery)(qdos_hal* hal);
+
 	void* impl; ///< Backend private state
 };
 

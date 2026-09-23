@@ -4,7 +4,7 @@ An operating system for a homebuilt calculator, shipped as firmware. The OS is C
 — bar one file that reads Quadrate's syntax tree, which has no C interface — and
 the shell is [Quadrate](https://github.com/quadrate-language/quadrate).
 
-Target: **Raspberry Pi Zero W**, 400x240 Sharp Memory LCD, 5x10 keypad.
+Target: **Raspberry Pi Zero W**, 400x240 Sharp Memory LCD, 54-key keypad.
 See [docs/design.md](./docs/design.md) for why it is built this way, and
 [docs/hardware.md](./docs/hardware.md) for the parts it is built from.
 

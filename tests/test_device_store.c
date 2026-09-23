@@ -545,6 +545,40 @@ static void test_usb_is_not_offered_for_a_helper_that_cannot_run(void) {
 	unlink(g_helper);
 }
 
+static void write_attr(const char* dir, const char* name, const char* value) {
+	char path[256];
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	FILE* f = fopen(path, "w");
+	CHECK(f != NULL);
+	if (f != NULL) {
+		fputs(value, f);
+		fclose(f);
+	}
+}
+
+/** The charge is the battery's, not the charger's, and none is -1. */
+static void test_the_battery_is_read_from_sysfs(void) {
+	char root[128], mains[192], battery[192];
+	snprintf(root, sizeof(root), "%s/power_supply", g_base);
+	snprintf(mains, sizeof(mains), "%s/AC", root);
+	snprintf(battery, sizeof(battery), "%s/BAT0", root);
+
+	CHECK(qdos_power_supply_capacity(root) == -1); // not there at all
+
+	CHECK(mkdir(root, 0755) == 0);
+	CHECK(mkdir(mains, 0755) == 0);
+	write_attr(mains, "type", "Mains\n");
+	CHECK(qdos_power_supply_capacity(root) == -1); // a charger, no battery
+
+	CHECK(mkdir(battery, 0755) == 0);
+	write_attr(battery, "type", "Battery\n");
+	write_attr(battery, "capacity", "42\n");
+	CHECK(qdos_power_supply_capacity(root) == 42);
+
+	write_attr(battery, "capacity", "nonsense\n");
+	CHECK(qdos_power_supply_capacity(root) == -1);
+}
+
 int main(void) {
 	if (!make_dirs()) {
 		return 1;
@@ -567,6 +601,7 @@ int main(void) {
 	test_a_failing_helper_is_reported();
 	test_usb_is_not_offered_without_a_helper();
 	test_usb_is_not_offered_for_a_helper_that_cannot_run();
+	test_the_battery_is_read_from_sysfs();
 
 	remove_tree(g_base);
 	return check_report("device_store");

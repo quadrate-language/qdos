@@ -7,6 +7,7 @@
 #define QDOS_CONSOLE_H
 
 #include "font16x24.h"
+#include "font8x16.h"
 
 #include <qdos/hal.h>
 
@@ -53,6 +54,12 @@ void qdos_console_puts_right_within(qdos_console* con, int row, int from, const 
 void qdos_console_invert(qdos_console* con, int col, int row, int count);
 
 void qdos_console_rule(qdos_console* con, int row);
+
+/** @brief One character in the editor's small font, top-left at pixel @p x, @p y */
+void qdos_console_putc_small(qdos_console* con, int x, int y, char ch);
+
+/** @brief Invert a rectangle of pixels, clipped to the panel */
+void qdos_console_invert_rect(qdos_console* con, int x, int y, int w, int h);
 
 /** @brief Centred, each pixel enlarged; scale 1 matches puts() */
 void qdos_console_puts_centered(qdos_console* con, int row, const char* text, int scale);
