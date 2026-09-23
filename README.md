@@ -247,7 +247,7 @@ QDOS_ARCH=aarch64 ./cross/run.sh        # ... and ARM64
 ## Android
 
 The simulator, on-screen keypad and all, runs as an Android app, r8 One. It is
-built from [r8-one-android](https://github.com/quadrate-language/r8-one-android),
+built from [r8-one-android](https://github.com/klahr/r8-one-android),
 which carries this repository as a submodule.
 
 ## Running on hardware
