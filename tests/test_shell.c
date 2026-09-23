@@ -648,6 +648,26 @@ static void test_decimal_entry(void) {
 	CHECK(strstr(row, "3") != NULL);
 }
 
+/** A point with no digit on one side is still a number on a keypad. */
+static void test_bare_point_entry(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, ".5");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3.");
+	key(script, &n, QDOS_KEY_MUL);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1.5") != NULL);
+	CHECK(row[0] == '1' && row[1] == ':');
+}
+
 /** Enter with nothing typed duplicates the top, as on an RPN calculator. */
 static void test_bare_enter_duplicates(void) {
 	store_reset();
@@ -4291,6 +4311,7 @@ int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
 	test_decimal_entry();
+	test_bare_point_entry();
 	test_bare_enter_duplicates();
 	test_entry_editing();
 	test_operator_error_is_shown();

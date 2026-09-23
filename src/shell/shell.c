@@ -845,8 +845,25 @@ static bool entry_commit(qdos_shell* sh) {
 		return true;
 	}
 
+	// Quadrate wants a digit on each side of the point; a keypad does not
+	char text[ENTRY_MAX + 2];
+	const char* p = sh->entry;
+	size_t len = 0;
+	if (*p == '-') {
+		text[len++] = *p++;
+	}
+	if (*p == '.') {
+		text[len++] = '0';
+	}
+	memcpy(text + len, p, strlen(p) + 1);
+	len += strlen(p);
+	if (text[len - 1] == '.') {
+		text[len++] = '0';
+		text[len] = '\0';
+	}
+
 	undo_snapshot(sh);
-	if (!qdos_guarded_eval(sh->interp, sh->entry)) {
+	if (!qdos_guarded_eval(sh->interp, text)) {
 		set_message(sh, qdos_guarded_error(sh->interp), true);
 		return false;
 	}

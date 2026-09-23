@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Sharp Memory LCD LS027B7DH01 (400x240) on SPI0 CE0.
+// Sharp Memory LCD LS027B7DH01 (400x240) on SPI0 CE0, as carried by the
+// Adafruit 4694 breakout -- which regulates and level-shifts, so a 3.3V Pi
+// drives it directly.
 //
-// Wiring: SCLK->GPIO11(pin23) SI->GPIO10(pin19) SCS->GPIO8(pin24)
-//         VDD->3V3(pin1) GND->pin6 DISP->3V3
+// Wiring, by the breakout's labels: CLK->GPIO11(pin23) DI->GPIO10(pin19)
+//         CS->GPIO8(pin24) VIN->5V(pin2) GND->pin6
+//
+// DISP and EIN are pulled on the board, so neither is wired. See
+// docs/hardware.md.
 
 /dts-v1/;
 /plugin/;
@@ -44,8 +49,10 @@
 				spi-cs-high;
 				spi-max-frequency = <2000000>;
 
-				// No EXTCOMIN pin wired: the driver toggles VCOM in the
-				// message it already sends once a second.
+				// EXTMODE is pulled low on the breakout, so VCOM inversion
+				// rides the message the driver already sends once a second.
+				// Driving EXTCOMIN externally instead roughly doubles the
+				// panel's draw.
 				sharp,vcom-mode = "software";
 				status = "okay";
 			};
