@@ -244,6 +244,23 @@ meson test -C build                     # Full suite
 QDOS_ARCH=aarch64 ./cross/run.sh        # ... and ARM64
 ```
 
+## Android
+
+The simulator, on-screen keypad and all, runs as an Android app: SDLActivity
+loads it as `libmain.so`. Needs the Android SDK and NDK (r28 or later) and JDK 17.
+
+```bash
+./android/build.sh                          # arm64-v8a APK
+QDOS_ABIS="arm64-v8a x86_64" ./android/build.sh   # and the emulator
+./android/build.sh install                  # build and install over adb
+```
+
+The user store is app-private; the inbox is
+`Android/data/org.quadrate.qdos/files/inbox`, reachable over USB. The session
+is saved whenever the app goes to the background, since Android may kill it
+there without a quit. Native modules are built with the NDK clang for the
+phone's ABI, not with `cross/build-module.sh`.
+
 ## Running on hardware
 
 `QDOS_BOARD` selects the target: `zerow` (default, ARMv6) or `zero2w` (ARMv8).

@@ -28,3 +28,7 @@ CLAUDE.md
 
 # Python bytecode from the font tools
 __pycache__/
+
+# Android: Gradle state and the SDK path Android Studio writes
+android/.gradle/
+android/local.properties
