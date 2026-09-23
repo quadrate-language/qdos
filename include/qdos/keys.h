@@ -112,10 +112,13 @@ typedef enum {
 #define QDOS_KEY_FN2_FIRST QDOS_KEY_ASIN
 #define QDOS_KEY_FN2_LAST QDOS_KEY_EXP
 
-	QDOS_KEY_TRACE, ///< Follow the curve on a graph
-	QDOS_KEY_FIT,	///< Scale a graph's y to what it shows
-	QDOS_KEY_STD,	///< A graph's standard window
-	QDOS_KEY_GRAPH, ///< Pick a word to plot
+	QDOS_KEY_TRACE,	 ///< Follow the curve on a graph
+	QDOS_KEY_FIT,	 ///< Scale a graph's y to what it shows
+	QDOS_KEY_STD,	 ///< A graph's standard window
+	QDOS_KEY_GRAPH,	 ///< The Y= page, and on it, draw
+	QDOS_KEY_TOGGLE, ///< Switch the selected Y= slot on or off
+	QDOS_KEY_VAR_X,	 ///< Type x, the variable a Y= slot is a function of
+	QDOS_KEY_VAR_Y,	 ///< and y, for a surface
 
 	QDOS_KEY__COUNT
 } qdos_key;

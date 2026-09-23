@@ -454,59 +454,71 @@ static void test_a_full_turn_is_the_same_picture(void) {
 	CHECK(memcmp(a, g_fb, sizeof(a)) == 0);
 }
 
-/** What a function can be plotted as is read off its signature. */
-static void test_the_shape_is_read_off_the_signature(void) {
-	CHECK(qdos_graph_shape_of("fn f(x:f64 -- y:f64) { x x * }", "f") == QDOS_GRAPH_CURVE);
-	CHECK(qdos_graph_shape_of("fn g(x:f64 y:f64 -- z:f64) { x y * }", "g") == QDOS_GRAPH_SURFACE);
-	CHECK(qdos_graph_shape_of("fn n(k:i64 -- r:i64) { k }", "n") == QDOS_GRAPH_CURVE);
-	CHECK(qdos_graph_shape_of("fn u(x -- y) { x }", "u") == QDOS_GRAPH_CURVE); // untyped is a number
-	CHECK(qdos_graph_shape_of("pub fn p(x:f64 -- y:f64) { x }", "p") == QDOS_GRAPH_CURVE);
-	CHECK(qdos_graph_shape_of("fn  spaced ( x:f64  --  y:f64 ) { x }", "spaced") == QDOS_GRAPH_CURVE);
+/** A slot's body is a surface when it uses y as a word, a curve when it does not. */
+static void test_a_body_says_what_it_plots_as(void) {
+	CHECK(qdos_graph_body_shape("x sin x *") == QDOS_GRAPH_CURVE);
+	CHECK(qdos_graph_body_shape("x x * y y * +") == QDOS_GRAPH_SURFACE);
+	CHECK(qdos_graph_body_shape("  y  ") == QDOS_GRAPH_SURFACE);
+	CHECK(qdos_graph_body_shape("") == QDOS_GRAPH_NONE);
+	CHECK(qdos_graph_body_shape("   ") == QDOS_GRAPH_NONE);
 
-	// Not a function of one or two numbers giving one back
-	CHECK(qdos_graph_shape_of("fn c( -- r:i64) { 5 }", "c") == QDOS_GRAPH_NONE);
-	CHECK(qdos_graph_shape_of("fn t(a:f64 b:f64 c:f64 -- r:f64) { a }", "t") == QDOS_GRAPH_NONE);
-	CHECK(qdos_graph_shape_of("fn two(x:f64 -- a:f64 b:f64) { x x }", "two") == QDOS_GRAPH_NONE);
-	CHECK(qdos_graph_shape_of("fn s(a:str -- n:f64) { 1 }", "s") == QDOS_GRAPH_NONE);
-	CHECK(qdos_graph_shape_of("fn q(x:f64 -- s:str) { \"\" }", "q") == QDOS_GRAPH_NONE);
-	CHECK(qdos_graph_shape_of("fn f(x:f64 -- y:f64) { x }", "g") == QDOS_GRAPH_NONE);  // not there
-	CHECK(qdos_graph_shape_of("fn nf(x:f64 -- y:f64) { x }", "n") == QDOS_GRAPH_NONE); // not a prefix
+	// y inside another word is not y
+	CHECK(qdos_graph_body_shape("x yx * y2 +") == QDOS_GRAPH_CURVE);
+	CHECK(qdos_graph_body_shape("3") == QDOS_GRAPH_CURVE); // a constant is a flat curve
 }
 
-static int g_found;
-static char g_names[8][16];
-static qdos_graph_shape g_shapes[8];
-
-static void collect(void* user, const char* name, size_t len, qdos_graph_shape shape) {
-	(void)user;
-	if (g_found < 8 && len < 16) {
-		memcpy(g_names[g_found], name, len);
-		g_names[g_found][len] = '\0';
-		g_shapes[g_found++] = shape;
+static int ink_in_plot(void) {
+	int lit = 0;
+	for (int y = TOP; y < TOP + PLOT_H; y++) {
+		for (int x = 0; x < W; x++) {
+			lit += ink_at(x, y) ? 1 : 0;
+		}
 	}
+	return lit;
 }
 
-/** Every function in a file, and none that a comment or a string only mentions. */
-static void test_a_scan_finds_every_function(void) {
-	const char* source = "// fn fake(x:f64 -- y:f64) is not one\n"
-						 "fn helper( -- r:i64) { 5 }\n"
-						 "fn wave(x:f64 -- y:f64) { \"fn fake2(x -- y)\" drop x sin }\n"
-						 "fn field(x:f64 y:f64 -- z:f64) { x y + }\n";
-	g_found = 0;
-	qdos_graph_scan(source, collect, NULL);
+/** Dashed and dotted are the solid curve with gaps in it, so several can be told apart. */
+static void test_curves_can_be_told_apart(void) {
+	qdos_graph_view v;
+	qdos_graph_standard(&v);
+	static qdos_graph_samples s;
+	qdos_graph_sample(&s, &v, W, f_shallow, NULL);
 
-	CHECK(g_found == 3);
-	CHECK_STR(g_names[0], "helper");
-	CHECK(g_shapes[0] == QDOS_GRAPH_NONE);
-	CHECK_STR(g_names[1], "wave");
-	CHECK(g_shapes[1] == QDOS_GRAPH_CURVE);
-	CHECK_STR(g_names[2], "field");
-	CHECK(g_shapes[2] == QDOS_GRAPH_SURFACE);
+	int ink[3];
+	static uint8_t solid[W * H];
+	const qdos_graph_style styles[3] = {QDOS_GRAPH_SOLID, QDOS_GRAPH_DASHED, QDOS_GRAPH_DOTTED};
+	for (int i = 0; i < 3; i++) {
+		clear();
+		qdos_graph_draw_curve(&AREA, &v, &s, styles[i]);
+		ink[i] = ink_in_plot();
+		if (i == 0) {
+			memcpy(solid, g_fb, sizeof(solid));
+			continue;
+		}
 
-	// A name inside another word is not `fn`, and an unclosed one ends the scan
-	g_found = 0;
-	qdos_graph_scan("define(x -- y) fn broken(x:f64", collect, NULL);
-	CHECK(g_found == 0);
+		// Every pixel of a broken line is one the solid line has
+		int stray = 0;
+		for (int p = 0; p < W * H; p++) {
+			stray += (g_fb[p] < 0x80 && solid[p] >= 0x80) ? 1 : 0;
+		}
+		CHECK(stray == 0);
+	}
+
+	// About half for dashes, four on and four off; a third for dots
+	CHECK(ink[1] > ink[0] * 4 / 10 && ink[1] < ink[0] * 6 / 10);
+	CHECK(ink[2] > ink[0] * 25 / 100 && ink[2] < ink[0] * 42 / 100);
+
+	// And without the axes, which the curve alone does not draw
+	clear();
+	qdos_graph_draw_axes(&AREA, &v);
+	const int axes = ink_in_plot();
+	clear();
+	qdos_graph_draw(&AREA, &v, &s);
+	const int both = ink_in_plot();
+	CHECK(axes > 0);
+	CHECK(both <= axes + ink[0]);				   // the two may share a pixel where they cross
+	CHECK(both >= axes + ink[0] - 4);			   // but no more than that
+	CHECK(both > (axes > ink[0] ? axes : ink[0])); // and each adds to the other
 }
 
 int main(void) {
@@ -526,7 +538,7 @@ int main(void) {
 	test_a_surface_stays_in_the_area();
 	test_the_front_hides_the_back();
 	test_a_full_turn_is_the_same_picture();
-	test_the_shape_is_read_off_the_signature();
-	test_a_scan_finds_every_function();
+	test_a_body_says_what_it_plots_as();
+	test_curves_can_be_told_apart();
 	return check_report("graph");
 }

@@ -346,9 +346,3 @@ void qdos_register_math(qd_interp* interp) {
 		qd_interp_register(interp, WORDS[i].name, WORDS[i].signature, WORDS[i].fn, NULL);
 	}
 }
-
-void qdos_math_visit(qdos_math_visitor visit, void* user) {
-	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++) {
-		visit(user, WORDS[i].name, WORDS[i].signature);
-	}
-}

@@ -119,10 +119,11 @@ typedef enum {
 	QDOS_MODE_EDIT,	 ///< Editing a program in the stack area
 	QDOS_MODE_ABOUT, ///< What this firmware is
 	QDOS_MODE_SETTINGS,
-	QDOS_MODE_DEBUG,	 ///< What the machine has been saying
-	QDOS_MODE_GRAPH,	 ///< A word plotted as y = f(x)
-	QDOS_MODE_GRAPH3,	 ///< A word plotted as z = f(x, y)
-	QDOS_MODE_GRAPH_PICK ///< Choosing which word to plot
+	QDOS_MODE_DEBUG,	///< What the machine has been saying
+	QDOS_MODE_GRAPH,	///< A word plotted as y = f(x)
+	QDOS_MODE_GRAPH3,	///< A word plotted as z = f(x, y)
+	QDOS_MODE_PLOT,		///< The Y= slots, each a function of x
+	QDOS_MODE_PLOT_EDIT ///< Typing one of them
 } qdos_mode;
 
 #define LOG_LINES 48
@@ -146,8 +147,16 @@ typedef enum {
 /** @brief As many words as one session may declare at the prompt */
 #define QDOS_LINE_WORDS 64
 
-/* Words the graph picker lists at most: the prompt's, the card's and the built-in maths */
-#define GRAPH_PICK_MAX 128
+/* The Y= slots, Y1 to Y6: one screen of them, and as many curves as one plot draws */
+#define PLOT_SLOTS 6
+#define PLOT_BODY_MAX 96
+
+typedef struct {
+	char body[PLOT_BODY_MAX]; ///< Quadrate in x, and y for a surface; empty for an unused slot
+	bool on;				  ///< Drawn by GRAPH
+	bool broken;			  ///< Would not declare, so there is no word to plot
+	qdos_graph_shape shape;
+} plot_slot;
 
 /** @brief One registered app word, and what running it needs to know */
 typedef struct {
@@ -179,7 +188,6 @@ struct qdos_shell {
 	/** @brief Words declared at the prompt rather than read off the card.
 	 * They are in memory only, so `forget` has nothing to erase for them. */
 	char line_word[QDOS_LINE_WORDS][QDOS_PROGRAM_NAME_MAX];
-	qdos_graph_shape line_word_shape[QDOS_LINE_WORDS]; ///< Read off the line it was declared on
 	size_t line_word_count;
 	bool list_all; ///< Every word, rather than just the installed programs
 	size_t list_sel;
@@ -220,9 +228,12 @@ struct qdos_shell {
 	bool message_is_error;
 	char status[16]; ///< What the status band last showed, to know when it is stale
 
-	char graph_word[QDOS_PROGRAM_NAME_MAX]; ///< What is being plotted
+	/* What is being plotted: one word, or every Y= slot switched on */
+	char graph_words[PLOT_SLOTS][QDOS_PROGRAM_NAME_MAX];
+	int graph_count;
+	int graph_curve; ///< Which of them trace is on
 	qdos_graph_view graph_view;
-	qdos_graph_samples graph_samples;
+	qdos_graph_samples graph_samples[PLOT_SLOTS];
 	bool graph_stale;					///< The window moved in x, so the samples are old
 	bool graph_fit_pending;				///< Scale y to the first samples taken
 	bool graph_tracing;					///< The arrows follow the curve rather than pan
@@ -230,13 +241,10 @@ struct qdos_shell {
 	char graph_error[MESSAGE_COLS + 1]; ///< Why the last sample had no value
 	qdos_surface graph_surface;			///< Sampled once; turning it only redraws
 	qdos_surface_view graph3_view;
-	qdos_mode graph_return; ///< Where ESC from a graph goes: the picker, if it came from there
+	qdos_mode graph_return; ///< Where ESC from a graph goes: Y=, if it came from there
 
-	char graph_pick[GRAPH_PICK_MAX][QDOS_PROGRAM_NAME_MAX]; ///< Every word that can be plotted
-	qdos_graph_shape graph_pick_shape[GRAPH_PICK_MAX];
-	size_t graph_pick_count;
-	size_t graph_pick_sel;
-	size_t graph_pick_top;
+	plot_slot slots[PLOT_SLOTS];
+	size_t slot_sel;
 
 	bool cursor_on; ///< Which half of the blink the cursor is in
 
@@ -279,7 +287,7 @@ static bool has_cursor(const qdos_shell* sh) {
 
 	// Everywhere else the caret is on the input row, which a message takes
 	// over. The pages -- list, settings, debug, about -- have no caret at all.
-	if (sh->mode == QDOS_MODE_CALC || sh->mode == QDOS_MODE_LINE) {
+	if (sh->mode == QDOS_MODE_CALC || sh->mode == QDOS_MODE_LINE || sh->mode == QDOS_MODE_PLOT_EDIT) {
 		return sh->message[0] == '\0';
 	}
 
@@ -554,14 +562,6 @@ static void report_declaration(qdos_shell* sh) {
 		snprintf(sh->line_word[sh->line_word_count++], QDOS_PROGRAM_NAME_MAX, "%s", name);
 	}
 
-	// The line is gone once it runs, and with it the only place the signature
-	// was written down, so what the word can be plotted as is kept now
-	for (size_t i = 0; i < sh->line_word_count; i++) {
-		if (strcmp(sh->line_word[i], name) == 0) {
-			sh->line_word_shape[i] = qdos_graph_shape_of(sh->input, name);
-		}
-	}
-
 	char message[80];
 	snprintf(message, sizeof(message), "DECLARED '%.20s'", name);
 	set_message(sh, message, false);
@@ -583,7 +583,6 @@ static void forget_here(qdos_shell* sh, const char* name) {
 			continue;
 		}
 		memcpy(sh->line_word[i], sh->line_word[--sh->line_word_count], QDOS_PROGRAM_NAME_MAX);
-		sh->line_word_shape[i] = sh->line_word_shape[sh->line_word_count];
 		return;
 	}
 }
@@ -594,7 +593,7 @@ typedef struct {
 	qdos_key key;
 } soft_key;
 
-static const soft_key SOFT[10][SOFT_KEYS] = {
+static const soft_key SOFT[11][SOFT_KEYS] = {
 		// Turning off is the PWR key's job: the one action on the row that cannot be
 		// undone by pressing it again. The last slot's label is the setting itself.
 		// PLOT where CLR was: that did what the ESC key under it does already.
@@ -615,8 +614,12 @@ static const soft_key SOFT[10][SOFT_KEYS] = {
 				{"CHG", QDOS_KEY_ENTER}, {"LOG", QDOS_KEY_DEBUG}},
 		[QDOS_MODE_GRAPH] = {{"ESC", QDOS_KEY_CLEAR}, {"TRACE", QDOS_KEY_TRACE}, {"FIT", QDOS_KEY_FIT},
 				{"STD", QDOS_KEY_STD}, {"", QDOS_KEY_NONE}},
-		[QDOS_MODE_GRAPH_PICK] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
-				{"PICK", QDOS_KEY_ENTER}, {"", QDOS_KEY_NONE}},
+		[QDOS_MODE_PLOT] = {{"ESC", QDOS_KEY_CLEAR}, {"EDIT", QDOS_KEY_OPEN}, {"ON", QDOS_KEY_TOGGLE},
+				{"GRAPH", QDOS_KEY_GRAPH}, {"", QDOS_KEY_NONE}},
+		// x and y on keys of their own: the letters are otherwise ALPHA away,
+		// and a body is mostly them
+		[QDOS_MODE_PLOT_EDIT] = {{"ESC", QDOS_KEY_CLEAR}, {"x", QDOS_KEY_VAR_X}, {"COMP", QDOS_KEY_TAB},
+				{"y", QDOS_KEY_VAR_Y}, {"OK", QDOS_KEY_ENTER}},
 		[QDOS_MODE_GRAPH3] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"STD", QDOS_KEY_STD},
 				{"", QDOS_KEY_NONE}},
 		[QDOS_MODE_DEBUG] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
@@ -2071,9 +2074,10 @@ static void handle_debug_key(qdos_shell* sh, const qdos_key_event* ev) {
 /* ---------------------------------------------------------------------------
  * Graph
  *
- * `"f" graph` plots a word taking x and leaving y. The samples are taken
- * outside the evaluation that opened the graph, at the next repaint, and again
- * only when the window moves along x: moving it up or down is just a redraw.
+ * `"f" graph` plots one word taking x and leaving y; GRAPH on the Y= page plots
+ * every slot switched on, on the same axes. The samples are taken outside the
+ * evaluation that asked for them, at the next repaint, and again only when the
+ * window moves along x: moving it up or down is just a redraw.
  * ------------------------------------------------------------------------- */
 
 /* The plot runs from under the status band to the rule over the readout */
@@ -2084,8 +2088,11 @@ static void handle_debug_key(qdos_shell* sh, const qdos_key_event* ev) {
 #define GRAPH_PAN 0.25
 #define GRAPH_ZOOM 0.5
 
-/** @brief The word run on @p count inputs, the calculator's stack left as it was */
-static bool graph_run(qdos_shell* sh, const double* in, size_t count, double* y) {
+/* Where the small-font readout sits, in the row a message would take */
+#define READOUT_Y (ROW_MESSAGE * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2)
+
+/** @brief @p word run on @p count inputs, the calculator's stack left as it was */
+static bool graph_run(qdos_shell* sh, const char* word, const double* in, size_t count, double* y) {
 	qd_context* ctx = qd_interp_context(sh->interp);
 	const size_t before = qd_interp_depth(sh->interp);
 	for (size_t k = 0; k < count; k++) {
@@ -2097,10 +2104,10 @@ static bool graph_run(qdos_shell* sh, const double* in, size_t count, double* y)
 	}
 
 	bool got = false;
-	if (!qdos_guarded_eval(sh->interp, sh->graph_word)) {
+	if (!qdos_guarded_eval(sh->interp, word)) {
 		snprintf(sh->graph_error, sizeof(sh->graph_error), "%s", qdos_guarded_error(sh->interp));
 	} else if (qd_interp_depth(sh->interp) != before + 1) {
-		snprintf(sh->graph_error, sizeof(sh->graph_error), "'%.24s' MUST TAKE %s, LEAVE %s", sh->graph_word,
+		snprintf(sh->graph_error, sizeof(sh->graph_error), "'%.24s' MUST TAKE %s, LEAVE %s", word,
 				count == 1 ? "X" : "X Y", count == 1 ? "Y" : "Z");
 	} else {
 		qd_interp_value top;
@@ -2109,7 +2116,7 @@ static bool graph_run(qdos_shell* sh, const double* in, size_t count, double* y)
 			*y = (top.type == QD_INTERP_VALUE_INT) ? (double)top.i : top.f;
 			got = true;
 		} else {
-			snprintf(sh->graph_error, sizeof(sh->graph_error), "'%.24s' MUST LEAVE A NUMBER", sh->graph_word);
+			snprintf(sh->graph_error, sizeof(sh->graph_error), "'%.24s' MUST LEAVE A NUMBER", word);
 		}
 	}
 
@@ -2120,33 +2127,72 @@ static bool graph_run(qdos_shell* sh, const double* in, size_t count, double* y)
 	return got;
 }
 
+/* Which word a sampling pass is running */
+typedef struct {
+	qdos_shell* sh;
+	const char* word;
+} graph_call;
+
 static bool graph_eval(void* user, double x, double* y) {
-	return graph_run(user, &x, 1, y);
+	const graph_call* call = user;
+	return graph_run(call->sh, call->word, &x, 1, y);
 }
 
 static bool surface_eval(void* user, double x, double y, double* z) {
+	const graph_call* call = user;
 	const double in[2] = {x, y};
-	return graph_run(user, in, 2, z);
+	return graph_run(call->sh, call->word, in, 2, z);
 }
 
-static void graph_open(qdos_shell* sh, const char* word) {
-	snprintf(sh->graph_word, sizeof(sh->graph_word), "%s", word);
+/** @brief Plot @p count words taking x on one pair of axes */
+static void graph_open_many(qdos_shell* sh, const char words[][QDOS_PROGRAM_NAME_MAX], int count) {
+	sh->graph_count = count;
+	for (int i = 0; i < count; i++) {
+		snprintf(sh->graph_words[i], sizeof(sh->graph_words[i]), "%s", words[i]);
+	}
 	qdos_graph_standard(&sh->graph_view);
 	sh->graph_stale = true;
 	sh->graph_fit_pending = true;
 	sh->graph_tracing = false;
+	sh->graph_curve = 0;
 	sh->graph_return = QDOS_MODE_CALC;
 	sh->mode = QDOS_MODE_GRAPH;
 	set_message(sh, "", false);
 }
 
+static void graph_open(qdos_shell* sh, const char* word) {
+	char words[1][QDOS_PROGRAM_NAME_MAX];
+	snprintf(words[0], sizeof(words[0]), "%s", word);
+	graph_open_many(sh, words, 1);
+}
+
 static void graph3_open(qdos_shell* sh, const char* word) {
-	snprintf(sh->graph_word, sizeof(sh->graph_word), "%s", word);
+	sh->graph_count = 1;
+	snprintf(sh->graph_words[0], sizeof(sh->graph_words[0]), "%s", word);
 	qdos_surface_standard(&sh->graph3_view);
 	sh->graph_stale = true;
 	sh->graph_return = QDOS_MODE_CALC;
 	sh->mode = QDOS_MODE_GRAPH3;
 	set_message(sh, "", false);
+}
+
+/* The y range that shows every curve at once */
+static bool graph_fit_all(qdos_shell* sh) {
+	bool any = false;
+	qdos_graph_view all = sh->graph_view;
+	for (int i = 0; i < sh->graph_count; i++) {
+		qdos_graph_view one = sh->graph_view;
+		if (!qdos_graph_fit(&sh->graph_samples[i], &one)) {
+			continue;
+		}
+		all.y0 = (!any || one.y0 < all.y0) ? one.y0 : all.y0;
+		all.y1 = (!any || one.y1 > all.y1) ? one.y1 : all.y1;
+		any = true;
+	}
+	if (any) {
+		sh->graph_view = all;
+	}
+	return any;
 }
 
 /** @brief Take the samples if the window has moved, and leave if none had a value */
@@ -2156,8 +2202,9 @@ static void graph_refresh(qdos_shell* sh) {
 		sh->graph_error[0] = '\0';
 		qdos_graph_view w;
 		qdos_graph_standard(&w);
-		if (qdos_surface_sample(&sh->graph_surface, QDOS_SURFACE_DEFAULT, w.x0, w.x1, w.y0, w.y1, surface_eval, sh) ==
-				0) {
+		graph_call call = {sh, sh->graph_words[0]};
+		if (qdos_surface_sample(
+					&sh->graph_surface, QDOS_SURFACE_DEFAULT, w.x0, w.x1, w.y0, w.y1, surface_eval, &call) == 0) {
 			sh->mode = sh->graph_return;
 			set_message(sh, sh->graph_error[0] ? sh->graph_error : "NOTHING TO PLOT", true);
 		}
@@ -2171,21 +2218,25 @@ static void graph_refresh(qdos_shell* sh) {
 	sh->graph_stale = false;
 	sh->graph_error[0] = '\0';
 	const bool opening = sh->graph_fit_pending;
-	const int good = qdos_graph_sample(&sh->graph_samples, &sh->graph_view, QDOS_SCREEN_W, graph_eval, sh);
+	int good = 0;
+	for (int i = 0; i < sh->graph_count; i++) {
+		graph_call call = {sh, sh->graph_words[i]};
+		good += qdos_graph_sample(&sh->graph_samples[i], &sh->graph_view, QDOS_SCREEN_W, graph_eval, &call);
+	}
 
 	if (sh->graph_fit_pending) {
 		sh->graph_fit_pending = false;
-		qdos_graph_fit(&sh->graph_samples, &sh->graph_view);
+		graph_fit_all(sh);
 	}
 
-	// Nothing to show on opening means the word is wrong, not the window
+	// Nothing to show on opening means the words are wrong, not the window
 	if (good == 0 && opening) {
 		sh->mode = sh->graph_return;
 		set_message(sh, sh->graph_error[0] ? sh->graph_error : "NOTHING TO PLOT", true);
 	}
 }
 
-static void render_graph(qdos_shell* sh, qdos_console* con) {
+static qdos_graph_area graph_area(qdos_console* con) {
 	const qdos_graph_area area = {
 			.fb = con->fb,
 			.stride = QDOS_SCREEN_W,
@@ -2196,46 +2247,63 @@ static void render_graph(qdos_shell* sh, qdos_console* con) {
 			.ink = con->ink,
 			.paper = con->paper,
 	};
-	qdos_graph_draw(&area, &sh->graph_view, &sh->graph_samples);
+	return area;
+}
+
+/* Solid, dashed and dotted, round again: three is as many as can be told apart */
+static qdos_graph_style curve_style(int i) {
+	static const qdos_graph_style STYLES[] = {QDOS_GRAPH_SOLID, QDOS_GRAPH_DASHED, QDOS_GRAPH_DOTTED};
+	return STYLES[i % 3];
+}
+
+static void render_graph(qdos_shell* sh, qdos_console* con) {
+	const qdos_graph_area area = graph_area(con);
+	const qdos_graph_view* v = &sh->graph_view;
+	qdos_graph_draw_axes(&area, v);
+	for (int i = 0; i < sh->graph_count; i++) {
+		qdos_graph_draw_curve(&area, v, &sh->graph_samples[i], curve_style(i));
+	}
 	qdos_console_rule(con, ROW_CONTENT_LAST);
 
 	// The readout, small, where messages go: a message says more when there is one.
 	// Room for the longest numbers; what does not fit the row is clipped there.
-	char line[96];
-	const qdos_graph_view* v = &sh->graph_view;
+	char line[160];
 	if (sh->graph_tracing) {
-		qdos_graph_draw_cursor(&area, v, &sh->graph_samples, sh->graph_col);
-		const double x = qdos_graph_x(v, sh->graph_col, sh->graph_samples.columns);
-		if (sh->graph_samples.ok[sh->graph_col]) {
-			snprintf(line, sizeof(line), "X=%.8g  Y=%.8g", x, sh->graph_samples.y[sh->graph_col]);
+		const qdos_graph_samples* s = &sh->graph_samples[sh->graph_curve];
+		qdos_graph_draw_cursor(&area, v, s, sh->graph_col);
+
+		// Which curve it is on, when there is more than one to be on
+		char which[QDOS_PROGRAM_NAME_MAX + 2] = "";
+		if (sh->graph_count > 1) {
+			snprintf(which, sizeof(which), "%s ", sh->graph_words[sh->graph_curve]);
+		}
+		const double x = qdos_graph_x(v, sh->graph_col, s->columns);
+		if (s->ok[sh->graph_col]) {
+			snprintf(line, sizeof(line), "%sX=%.8g  Y=%.8g", which, x, s->y[sh->graph_col]);
 		} else {
-			snprintf(line, sizeof(line), "X=%.8g  Y UNDEFINED", x);
+			snprintf(line, sizeof(line), "%sX=%.8g  Y UNDEFINED", which, x);
 		}
 	} else {
-		snprintf(line, sizeof(line), "%.12s  X %.4g:%.4g  Y %.4g:%.4g", sh->graph_word, v->x0, v->x1, v->y0, v->y1);
+		char names[64] = "";
+		for (int i = 0; i < sh->graph_count; i++) {
+			const size_t used = strlen(names);
+			snprintf(names + used, sizeof(names) - used, "%s%.12s", i ? " " : "", sh->graph_words[i]);
+		}
+		snprintf(line, sizeof(line), "%s  X %.4g:%.4g  Y %.4g:%.4g", names, v->x0, v->x1, v->y0, v->y1);
 	}
-	qdos_console_puts_small(con, 0, ROW_MESSAGE * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, line);
+	qdos_console_puts_small(con, 0, READOUT_Y, line);
 }
 
 static void render_graph3(qdos_shell* sh, qdos_console* con) {
-	const qdos_graph_area area = {
-			.fb = con->fb,
-			.stride = QDOS_SCREEN_W,
-			.left = 0,
-			.top = GRAPH_TOP,
-			.width = QDOS_SCREEN_W,
-			.height = GRAPH_HEIGHT,
-			.ink = con->ink,
-			.paper = con->paper,
-	};
+	const qdos_graph_area area = graph_area(con);
 	qdos_surface_draw(&area, &sh->graph_surface, &sh->graph3_view);
 	qdos_console_rule(con, ROW_CONTENT_LAST);
 
 	char line[96];
 	const qdos_surface_view* v = &sh->graph3_view;
-	snprintf(line, sizeof(line), "%.12s  AZ %d EL %d  Z %.4g:%.4g", sh->graph_word, (int)v->azimuth, (int)v->elevation,
-			sh->graph_surface.z0, sh->graph_surface.z1);
-	qdos_console_puts_small(con, 0, ROW_MESSAGE * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, line);
+	snprintf(line, sizeof(line), "%.12s  AZ %d EL %d  Z %.4g:%.4g", sh->graph_words[0], (int)v->azimuth,
+			(int)v->elevation, sh->graph_surface.z0, sh->graph_surface.z1);
+	qdos_console_puts_small(con, 0, READOUT_Y, line);
 }
 
 /* One press of an arrow turns or tilts the surface this far, in degrees */
@@ -2283,7 +2351,8 @@ static void handle_graph3_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 	qdos_graph_view* v = &sh->graph_view;
-	const int columns = sh->graph_samples.columns;
+	const qdos_graph_samples* traced = &sh->graph_samples[sh->graph_curve];
+	const int columns = traced->columns;
 
 	switch (ev->key) {
 	case QDOS_KEY_CLEAR:
@@ -2296,7 +2365,7 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 
 	case QDOS_KEY_FIT:
-		if (!qdos_graph_fit(&sh->graph_samples, v)) {
+		if (!graph_fit_all(sh)) {
 			set_message(sh, "NOTHING TO FIT", true);
 		}
 		break;
@@ -2328,6 +2397,13 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 	case QDOS_KEY_UP:
 	case QDOS_KEY_DOWN:
+		// Tracing several, up and down go from one curve to the next, as on a
+		// TI; otherwise they move the window
+		if (sh->graph_tracing && sh->graph_count > 1) {
+			const int step = (ev->key == QDOS_KEY_DOWN) ? 1 : sh->graph_count - 1;
+			sh->graph_curve = (sh->graph_curve + step) % sh->graph_count;
+			break;
+		}
 		qdos_graph_pan(v, 0.0, (ev->key == QDOS_KEY_UP) ? GRAPH_PAN : -GRAPH_PAN);
 		break;
 
@@ -2337,8 +2413,8 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 		double cx = (v->x0 + v->x1) / 2.0, cy = (v->y0 + v->y1) / 2.0;
 		if (sh->graph_tracing) {
 			cx = qdos_graph_x(v, sh->graph_col, columns);
-			if (sh->graph_samples.ok[sh->graph_col]) {
-				cy = sh->graph_samples.y[sh->graph_col];
+			if (traced->ok[sh->graph_col]) {
+				cy = traced->y[sh->graph_col];
 			}
 			sh->graph_col = columns / 2;
 		}
@@ -2355,116 +2431,194 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 }
 
-/* The picker: every word whose signature says it can be plotted */
+/* ---------------------------------------------------------------------------
+ * Y=
+ *
+ * Six slots, Y1 to Y6, each the body of a function typed the way a line is.
+ * A slot is declared as a word of its own name, so Y1 is usable anywhere a
+ * word is, and kept in the store, so the slots are still there after a
+ * restart. A body that uses y is a surface, in x and y; one that does not is
+ * a curve in x.
+ * ------------------------------------------------------------------------- */
 
-static void graph_pick_add(qdos_shell* sh, const char* name, size_t len, qdos_graph_shape shape) {
-	if (shape == QDOS_GRAPH_NONE || sh->graph_pick_count >= GRAPH_PICK_MAX || len >= QDOS_PROGRAM_NAME_MAX) {
-		return;
-	}
-
-	// Declared at the prompt over one on the card is still one word
-	for (size_t i = 0; i < sh->graph_pick_count; i++) {
-		if (strlen(sh->graph_pick[i]) == len && strncmp(sh->graph_pick[i], name, len) == 0) {
-			return;
-		}
-	}
-	memcpy(sh->graph_pick[sh->graph_pick_count], name, len);
-	sh->graph_pick[sh->graph_pick_count][len] = '\0';
-	sh->graph_pick_shape[sh->graph_pick_count++] = shape;
+static void slot_name(size_t i, char* out, size_t cap) {
+	snprintf(out, cap, "Y%zu", i + 1);
 }
 
-static void graph_pick_visit(void* user, const char* name, size_t len, qdos_graph_shape shape) {
-	graph_pick_add(user, name, len, shape);
+/** @brief Declare slot @p i as the word it names; false, and the word gone, if it would not */
+static bool slot_declare(qdos_shell* sh, size_t i) {
+	plot_slot* slot = &sh->slots[i];
+	char name[8];
+	slot_name(i, name, sizeof(name));
+
+	// Out with the old first: a body that fails must not leave the last one
+	// plotting under its name
+	qd_interp_undeclare(sh->interp, name);
+	slot->shape = qdos_graph_body_shape(slot->body);
+	slot->broken = false;
+	if (slot->shape == QDOS_GRAPH_NONE) {
+		return true;
+	}
+
+	char source[PLOT_BODY_MAX + 64];
+	snprintf(source, sizeof(source), "fn %s(%s -- r:f64) { %s }", name,
+			slot->shape == QDOS_GRAPH_SURFACE ? "x:f64 y:f64" : "x:f64", slot->body);
+	slot->broken = !qdos_guarded_eval(sh->interp, source);
+	return !slot->broken;
 }
 
-static void graph_pick_builtin(void* user, const char* name, const char* signature) {
-	graph_pick_add(user, name, strlen(name), qdos_graph_shape_of_signature(signature));
+static void slot_save(qdos_shell* sh, size_t i) {
+	char key[16];
+	snprintf(key, sizeof(key), "plot.y%zu", i + 1);
+
+	qdos_value value;
+	memset(&value, 0, sizeof(value));
+	value.type = QDOS_VALUE_STRING;
+	snprintf(value.s, sizeof(value.s), "%c%s", sh->slots[i].on ? '1' : '0', sh->slots[i].body);
+	qdos_storage_save(sh->hal, key, &value);
 }
 
-static void graph_pick_open(qdos_shell* sh) {
-	sh->graph_pick_count = 0;
-	for (size_t i = 0; i < sh->line_word_count; i++) {
-		graph_pick_add(sh, sh->line_word[i], strlen(sh->line_word[i]), sh->line_word_shape[i]);
-	}
+/** @brief The slots as they were left, declared; after the programs, which a body may use */
+static void slots_restore(qdos_shell* sh) {
+	for (size_t i = 0; i < PLOT_SLOTS; i++) {
+		char key[16];
+		snprintf(key, sizeof(key), "plot.y%zu", i + 1);
 
-	// Every function in every program, not only the one it is named for: a
-	// program is as likely to be a file of them
-	static qdos_program_entry programs[QDOS_WORDLIST_MAX];
-	const size_t count = qdos_programs_gather(sh->hal, programs, QDOS_WORDLIST_MAX);
-	for (size_t i = 0; i < count; i++) {
-		char source[QDOS_PROGRAM_MAX];
-		if (!programs[i].app && load_program_anywhere(sh, programs[i].name, source, sizeof(source))) {
-			qdos_graph_scan(source, graph_pick_visit, sh);
+		qdos_value value;
+		if (qdos_storage_load(sh->hal, key, &value) != QDOS_STORE_OK || value.type != QDOS_VALUE_STRING ||
+				value.s[0] == '\0') {
+			continue;
 		}
+		sh->slots[i].on = (value.s[0] == '1');
+		snprintf(sh->slots[i].body, sizeof(sh->slots[i].body), "%s", value.s + 1);
+		slot_declare(sh, i);
 	}
+}
 
-	// Then the built-in maths, after the user's own: sqrt is not isqrt, and a
-	// list that only offered what the card has would plot integer steps for it
-	qdos_math_visit(graph_pick_builtin, sh);
-
-	if (sh->graph_pick_count == 0) {
-		set_message(sh, "NO WORDS TO GRAPH", false);
-		return;
-	}
-
-	// Back on the last one plotted, which is the one most likely wanted again
-	sh->graph_pick_sel = 0;
-	for (size_t i = 0; i < sh->graph_pick_count; i++) {
-		if (strcmp(sh->graph_pick[i], sh->graph_word) == 0) {
-			sh->graph_pick_sel = i;
-		}
-	}
-	sh->graph_pick_top = (sh->graph_pick_sel >= (size_t)LIST_ROWS) ? sh->graph_pick_sel - (LIST_ROWS - 1) : 0;
-	sh->mode = QDOS_MODE_GRAPH_PICK;
+static void plot_open(qdos_shell* sh) {
+	sh->mode = QDOS_MODE_PLOT;
 	set_message(sh, "", false);
 }
 
-static void render_graph_pick(qdos_shell* sh, qdos_console* con) {
-	char header[QDOS_COLS + 1];
-	snprintf(header, sizeof(header), "%zu/%zu", sh->graph_pick_sel + 1, sh->graph_pick_count);
-	qdos_console_puts(con, 0, ROW_HEADER, "PLOT");
-	qdos_console_puts_right(con, ROW_HEADER, header);
+/** @brief GRAPH: the selected slot alone if it is a surface, every curve switched on otherwise */
+static void plot_graph(qdos_shell* sh) {
+	const plot_slot* selected = &sh->slots[sh->slot_sel];
+	char name[8];
+
+	if (selected->shape == QDOS_GRAPH_SURFACE && !selected->broken) {
+		slot_name(sh->slot_sel, name, sizeof(name));
+		graph3_open(sh, name);
+		sh->graph_return = QDOS_MODE_PLOT;
+		return;
+	}
+
+	char words[PLOT_SLOTS][QDOS_PROGRAM_NAME_MAX];
+	int count = 0;
+	for (size_t i = 0; i < PLOT_SLOTS; i++) {
+		const plot_slot* slot = &sh->slots[i];
+		if (slot->on && slot->shape == QDOS_GRAPH_CURVE && !slot->broken) {
+			slot_name(i, words[count++], sizeof(words[0]));
+		}
+	}
+	if (count == 0) {
+		set_message(sh, "NO CURVE IS ON", false);
+		return;
+	}
+	graph_open_many(sh, words, count);
+	sh->graph_return = QDOS_MODE_PLOT;
+}
+
+static void render_plot(qdos_shell* sh, qdos_console* con) {
+	qdos_console_puts(con, 0, ROW_HEADER, "Y=");
 	qdos_console_rule(con, ROW_HEADER);
 
-	for (size_t i = 0; i < (size_t)LIST_ROWS; i++) {
-		const size_t item = sh->graph_pick_top + i;
-		if (item >= sh->graph_pick_count) {
-			break;
-		}
+	// The name at reading size, the body small so a whole one fits, and what
+	// it plots as at the end
+	const int body_x = 4 * QDOS_CELL_W;
+	const int body_room = (QDOS_SCREEN_W - body_x - 4 * QDOS_CELL_W) / QDOS_SMALL_FONT_W;
+	for (size_t i = 0; i < PLOT_SLOTS; i++) {
+		const plot_slot* slot = &sh->slots[i];
 		const int row = ROW_CONTENT_FIRST + (int)i;
-		qdos_console_puts(con, 1, row, sh->graph_pick[item]);
-		qdos_console_puts_right(con, row, sh->graph_pick_shape[item] == QDOS_GRAPH_SURFACE ? "3D" : "2D");
-		if (item == sh->graph_pick_sel) {
+
+		// '=' lit on the ones GRAPH draws, as a TI marks them
+		char label[12];
+		char name[8];
+		slot_name(i, name, sizeof(name));
+		snprintf(label, sizeof(label), "%s%c", name, slot->on ? '=' : ' ');
+		qdos_console_puts(con, 0, row, label);
+
+		char body[PLOT_BODY_MAX + 1];
+		snprintf(body, sizeof(body), "%s", slot->body);
+		if ((int)strlen(body) > body_room) {
+			body[body_room - 1] = QDOS_ELIDED;
+			body[body_room] = '\0';
+		}
+		qdos_console_puts_small(con, body_x, row * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, body);
+
+		if (slot->shape != QDOS_GRAPH_NONE) {
+			qdos_console_puts_right(con, row, slot->broken ? "ERR" : slot->shape == QDOS_GRAPH_SURFACE ? "3D" : "2D");
+		}
+		if (i == sh->slot_sel) {
 			qdos_console_invert(con, 0, row, QDOS_COLS);
 		}
 	}
 	qdos_console_rule(con, ROW_CONTENT_LAST);
 }
 
-static void handle_graph_pick_key(qdos_shell* sh, const qdos_key_event* ev) {
+/* The slot being typed, on the input row, after its name */
+static void render_plot_edit(qdos_shell* sh, qdos_console* con) {
+	char prompt[8];
+	slot_name(sh->slot_sel, prompt, sizeof(prompt));
+	strcat(prompt, "=");
+	const int prompt_len = (int)strlen(prompt);
+	qdos_console_puts(con, 0, ROW_INPUT, prompt);
+
+	const int room = QDOS_COLS - prompt_len - 1; // a cell for the cursor
+	const size_t caret = sh->input_cursor;
+	const size_t start = (caret > (size_t)room) ? caret - (size_t)room : 0;
+	qdos_console_puts(con, prompt_len, ROW_INPUT, sh->input + start);
+	if (sh->cursor_on) {
+		qdos_console_invert(con, prompt_len + (int)(caret - start), ROW_INPUT, 1);
+	}
+}
+
+static void handle_plot_key(qdos_shell* sh, const qdos_key_event* ev) {
+	plot_slot* slot = &sh->slots[sh->slot_sel];
+
 	switch (ev->key) {
 	case QDOS_KEY_UP:
-		if (sh->graph_pick_sel > 0) {
-			sh->graph_pick_sel--;
-		}
+		sh->slot_sel = (sh->slot_sel + PLOT_SLOTS - 1) % PLOT_SLOTS;
 		break;
 
 	case QDOS_KEY_DOWN:
-		if (sh->graph_pick_sel + 1 < sh->graph_pick_count) {
-			sh->graph_pick_sel++;
+		sh->slot_sel = (sh->slot_sel + 1) % PLOT_SLOTS;
+		break;
+
+	case QDOS_KEY_OPEN:
+	case QDOS_KEY_ENTER:
+		input_clear(sh);
+		input_append(sh, slot->body);
+		sh->mode = QDOS_MODE_PLOT_EDIT;
+		break;
+
+	case QDOS_KEY_TOGGLE:
+		if (slot->shape != QDOS_GRAPH_NONE) {
+			slot->on = !slot->on;
+			slot_save(sh, sh->slot_sel);
 		}
 		break;
 
-	case QDOS_KEY_ENTER: {
-		const char* name = sh->graph_pick[sh->graph_pick_sel];
-		if (sh->graph_pick_shape[sh->graph_pick_sel] == QDOS_GRAPH_SURFACE) {
-			graph3_open(sh, name);
-		} else {
-			graph_open(sh, name);
-		}
-		sh->graph_return = QDOS_MODE_GRAPH_PICK;
+	// Emptied, the way CLEAR empties one on a TI
+	case QDOS_KEY_BACKSPACE:
+		slot->body[0] = '\0';
+		slot->on = false;
+		slot_declare(sh, sh->slot_sel);
+		slot_save(sh, sh->slot_sel);
 		break;
-	}
+
+	case QDOS_KEY_GRAPH:
+		plot_graph(sh);
+		break;
 
 	case QDOS_KEY_CLEAR:
 		sh->mode = QDOS_MODE_CALC;
@@ -2473,11 +2627,78 @@ static void handle_graph_pick_key(qdos_shell* sh, const qdos_key_event* ev) {
 	default:
 		break;
 	}
+}
 
-	if (sh->graph_pick_sel < sh->graph_pick_top) {
-		sh->graph_pick_top = sh->graph_pick_sel;
-	} else if (sh->graph_pick_sel >= sh->graph_pick_top + LIST_ROWS) {
-		sh->graph_pick_top = sh->graph_pick_sel - (LIST_ROWS - 1);
+/* A variable as a word of its own: spaced from what is before it and after */
+static void plot_edit_variable(qdos_shell* sh, const char* name) {
+	if (sh->input_cursor > 0 && sh->input[sh->input_cursor - 1] != ' ') {
+		input_append(sh, " ");
+	}
+	input_append(sh, name);
+	input_append(sh, " ");
+}
+
+/* The body without the spaces round it, which the keys leave behind */
+static void trim(char* text) {
+	size_t len = strlen(text);
+	while (len > 0 && text[len - 1] == ' ') {
+		text[--len] = '\0';
+	}
+	size_t lead = 0;
+	while (text[lead] == ' ') {
+		lead++;
+	}
+	memmove(text, text + lead, len - lead + 1);
+}
+
+static void handle_plot_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
+	plot_slot* slot = &sh->slots[sh->slot_sel];
+
+	switch (ev->key) {
+	case QDOS_KEY_VAR_X:
+		plot_edit_variable(sh, "x");
+		break;
+
+	case QDOS_KEY_VAR_Y:
+		plot_edit_variable(sh, "y");
+		break;
+
+	case QDOS_KEY_ENTER: {
+		// Refused rather than cut: a body missing its end would declare as
+		// something else, or not at all
+		if (sh->input_len >= sizeof(slot->body)) {
+			set_message(sh, "TOO LONG FOR A SLOT", true);
+			break;
+		}
+
+		// Switched on when it gets a body it did not have, as a TI does
+		const bool was_empty = slot->shape == QDOS_GRAPH_NONE;
+		memcpy(slot->body, sh->input, sh->input_len + 1);
+		trim(slot->body);
+		if (!slot_declare(sh, sh->slot_sel)) {
+			set_message(sh, qdos_guarded_error(sh->interp), true);
+		}
+		if (was_empty && slot->shape != QDOS_GRAPH_NONE) {
+			slot->on = true;
+		}
+		if (slot->shape == QDOS_GRAPH_NONE) {
+			slot->on = false;
+		}
+		slot_save(sh, sh->slot_sel);
+		input_clear(sh);
+		sh->mode = QDOS_MODE_PLOT;
+		break;
+	}
+
+	case QDOS_KEY_CLEAR:
+		input_clear(sh);
+		sh->mode = QDOS_MODE_PLOT;
+		break;
+
+	// Everything else edits the line the way it does at the prompt
+	default:
+		handle_line_key(sh, ev);
+		break;
 	}
 }
 
@@ -2502,8 +2723,8 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		return;
 	}
 
-	if (ev->key == QDOS_KEY_GRAPH && sh->mode != QDOS_MODE_GRAPH_PICK) {
-		graph_pick_open(sh);
+	if (ev->key == QDOS_KEY_GRAPH && sh->mode != QDOS_MODE_PLOT) {
+		plot_open(sh);
 		return;
 	}
 
@@ -2554,8 +2775,10 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		handle_graph_key(sh, ev);
 	} else if (sh->mode == QDOS_MODE_GRAPH3) {
 		handle_graph3_key(sh, ev);
-	} else if (sh->mode == QDOS_MODE_GRAPH_PICK) {
-		handle_graph_pick_key(sh, ev);
+	} else if (sh->mode == QDOS_MODE_PLOT) {
+		handle_plot_key(sh, ev);
+	} else if (sh->mode == QDOS_MODE_PLOT_EDIT) {
+		handle_plot_edit_key(sh, ev);
 	} else if (sh->mode == QDOS_MODE_LIST) {
 		handle_list_key(sh, ev);
 	} else if (sh->mode == QDOS_MODE_LINE) {
@@ -2820,8 +3043,11 @@ static void render(qdos_shell* sh) {
 	qdos_console_clear(con);
 	render_status(sh, con);
 
-	if (sh->mode == QDOS_MODE_GRAPH_PICK) {
-		render_graph_pick(sh, con);
+	if (sh->mode == QDOS_MODE_PLOT || sh->mode == QDOS_MODE_PLOT_EDIT) {
+		render_plot(sh, con);
+		if (sh->mode == QDOS_MODE_PLOT_EDIT && !sh->message[0]) {
+			render_plot_edit(sh, con);
+		}
 		render_message(sh, con);
 		render_soft(sh, con);
 		sh->hal->present(sh->hal, con->fb);
@@ -3360,6 +3586,7 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	qdos_programs_restore(hal, QDOS_SCOPE_INBOX, sh->interp);
 	qdos_programs_restore(hal, QDOS_SCOPE_USER, sh->interp);
 	register_apps(sh, sh->interp);
+	slots_restore(sh);
 
 	// A calculator that is ready says so by being on screen, so a clean boot
 	// leaves the message line empty. Only a restored stack is worth a word,

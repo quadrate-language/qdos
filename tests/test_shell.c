@@ -1519,122 +1519,263 @@ static void test_graph3_of_the_wrong_shape(void) {
 	CHECK(strstr(row, "MUST TAKE X Y, LEAVE Z") != NULL);
 }
 
-/** PLOT sits by APPS and lists what can be plotted, from the prompt and the card. */
-static void test_the_graph_menu_lists_what_can_be_plotted(void) {
+/* A Y= slot's body, read back small from where the page puts it */
+static void read_slot_body(const uint8_t* fb, int slot, char* out, size_t cap) {
+	char line[EDIT_COLS_T + 1];
+	read_small(
+			fb, (ROW_CONTENT_FIRST_T + slot) * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, line, sizeof(line));
+	// The name is at reading size in the first four cells, eight small ones
+	snprintf(out, cap, "%s", strlen(line) > 8 ? line + 8 : "");
+}
+
+/* Into Y= from the calculator, onto slot @p slot, and type @p body into it */
+static void type_slot(qdos_key_event* script, size_t* n, int slot, const char* body) {
+	for (int i = 0; i < slot; i++) {
+		key(script, n, QDOS_KEY_DOWN);
+	}
+	key(script, n, QDOS_KEY_SOFT2); // EDIT
+	type_more(script, n, body);
+	for (int i = 0; i < slot; i++) {
+		key(script, n, QDOS_KEY_UP);
+	}
+}
+
+/** PLOT, beside APPS, is the Y= page: six slots of the user's own. */
+static void test_plot_is_the_y_editor(void) {
 	store_reset();
-	seed_system("waves", "fn wave(x:f64 -- y:f64) { x sin }\nfn helper( -- r:i64) { 5 }");
 
-	qdos_key_event script[200];
+	qdos_key_event script[8];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
-	type_more(script, &n, "fn bowl(x:f64 y:f64 -- z:f64) { x x * y y * + }");
-	key(script, &n, QDOS_KEY_CLEAR); // out of line mode, back to the calculator
-
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	// Where CLR was, next to APPS
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
 	CHECK(strstr(row, "PLOT") != NULL && strstr(row, "PLOT") < strstr(row, "APPS"));
-	CHECK(strstr(row, "PLOTAPPS") == NULL); // a gap between them
-	CHECK(strstr(row, "CLR") == NULL);
+	CHECK(strstr(row, "PLOTAPPS") == NULL);
 
 	key(script, &n, QDOS_KEY_SOFT1);
-	store_reset();
-	seed_system("waves", "fn wave(x:f64 -- y:f64) { x sin }\nfn helper( -- r:i64) { 5 }");
 	run_script(script, n, fb);
 
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
-	CHECK(strstr(row, "PLOT") == row);
-	CHECK(strstr(row, "1/") != NULL);
-
-	// The user's own first, in the order declared, then the card's; helper
-	// takes nothing, so is not one. The built-in sq is not listed twice.
-	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
-	CHECK(strstr(row, "sq") && strstr(row, "2D"));
-	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
-	CHECK(strstr(row, "bowl") && strstr(row, "3D"));
-	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
-	CHECK(strstr(row, "wave") && strstr(row, "2D"));
-	read_row(fb, ROW_CONTENT_FIRST_T + 3, row, sizeof(row));
-	CHECK(strstr(row, "helper") == NULL);
-	CHECK(strstr(row, "sq") == NULL);
-}
-
-/** Picking plots it the right way, and ESC comes back to the list, then leaves it. */
-static void test_picking_from_the_graph_menu(void) {
-	qdos_key_event script[200];
-	size_t n = 0;
-	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
-	type_more(script, &n, "fn bowl(x:f64 y:f64 -- z:f64) { x x * y y * + }");
-	key(script, &n, QDOS_KEY_CLEAR); // out of line mode, back to the calculator
-	key(script, &n, QDOS_KEY_SOFT1);
-	key(script, &n, QDOS_KEY_DOWN);	 // bowl, the second declared
-	key(script, &n, QDOS_KEY_SOFT4); // PICK
-
-	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	store_reset();
-	run_script(script, n, fb);
-
-	char line[EDIT_COLS_T + 1];
-	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strstr(line, "bowl  AZ 30") == line);
-
-	key(script, &n, QDOS_KEY_CLEAR);
-	store_reset();
-	run_script(script, n, fb);
-	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_HEADER_T, row, sizeof(row));
-	CHECK(strstr(row, "2/") != NULL); // still on it
-
-	key(script, &n, QDOS_KEY_CLEAR);
-	store_reset();
-	run_script(script, n, fb);
+	CHECK(strcmp(row, "Y=") == 0);
+	for (int i = 0; i < 6; i++) {
+		char want[4];
+		snprintf(want, sizeof(want), "Y%d", i + 1);
+		read_row(fb, ROW_CONTENT_FIRST_T + i, row, sizeof(row));
+		CHECK(strncmp(row, want, 2) == 0);
+		CHECK(strstr(row, "2D") == NULL); // empty, so nothing to plot as
+	}
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "APPS") != NULL);
+	CHECK(strstr(row, "EDIT") && strstr(row, "ON") && strstr(row, "GRAPH"));
 }
 
-/**
- * The built-in maths is on the list too, so sqrt can be plotted and not only
- * isqrt: a card whose only square root was the integer one plotted steps.
- */
-static void test_the_graph_menu_offers_the_builtin_maths(void) {
+/** A slot is typed like a line, switched on, kept across a restart, and a word of its own. */
+static void test_a_slot_is_typed_and_kept(void) {
 	store_reset();
-	seed_system("isqrt", "fn isqrt(n:i64 -- r:i64) { 0 }");
 
 	qdos_key_event script[128];
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x sin x *");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	// The card's isqrt first, then the built-ins in the order mathwords.c
-	// registers them, where sqrt is the twenty-first
-	const int steps = 21;
-	for (int i = 0; i < steps; i++) {
-		key(script, &n, QDOS_KEY_DOWN);
-	}
+	char row[QDOS_COLS + 1], body[EDIT_COLS_T + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strncmp(row, "Y1=", 3) == 0); // on, as a new one is
+	CHECK(strstr(row, "2D") != NULL);
+	read_slot_body(fb, 0, body, sizeof(body));
+	CHECK(strcmp(body, "x sin x *") == 0);
+
+	// Back after a restart, with nothing typed this time
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	run_script(script, n, fb);
+	read_slot_body(fb, 0, body, sizeof(body));
+	CHECK(strcmp(body, "x sin x *") == 0);
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strncmp(row, "Y1=", 3) == 0);
+
+	// And Y1 is a word like any other
+	n = 0;
+	type_line(script, &n, "2 Y1");
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1.8185") != NULL); // 2 sin 2 *
+}
+
+/** GRAPH draws every slot switched on together; trace goes from one to the next. */
+static void test_graph_draws_every_slot_that_is_on(void) {
 	store_reset();
-	seed_system("isqrt", "fn isqrt(n:i64 -- r:i64) { 0 }");
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x sin");
+	type_slot(script, &n, 1, "x cos");
+	key(script, &n, QDOS_KEY_SOFT4); // GRAPH
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	// Scrolled so the selection is the last row shown
+	CHECK(plot_has_ink(fb));
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y1 Y2  X -10:10") == line);
+
+	key(script, &n, QDOS_KEY_TRACE);
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y1 X=0.025  Y=0.024997") == line);
+
+	key(script, &n, QDOS_KEY_DOWN);
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y2 X=0.025  Y=0.99968") == line);
+
+	// ESC goes back to Y=, where Y2 is switched off and GRAPH draws Y1 alone
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_SOFT3); // ON, off
+	store_reset();
+	run_script(script, n, fb);
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
-	CHECK(strstr(row, "22/") != NULL);
-	read_row(fb, ROW_CONTENT_LAST_T, row, sizeof(row));
-	CHECK(strstr(row, "sqrt") != NULL && strstr(row, "2D") != NULL);
-	CHECK(cell_is(fb, 1, ROW_CONTENT_LAST_T, 's', true));
+	CHECK(strcmp(row, "Y=") == 0);
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strncmp(row, "Y2 ", 3) == 0);
 
-	key(script, &n, QDOS_KEY_SOFT4); // PICK
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_SOFT4);
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y1  X -10:10") == line);
+}
+
+/** A body using y is a surface, and GRAPH on it draws it in 3D. */
+static void test_a_slot_using_y_is_a_surface(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x x * y y * +");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "3D") != NULL);
+
+	key(script, &n, QDOS_KEY_SOFT4);
+	store_reset();
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y1  AZ 30 EL 25") == line);
+}
+
+/** A body that will not declare says why, is marked, and is not plotted. */
+static void test_a_broken_slot(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x sin }");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] != '\0' && error_cell_is(fb, 0, row[0], true));
+
+	key(script, &n, QDOS_KEY_SOFT4);
+	store_reset();
+	run_script(script, n, fb);
+	char big[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, big, sizeof(big));
+	CHECK(strstr(big, "ERR") != NULL);
+	read_row(fb, ROW_MESSAGE_LINE, big, sizeof(big));
+	CHECK(strstr(big, "NO CURVE IS ON") != NULL);
+}
+
+/** DEL empties a slot, and it is empty after a restart too. */
+static void test_del_empties_a_slot(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x");
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	run_script(script, n, fb);
+	char body[EDIT_COLS_T + 1], row[QDOS_COLS + 1];
+	read_slot_body(fb, 0, body, sizeof(body));
+	CHECK(body[0] == '\0');
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strcmp(row, "Y1") == 0); // off, and nothing after it
+}
+
+/** x and y are soft keys while a slot is typed, each typed as a word of its own. */
+static void test_x_and_y_are_keys_in_a_slot(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT2); // EDIT
+	key(script, &n, QDOS_KEY_SOFT2); // x
+	key(script, &n, QDOS_KEY_SOFT2); // x
+	key(script, &n, QDOS_KEY_MUL);
+	key(script, &n, QDOS_KEY_SOFT4); // y
+	key(script, &n, QDOS_KEY_ADD);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Labelled while typing, where the soft row had nothing to offer
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, " x ") != NULL && strstr(row, " y ") != NULL);
+
+	key(script, &n, QDOS_KEY_ENTER);
+	store_reset();
+	run_script(script, n, fb);
+	char body[EDIT_COLS_T + 1];
+	read_slot_body(fb, 0, body, sizeof(body));
+	CHECK(strcmp(body, "x x * y +") == 0); // spaced once, and trimmed
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "3D") != NULL);
+}
+
+/** Traced, a square root is a square root: y in full, not in whole steps. */
+static void test_a_traced_slot_is_not_rounded(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x sqrt");
+	key(script, &n, QDOS_KEY_SOFT4);
 	key(script, &n, QDOS_KEY_TRACE);
 	for (int i = 0; i < 37; i++) {
 		key(script, &n, QDOS_KEY_RIGHT);
 	}
-	store_reset();
-	seed_system("isqrt", "fn isqrt(n:i64 -- r:i64) { 0 }");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
 	char line[EDIT_COLS_T + 1];
@@ -4922,9 +5063,14 @@ int main(void) {
 	test_graph_of_the_wrong_shape();
 	test_graph3_plots_a_surface();
 	test_graph3_of_the_wrong_shape();
-	test_the_graph_menu_lists_what_can_be_plotted();
-	test_picking_from_the_graph_menu();
-	test_the_graph_menu_offers_the_builtin_maths();
+	test_plot_is_the_y_editor();
+	test_a_slot_is_typed_and_kept();
+	test_graph_draws_every_slot_that_is_on();
+	test_a_slot_using_y_is_a_surface();
+	test_a_broken_slot();
+	test_del_empties_a_slot();
+	test_x_and_y_are_keys_in_a_slot();
+	test_a_traced_slot_is_not_rounded();
 	test_the_status_band_shows_clock_and_battery();
 	test_the_status_band_stays_when_it_has_nothing();
 	test_the_clock_turns_over_while_idle();

@@ -44,6 +44,7 @@ static void test_key_codes_do_not_move(void) {
 	// And what came after, from where it came
 	CHECK(QDOS_KEY_ASIN == 63);
 	CHECK(QDOS_KEY_GRAPH == 70);
+	CHECK(QDOS_KEY_TOGGLE == 71 && QDOS_KEY_VAR_X == 72 && QDOS_KEY_VAR_Y == 73);
 }
 
 static void test_mapping(void) {

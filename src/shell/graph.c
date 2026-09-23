@@ -10,119 +10,25 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* A number, or untyped: what the interpreter can hand a sample and take one back as */
-static bool numeric(const char* token, size_t len) {
-	const char* colon = memchr(token, ':', len);
-	if (colon == NULL) {
-		return true;
-	}
-	const size_t type = len - (size_t)(colon + 1 - token);
-	return (type == 3 && (strncmp(colon + 1, "f64", 3) == 0 || strncmp(colon + 1, "i64", 3) == 0));
-}
-
-/* From just inside the signature's '(' to its ')': how many go in and come out */
-static qdos_graph_shape shape_of_signature(const char* p, const char* end) {
-	int in = 0, out = 0;
-	bool after = false, typed = true;
-	while (p < end) {
-		while (p < end && isspace((unsigned char)*p)) {
+qdos_graph_shape qdos_graph_body_shape(const char* body) {
+	bool any = false;
+	for (const char* p = body; *p;) {
+		while (*p && isspace((unsigned char)*p)) {
 			p++;
 		}
-		const char* token = p;
-		while (p < end && !isspace((unsigned char)*p)) {
+		const char* word = p;
+		while (*p && !isspace((unsigned char)*p)) {
 			p++;
 		}
-		const size_t len = (size_t)(p - token);
-		if (len == 0) {
+		if (p == word) {
 			break;
 		}
-		if (len == 2 && token[0] == '-' && token[1] == '-') {
-			after = true;
-			continue;
+		any = true;
+		if (p - word == 1 && *word == 'y') {
+			return QDOS_GRAPH_SURFACE;
 		}
-		typed = typed && numeric(token, len);
-		*(after ? &out : &in) += 1;
 	}
-
-	if (!after || !typed || out != 1) {
-		return QDOS_GRAPH_NONE;
-	}
-	return (in == 1) ? QDOS_GRAPH_CURVE : (in == 2) ? QDOS_GRAPH_SURFACE : QDOS_GRAPH_NONE;
-}
-
-void qdos_graph_scan(const char* source, qdos_graph_visit visit, void* user) {
-	const char* p = source;
-	while (*p) {
-		// Comments and strings can say `fn` without declaring anything
-		if (p[0] == '/' && p[1] == '/') {
-			while (*p && *p != '\n') {
-				p++;
-			}
-			continue;
-		}
-		if (*p == '"') {
-			for (p++; *p && *p != '"'; p++) {
-				if (*p == '\\' && p[1]) {
-					p++;
-				}
-			}
-			p += (*p == '"');
-			continue;
-		}
-
-		const bool at_word = (p == source || isspace((unsigned char)p[-1]) || p[-1] == '}' || p[-1] == ';');
-		if (!at_word || strncmp(p, "fn", 2) != 0 || !isspace((unsigned char)p[2])) {
-			p++;
-			continue;
-		}
-
-		p += 2;
-		while (isspace((unsigned char)*p)) {
-			p++;
-		}
-		const char* name = p;
-		while (*p && *p != '(' && !isspace((unsigned char)*p)) {
-			p++;
-		}
-		const size_t len = (size_t)(p - name);
-		while (isspace((unsigned char)*p)) {
-			p++;
-		}
-		if (len == 0 || *p != '(') {
-			continue;
-		}
-
-		const char* close = strchr(p, ')');
-		if (close == NULL) {
-			return;
-		}
-		visit(user, name, len, shape_of_signature(p + 1, close));
-		p = close + 1;
-	}
-}
-
-qdos_graph_shape qdos_graph_shape_of_signature(const char* signature) {
-	const char* open = strchr(signature, '(');
-	const char* close = open ? strchr(open, ')') : NULL;
-	return close ? shape_of_signature(open + 1, close) : QDOS_GRAPH_NONE;
-}
-
-typedef struct {
-	const char* name;
-	qdos_graph_shape shape;
-} shape_search;
-
-static void match_name(void* user, const char* name, size_t len, qdos_graph_shape shape) {
-	shape_search* search = user;
-	if (strlen(search->name) == len && strncmp(search->name, name, len) == 0) {
-		search->shape = shape;
-	}
-}
-
-qdos_graph_shape qdos_graph_shape_of(const char* source, const char* name) {
-	shape_search search = {name, QDOS_GRAPH_NONE};
-	qdos_graph_scan(source, match_name, &search);
-	return search.shape;
+	return any ? QDOS_GRAPH_CURVE : QDOS_GRAPH_NONE;
 }
 
 void qdos_graph_standard(qdos_graph_view* view) {
@@ -228,12 +134,32 @@ static void flip(const qdos_graph_area* a, int x, int y) {
  * is a single diagonal pixel. Filling each column from one sample's row to the
  * next inked both columns at every step and read as a staircase of blocks.
  */
-static void line(const qdos_graph_area* a, int x0, int y0, int x1, int y1) {
+/* Whether the @p n th pixel along a curve is inked, in @p style. Counted along
+ * the curve rather than across the screen, so a steep stretch is dashed too. */
+static bool inked(qdos_graph_style style, unsigned n) {
+	switch (style) {
+	case QDOS_GRAPH_DASHED:
+		return (n / 4) % 2 == 0;
+	case QDOS_GRAPH_DOTTED:
+		return n % 3 == 0;
+	default:
+		return true;
+	}
+}
+
+static void line(const qdos_graph_area* a, int x0, int y0, int x1, int y1, qdos_graph_style style, unsigned* n) {
 	const int dx = abs(x1 - x0), sx = (x0 < x1) ? 1 : -1;
 	const int dy = -abs(y1 - y0), sy = (y0 < y1) ? 1 : -1;
 	int err = dx + dy;
 	for (;;) {
-		dot(a, x0, y0);
+		// The shared end of two segments is counted once
+		if (!(x0 == x1 && y0 == y1)) {
+			if (inked(style, (*n)++)) {
+				dot(a, x0, y0);
+			}
+		} else if (inked(style, *n)) {
+			dot(a, x0, y0);
+		}
 		if (x0 == x1 && y0 == y1) {
 			return;
 		}
@@ -265,7 +191,7 @@ static double row_of(const qdos_graph_area* a, const qdos_graph_view* v, double 
  * double stops changing it, and a loop on the value never ends */
 #define MAX_TICKS 64
 
-static void draw_axes(const qdos_graph_area* a, const qdos_graph_view* v) {
+void qdos_graph_draw_axes(const qdos_graph_area* a, const qdos_graph_view* v) {
 	const double ax = col_of(a, v, 0.0);
 	const double ay = row_of(a, v, 0.0);
 	const bool x_axis = ay >= a->top && ay < a->top + a->height;
@@ -303,8 +229,13 @@ static void draw_axes(const qdos_graph_area* a, const qdos_graph_view* v) {
 }
 
 void qdos_graph_draw(const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s) {
-	draw_axes(area, view);
+	qdos_graph_draw_axes(area, view);
+	qdos_graph_draw_curve(area, view, s, QDOS_GRAPH_SOLID);
+}
 
+void qdos_graph_draw_curve(
+		const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s, qdos_graph_style style) {
+	unsigned n = 0;
 	const int top = area->top, bottom = area->top + area->height - 1;
 	for (int c = 0; c < s->columns; c++) {
 		if (!s->ok[c]) {
@@ -315,7 +246,7 @@ void qdos_graph_draw(const qdos_graph_area* area, const qdos_graph_view* view, c
 		const double r0 = row_of(area, view, s->y[c]);
 		const bool joined = c + 1 < s->columns && s->ok[c + 1];
 		if (!joined) {
-			if (r0 >= top && r0 <= bottom) {
+			if (r0 >= top && r0 <= bottom && inked(style, n++)) {
 				dot(area, x, (int)lround(r0));
 			}
 			continue;
@@ -343,7 +274,7 @@ void qdos_graph_draw(const qdos_graph_area* area, const qdos_graph_view* view, c
 			continue;
 		}
 		line(area, (int)lround(x + t0 * (x1 - x)), (int)lround(r0 + t0 * (r1 - r0)), (int)lround(x + t1 * (x1 - x)),
-				(int)lround(r0 + t1 * (r1 - r0)));
+				(int)lround(r0 + t1 * (r1 - r0)), style, &n);
 	}
 }
 

@@ -19,12 +19,6 @@ extern "C" {
 /** @brief Every word the keypad and the catalog offer beyond the core vocabulary */
 void qdos_register_math(qd_interp* interp);
 
-/** @brief One word qdos_register_math() registers, with its stack effect */
-typedef void (*qdos_math_visitor)(void* user, const char* name, const char* signature);
-
-/** @brief Every word qdos_register_math() registers, in the order it does */
-void qdos_math_visit(qdos_math_visitor visit, void* user);
-
 /**
  * @brief Read trigonometry arguments as degrees rather than radians
  *

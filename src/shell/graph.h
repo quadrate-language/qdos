@@ -45,29 +45,22 @@ typedef struct {
 	uint8_t paper; ///< What a surface fills its cells with, to hide what is behind
 } qdos_graph_area;
 
-/**
- * @brief What a function declared in Quadrate can be plotted as
- *
- * Read off the signature, `fn f(x:f64 -- y:f64)`, rather than found by
- * running the word: running it to see is running whatever else it does.
- */
+/** @brief What a Y= slot's body plots as */
 typedef enum {
-	QDOS_GRAPH_NONE = 0,
-	QDOS_GRAPH_CURVE = 1,  ///< Takes x, leaves y
-	QDOS_GRAPH_SURFACE = 2 ///< Takes x and y, leaves z
+	QDOS_GRAPH_NONE = 0,   ///< Empty
+	QDOS_GRAPH_CURVE = 1,  ///< In x alone: y = f(x)
+	QDOS_GRAPH_SURFACE = 2 ///< Using y as well: z = f(x, y)
 } qdos_graph_shape;
 
-/** @brief One function found by qdos_graph_scan(); @p name is not terminated */
-typedef void (*qdos_graph_visit)(void* user, const char* name, size_t len, qdos_graph_shape shape);
+/** @brief A curve's shape, to tell several apart on one pair of axes */
+typedef enum {
+	QDOS_GRAPH_SOLID = 0,
+	QDOS_GRAPH_DASHED,
+	QDOS_GRAPH_DOTTED
+} qdos_graph_style;
 
-/** @brief Every `fn` declared in @p source, with what it can be plotted as */
-void qdos_graph_scan(const char* source, qdos_graph_visit visit, void* user);
-
-/** @brief What a stack effect, `(x:f64 -- r:f64)` with its parentheses, can be plotted as */
-qdos_graph_shape qdos_graph_shape_of_signature(const char* signature);
-
-/** @brief What @p name, as declared in @p source, can be plotted as */
-qdos_graph_shape qdos_graph_shape_of(const char* source, const char* name);
+/** @brief A body mentioning y as a word of its own is a surface, one without is a curve */
+qdos_graph_shape qdos_graph_body_shape(const char* body);
 
 /** @brief The standard window, -10 to 10 on both axes */
 void qdos_graph_standard(qdos_graph_view* view);
@@ -97,8 +90,15 @@ void qdos_graph_zoom(qdos_graph_view* view, double cx, double cy, double factor)
  */
 double qdos_graph_tick_step(double range, int ticks);
 
-/** @brief Axes where they are in view, with ticks, and the curve over them */
+/** @brief Axes where they are in view, with ticks, and the curve over them, solid */
 void qdos_graph_draw(const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s);
+
+/** @brief The axes alone, for drawing several curves over */
+void qdos_graph_draw_axes(const qdos_graph_area* area, const qdos_graph_view* view);
+
+/** @brief One curve, in @p style, without the axes */
+void qdos_graph_draw_curve(
+		const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s, qdos_graph_style style);
 
 /** @brief A cross on the curve at @p col, for trace */
 void qdos_graph_draw_cursor(

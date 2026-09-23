@@ -68,10 +68,14 @@ saving, `forget` removes one. Programs load from three scopes — system, inbox
 (uploaded over USB or on the card), user — and a user copy shadows the others.
 The stack and the registers survive a power cycle.
 
-`PLOT`, beside `APPS`, lists every word that can be plotted -- one taking one
-or two numbers and leaving one, read off its signature -- the prompt's and the
-programs' first, then the built-in maths (`sqrt`, `sin`, `hypot`, ...), and
-draws the one picked, in 2D or 3D as its shape says.
+`PLOT`, beside `APPS`, is the Y= page, as on a TI-83: six slots, `Y1` to
+`Y6`, each the body of a function in x typed like any line (`x sin x *`),
+with `x` and `y` on soft keys while it is being typed. A
+slot is declared as a word of its name, so `2 Y1` works at the prompt too, and
+the slots are kept across a restart. `ON` picks which ones `GRAPH` draws --
+together, solid, dashed and dotted -- and in trace, up and down go from one
+curve to the next. A body that uses `y` is a surface, and `GRAPH` on it draws
+it in 3D. `DEL` empties a slot.
 
 `"f" graph` plots a word that takes x and leaves y, one sample per pixel
 column, with y scaled to fit. The arrows pan, `+` and `-` zoom, and the soft
