@@ -53,7 +53,7 @@ extern "C" {
  * machine telling you what it is every time you looked at a number, and it
  * would cost a row of the ten there are.
  */
-#define QDOS_NAMEPLATE "Quad r8 One"
+#define QDOS_NAMEPLATE "r8 One"
 #define QDOS_NAMEPLATE_H 22
 
 /** @brief Where the panel's top-left pixel lands in the window */
