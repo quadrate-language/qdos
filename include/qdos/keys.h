@@ -112,13 +112,23 @@ typedef enum {
 #define QDOS_KEY_FN2_FIRST QDOS_KEY_ASIN
 #define QDOS_KEY_FN2_LAST QDOS_KEY_EXP
 
-	QDOS_KEY_TRACE,	 ///< Follow the curve on a graph
-	QDOS_KEY_FIT,	 ///< Scale a graph's y to what it shows
-	QDOS_KEY_STD,	 ///< A graph's standard window
-	QDOS_KEY_GRAPH,	 ///< The Y= page, and on it, draw
-	QDOS_KEY_TOGGLE, ///< Switch the selected Y= slot on or off
-	QDOS_KEY_VAR_X,	 ///< Type x, the variable a Y= slot is a function of
-	QDOS_KEY_VAR_Y,	 ///< and y, for a surface
+	QDOS_KEY_TRACE,		 ///< Follow the curve on a graph
+	QDOS_KEY_FIT,		 ///< Scale a graph's y to what it shows
+	QDOS_KEY_STD,		 ///< A graph's standard window
+	QDOS_KEY_GRAPH,		 ///< The Y= page, and on it, draw
+	QDOS_KEY_TOGGLE,	 ///< Switch the selected Y= slot on or off
+	QDOS_KEY_VAR_X,		 ///< Type x, the variable a Y= slot is a function of
+	QDOS_KEY_VAR_Y,		 ///< and y, for a surface
+	QDOS_KEY_VAR_T,		 ///< t, for a parametric curve
+	QDOS_KEY_VAR_THETA,	 ///< theta, for a polar one
+	QDOS_KEY_ZOOM,		 ///< A graph's choice of windows
+	QDOS_KEY_CALC,		 ///< What can be found on a curve, or from the lists
+	QDOS_KEY_MENU,		 ///< The rest of what a page offers
+	QDOS_KEY_TBL_START,	 ///< Where a table starts
+	QDOS_KEY_TBL_STEP,	 ///< and how far apart its rows are
+	QDOS_KEY_STATPLOT,	 ///< How the lists are drawn on the graph
+	QDOS_KEY_LIST_CLEAR, ///< Empty a list
+	QDOS_KEY_TO_Y,		 ///< A regression into a Y= slot
 
 	QDOS_KEY__COUNT
 } qdos_key;

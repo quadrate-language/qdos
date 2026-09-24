@@ -70,17 +70,54 @@ The stack and the registers survive a power cycle.
 
 `PLOT`, beside `APPS`, is the Y= page, as on a TI-83: six slots, `Y1` to
 `Y6`, each the body of a function in x typed like any line (`x sin x *`),
-with `x` and `y` on soft keys while it is being typed. A
+with `x`, `y`, `t` and `theta` on soft keys while it is being typed. A
 slot is declared as a word of its name, so `2 Y1` works at the prompt too, and
 the slots are kept across a restart. `ON` picks which ones `GRAPH` draws --
 together, solid, dashed and dotted -- and in trace, up and down go from one
 curve to the next. A body that uses `y` is a surface, and `GRAPH` on it draws
-it in 3D. `DEL` empties a slot.
+it in 3D. One that uses `t` is parametric and leaves x and y (`t cos t sin`);
+one that uses `theta` is polar and leaves r. `DEL` empties a slot.
+
+`GRAPH` from Y= draws in a window of its own, kept across a restart. `MENU`
+has the rest: `WINDOW` types its edges, tick spacing and the t and theta
+ranges; `ZOOM`; `TABLE`, the functions down a column of x from `START` in
+steps of `STEP`; `FORMAT`, the grid and the axes; and `STAT` and `STAT PLOT`.
+
+On the graph, the arrows pan and `+` and `-` zoom. `ZOOM` offers box, in,
+out, standard, fit, decimal and integer (a column on every 0.05, or every
+whole number, so trace lands on round values), square (a unit as long across
+as down), trig and stat. `TRACE` follows a curve with x and y read out under
+it; a number typed while tracing is where it goes. `CALC` finds a value,
+zero, minimum, maximum, intersection, dy/dx, integral (shaded) or tangent,
+asking for the bounds as a TI does -- move the cursor and press `ENTER`, or
+type the x -- and puts the answer on the calculator's stack: x for a zero, x
+and y for an extremum or intersection, a and b for a tangent y = ax + b.
 
 `"f" graph` plots a word that takes x and leaves y, one sample per pixel
-column, with y scaled to fit. The arrows pan, `+` and `-` zoom, and the soft
-keys trace the curve (x and y read out under it), fit y again, or go back to
-the standard window of -10 to 10. The calculator's stack is left as it was.
+column, with y scaled to fit, in the standard window of -10 to 10. The
+calculator's stack is left as it was. The same searches are words, for any
+word taking x and leaving y:
+
+```
+"f" a b root        x where f is 0         "f" x nderiv       f'(x)
+"f" a b fmin        x where f is lowest    "f" a b fnint      the integral
+"f" a b fmax        x where f is highest   "f" "g" a b intersect
+```
+
+`STAT` is the lists, `L1` to `L6`, three across, typed down like a
+spreadsheet column; `DEL` removes a value, `CLR` twice empties the list.
+They are words too: `L1 mean`, `[1 2 3] 2 lsto`. `CALC` there gives 1-Var
+and 2-Var statistics and linear, quadratic, exponential, power and log
+regressions on the stat plot's lists; `PUSH` puts the selected result on the
+stack and `TO Y` the fitted equation in the first empty slot. `STAT PLOT`
+draws them over the curves as a scatter plot, a joined line, a histogram
+(bars the x scale wide) or a box plot.
+
+The words work on any list of numbers: `sum`, `mean`, `median`, `stdev`,
+`pstdev`, `corr`, and `linreg` (xs ys -- a b) and its siblings `quadreg`,
+`expreg`, `pwrreg` and `lnreg`. For counting and chance there are `ncr`,
+`npr`, `normalpdf` (x mu sigma), `normalcdf` (lo hi mu sigma), `invnorm` (p
+mu sigma), `binompdf` and `binomcdf` (n p k), `rand` and `randint` (lo hi).
 
 `"f" graph3` plots a word that takes x and y and leaves z, as a wireframe over
 -10 to 10 on both, sampled once on a 24x24 grid. The arrows turn and tilt it

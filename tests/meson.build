@@ -83,6 +83,18 @@ test_mathwords = executable('test_mathwords', 'test_mathwords.c',
 		link_language: 'cpp')
 test('mathwords', test_mathwords)
 
+test_numeric = executable('test_numeric', 'test_numeric.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('numeric', test_numeric)
+
+test_stats = executable('test_stats', 'test_stats.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('stats', test_stats)
+
 test_native = executable('test_native', 'test_native.c',
 		include_directories: qdos_inc,
 		dependencies: [qdos_core_dep],

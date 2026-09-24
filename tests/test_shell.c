@@ -1352,8 +1352,8 @@ static void test_graph_plots_a_word(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "TRACE") != NULL);
-	CHECK(strstr(row, "FIT") != NULL);
+	// Spaced apart: a five-letter label fills its slot and would run into the next
+	CHECK(strstr(row, "ESC ZOOM CALC MENU TRACE") != NULL);
 }
 
 /** Plotting runs the word hundreds of times and leaves the stack as it found it. */
@@ -1615,7 +1615,7 @@ static void test_graph_draws_every_slot_that_is_on(void) {
 	key(script, &n, QDOS_KEY_SOFT1);
 	type_slot(script, &n, 0, "x sin");
 	type_slot(script, &n, 1, "x cos");
-	key(script, &n, QDOS_KEY_SOFT4); // GRAPH
+	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -1650,7 +1650,7 @@ static void test_graph_draws_every_slot_that_is_on(void) {
 	CHECK(strncmp(row, "Y2 ", 3) == 0);
 
 	key(script, &n, QDOS_KEY_UP);
-	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_SOFT5);
 	store_reset();
 	run_script(script, n, fb);
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
@@ -1672,7 +1672,7 @@ static void test_a_slot_using_y_is_a_surface(void) {
 	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
 	CHECK(strstr(row, "3D") != NULL);
 
-	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_SOFT5);
 	store_reset();
 	run_script(script, n, fb);
 	char line[EDIT_COLS_T + 1];
@@ -1696,7 +1696,7 @@ static void test_a_broken_slot(void) {
 	read_error(fb, row, sizeof(row));
 	CHECK(row[0] != '\0' && error_cell_is(fb, 0, row[0], true));
 
-	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_SOFT5);
 	store_reset();
 	run_script(script, n, fb);
 	char big[QDOS_COLS + 1];
@@ -1740,7 +1740,7 @@ static void test_x_and_y_are_keys_in_a_slot(void) {
 	key(script, &n, QDOS_KEY_SOFT2); // x
 	key(script, &n, QDOS_KEY_SOFT2); // x
 	key(script, &n, QDOS_KEY_MUL);
-	key(script, &n, QDOS_KEY_SOFT4); // y
+	key(script, &n, QDOS_KEY_SOFT3); // y
 	key(script, &n, QDOS_KEY_ADD);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1750,6 +1750,7 @@ static void test_x_and_y_are_keys_in_a_slot(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
 	CHECK(strstr(row, " x ") != NULL && strstr(row, " y ") != NULL);
+	CHECK(strstr(row, " t ") != NULL && strstr(row, "theta") != NULL);
 
 	key(script, &n, QDOS_KEY_ENTER);
 	store_reset();
@@ -1769,7 +1770,7 @@ static void test_a_traced_slot_is_not_rounded(void) {
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SOFT1);
 	type_slot(script, &n, 0, "x sqrt");
-	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_SOFT5);
 	key(script, &n, QDOS_KEY_TRACE);
 	for (int i = 0; i < 37; i++) {
 		key(script, &n, QDOS_KEY_RIGHT);
@@ -5083,6 +5084,580 @@ static void test_f1_is_always_the_way_out(void) {
 	CHECK(row[0] == '>');
 }
 
+/* The value on stack row @p depth, counted from the top as 0 */
+static void read_level(const uint8_t* fb, int depth, char* out, size_t cap) {
+	read_row(fb, ROW_TOP_VALUE - depth, out, cap);
+}
+
+/** The CALC words find on any word what the CALC menu finds on a graph. */
+static void test_calc_words(void) {
+	store_reset();
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "fn f(x:f64 -- y:f64) { x x * 2 - }");
+	type_more(script, &n, "fn g(x:f64 -- y:f64) { x }");
+	type_more(script, &n, "\"f\" 0 5 root");
+	type_more(script, &n, "\"f\" 0 3 fnint");
+	type_more(script, &n, "\"f\" 1 nderiv");
+	type_more(script, &n, "\"f\" \"g\" 0 5 intersect");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 3, row, sizeof(row));
+	CHECK(strstr(row, "1.41421356") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL && strstr(row, "3.1") == NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL);
+
+	// No root is an error, and the arguments are gone
+	n = 0;
+	type_line(script, &n, "fn h(x:f64 -- y:f64) { x x * 1 + }");
+	type_more(script, &n, "\"h\" -5 5 root");
+	store_reset();
+	run_script(script, n, fb);
+	char error[EDIT_COLS_T + 1];
+	read_error(fb, error, sizeof(error));
+	CHECK(strstr(error, "NO ROOT IN RANGE") != NULL);
+}
+
+/** Statistics and probability over arrays and numbers. */
+static void test_stat_words(void) {
+	store_reset();
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "[1 2 3 4] mean");
+	type_more(script, &n, "[1 2 3] [5 7 9] linreg");
+	type_more(script, &n, "5 2 ncr");
+	type_more(script, &n, "-1 1 0 1 normalcdf");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 4, row, sizeof(row));
+	CHECK(strstr(row, "2.5") != NULL);
+	read_level(fb, 3, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL); // a, the slope
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL); // b
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "10") != NULL && strstr(row, "10.") == NULL); // whole
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "0.6826894") != NULL);
+}
+
+/** A list stored from the prompt is a word, kept, and on the STAT page. */
+static void test_lists_are_words(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "[3 1 2] 1 lsto");
+	type_more(script, &n, "L1 sum");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 6") != NULL);
+
+	// Still there after a restart, down L1 on the STAT page: PLOT, MENU, 5
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_5);
+	run_script(script, n, fb);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "L1") != NULL && strstr(row, "L3") != NULL);
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+	read_row(fb, ROW_CONTENT_FIRST_T + 2, row, sizeof(row));
+	CHECK(strstr(row, "2") != NULL);
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strcmp(row, "L1(1)=3") == 0);
+}
+
+/** Values typed down the lists, then 1-VAR and a regression, pushed and put in Y=. */
+static void test_stat_page_calculates(void) {
+	store_reset();
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1); // PLOT
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_5);	 // STAT
+	type_more(script, &n, "1");
+	type_more(script, &n, "2");
+	type_more(script, &n, "3");
+	key(script, &n, QDOS_KEY_RIGHT);
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_UP);
+	type_more(script, &n, "2");
+	type_more(script, &n, "4");
+	type_more(script, &n, "6.5");
+	key(script, &n, QDOS_KEY_SOFT2); // CALC
+	key(script, &n, QDOS_KEY_1);	 // 1-VAR
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strcmp(row, "1-VAR L1") == 0);
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "MEAN") != NULL && strstr(row, "2") != NULL);
+
+	// PUSH the mean, then LINREG and TO Y
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_SOFT3); // PUSH
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_SOFT2); // CALC
+	key(script, &n, QDOS_KEY_3);	 // LINREG
+	store_reset();
+	run_script(script, n, fb);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strcmp(row, "LINREG Y=AX+B") == 0);
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "A") == row + 1 && strstr(row, "2.25") != NULL);
+
+	key(script, &n, QDOS_KEY_SOFT4); // TO Y
+	store_reset();
+	run_script(script, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strcmp(row, "IN Y1") == 0);
+
+	// Y1 is that line: at x = 4 it is 2.25 4 * -0.33333 +
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "4 Y1");
+	store_reset();
+	run_script(script, n, fb);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "8.6666666") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL); // the mean pushed earlier
+}
+
+/* Onto the graph of Y1 from the calculator */
+static void graph_slot(qdos_key_event* script, size_t* n, const char* body) {
+	key(script, n, QDOS_KEY_SOFT1);
+	type_slot(script, n, 0, body);
+	key(script, n, QDOS_KEY_SOFT5); // GRAPH
+}
+
+/** A number typed while tracing is where trace goes, and a whole one reads whole. */
+static void test_trace_to_a_typed_x(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	graph_slot(script, &n, "x x *");
+	key(script, &n, QDOS_KEY_SOFT5); // TRACE
+	type_more(script, &n, "3");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "X=3  Y=9") == 0);
+
+	// Off the plot brings it into view
+	type_more(script, &n, "40");
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "X=40  Y=1600") == 0);
+}
+
+/** ZOOM DECIMAL puts a column on nought, so trace starts there. */
+static void test_zoom_decimal(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	graph_slot(script, &n, "x x *");
+	key(script, &n, QDOS_KEY_SOFT2); // ZOOM
+	key(script, &n, QDOS_KEY_6);	 // DECIMAL
+	key(script, &n, QDOS_KEY_SOFT5); // TRACE
+	key(script, &n, QDOS_KEY_RIGHT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "X=0.05  Y=0.0025") == 0);
+
+	// Kept for next time: ESC and GRAPH again draws in the same window
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "X -10.03:9.975") != NULL);
+}
+
+/** CALC ZERO asks for the bounds and puts the root on the stack. */
+static void test_calc_zero_on_the_graph(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	graph_slot(script, &n, "x x * 2 -");
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_2);	 // ZERO
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "LEFT BOUND?") == line);
+
+	type_more(script, &n, "0");
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "RIGHT BOUND?") == line);
+
+	key(script, &n, QDOS_KEY_RIGHT);
+	key(script, &n, QDOS_KEY_RIGHT);
+	type_more(script, &n, "5");
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "ZERO X=1.414213562") == 0);
+
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+	store_reset();
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1.414213562") != NULL);
+}
+
+/** The integral is shaded and pushed; the maximum pushes x and y. */
+static void test_calc_integral_and_maximum(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	graph_slot(script, &n, "x sin");
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_7);	 // INTEGRAL
+	type_more(script, &n, "0");
+	type_more(script, &n, "pi");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "INTEGRAL=2") == 0);
+
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_4);	 // MAXIMUM
+	type_more(script, &n, "0");
+	type_more(script, &n, "3");
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "MAXIMUM X=1.5707963") == line);
+	CHECK(strstr(line, "Y=1") != NULL);
+}
+
+/** WINDOW from Y= sets the edges GRAPH opens with, and refuses a backwards one. */
+static void test_window_is_typed(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x");
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_1);	 // WINDOW
+	type_more(script, &n, "-2");	 // XMIN, and on to XMAX
+	type_more(script, &n, "3");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strcmp(row, "WINDOW") == 0);
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "XMIN") != NULL && strstr(row, "-2") != NULL);
+
+	type_more(script, &n, "0"); // XSCL
+	type_more(script, &n, "5"); // YMIN
+	type_more(script, &n, "4"); // YMAX, under YMIN
+	store_reset();
+	run_script(script, n, fb);
+	char error[EDIT_COLS_T + 1];
+	read_error(fb, error, sizeof(error));
+	CHECK(strstr(error, "YMIN MUST BE UNDER YMAX") != NULL);
+
+	key(script, &n, QDOS_KEY_CLEAR); // the refused number
+	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
+	store_reset();
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "X -2:3") != NULL);
+}
+
+/** TABLE lists the curves on, down x from START in steps of STEP. */
+static void test_table_of_values(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x x *");
+	type_slot(script, &n, 1, "x 1 +");
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_3);	 // TABLE
+	key(script, &n, QDOS_KEY_SOFT4); // STEP
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	type_more(script, &n, "0.5");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, ROW_HEADER_T * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, line, sizeof(line));
+	CHECK(strncmp(line, "X", 1) == 0 && strstr(line, "Y1") != NULL && strstr(line, "Y2") != NULL);
+	read_small(fb, ROW_CONTENT_FIRST_T * QDOS_CELL_H + 3 * QDOS_SMALL_FONT_H, line, sizeof(line));
+	CHECK(strncmp(line, "1.5", 3) == 0 && strstr(line, "2.25") != NULL && strstr(line, "2.5") != NULL);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "Y1(0)=0") == 0);
+}
+
+/** A body in t is parametric, in theta polar; both graph and trace along their variable. */
+static void test_parametric_and_polar_slots(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "t cos 5 * t sin 5 *");
+	type_slot(script, &n, 1, "theta 0 * 3 +");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "PAR") != NULL);
+	read_row(fb, ROW_CONTENT_FIRST_T + 1, row, sizeof(row));
+	CHECK(strstr(row, "POL") != NULL);
+
+	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
+	key(script, &n, QDOS_KEY_SOFT5); // TRACE
+	store_reset();
+	run_script(script, n, fb);
+	CHECK(plot_has_ink(fb));
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y1 T=3.14159") == line);
+	CHECK(strstr(line, "X=-5") != NULL);
+
+	key(script, &n, QDOS_KEY_DOWN);
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y2 TH=3.14159") == line);
+	CHECK(strstr(line, "R=3") != NULL);
+}
+
+/** FORMAT's grid is kept, and draws. */
+static void test_format_grid(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	graph_slot(script, &n, "0");
+	static uint8_t plain[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, plain);
+
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_3);	 // FORMAT
+	key(script, &n, QDOS_KEY_1);	 // GRID
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	store_reset();
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "GRID") != NULL && strstr(row, "ON") != NULL);
+
+	key(script, &n, QDOS_KEY_CLEAR);
+	store_reset();
+	run_script(script, n, fb);
+	int more = 0;
+	for (int i = 0; i < QDOS_SCREEN_W * (ROW_CONTENT_LAST_T + 1) * QDOS_CELL_H; i++) {
+		more += (fb[i] < 0x80) - (plain[i] < 0x80);
+	}
+	CHECK(more > 20);
+}
+
+/** A stat plot draws over the graph with no curve on, and ZOOM STAT fits it. */
+static void test_stat_plot(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "[1 2 3 4] 1 lsto [10 20 15 30] 2 lsto");
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_SOFT1); // PLOT
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_6);	 // STAT PLOT
+	key(script, &n, QDOS_KEY_ENTER); // TYPE: SCATTER
+	key(script, &n, QDOS_KEY_4);	 // ZOOM STAT
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "SCATTER  X 0.7:4.3  Y 8:32") == line);
+}
+
+/** VALUE reads y at a typed x and pushes it; INTERSECT asks for two curves first. */
+static void test_calc_value_and_intersect(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	type_slot(script, &n, 0, "x x *");
+	type_slot(script, &n, 1, "x 2 +");
+	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_1);	 // VALUE
+	type_more(script, &n, "1.5");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "Y1 X=1.5 Y=2.25") == 0);
+
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_5);	 // INTERSECT
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "FIRST CURVE? Y1") == 0);
+
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER); // Y2, offered next
+	type_more(script, &n, "0");
+	type_more(script, &n, "5");
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "INTERSECTION X=2 Y=4") == 0);
+
+	// TANGENT at 1: slope 2 through (1, 1)
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_8);
+	type_more(script, &n, "1");
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "TANGENT Y=2X-1") == 0);
+
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+	store_reset();
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "-1") != NULL); // the tangent's b
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL); // and a
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 4") != NULL); // the intersection's y
+	read_level(fb, 4, row, sizeof(row));
+	CHECK(strstr(row, "2.25") != NULL); // the value
+}
+
+/** ZOOM BOX takes two corners from a cursor that reads out where it is. */
+static void test_zoom_box_and_free_cursor(void) {
+	store_reset();
+
+	qdos_key_event script[512];
+	size_t n = 0;
+	graph_slot(script, &n, "x");
+	key(script, &n, QDOS_KEY_SOFT2); // ZOOM
+	key(script, &n, QDOS_KEY_6);	 // DECIMAL, so the cursor lands on round numbers
+	key(script, &n, QDOS_KEY_SOFT2); // ZOOM
+	key(script, &n, QDOS_KEY_1);	 // BOX
+	key(script, &n, QDOS_KEY_ENTER); // the middle
+	for (int i = 0; i < 40; i++) {
+		key(script, &n, QDOS_KEY_RIGHT);
+	}
+	for (int i = 0; i < 20; i++) {
+		key(script, &n, QDOS_KEY_UP);
+	}
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "SECOND CORNER? X=2  Y=1") == 0);
+
+	key(script, &n, QDOS_KEY_ENTER);
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "X 0:2  Y 0:1") != NULL);
+
+	// MENU, FREE CURSOR: anywhere, not on the curve
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_4);
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "X=1.0025  Y=0.5") == 0); // the middle column of 0 to 2
+}
+
+/** A histogram and a box plot draw from L1. */
+static void test_histogram_and_box_plot(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "[1 2 2 3 3 3 4 9] 1 lsto");
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_SOFT1); // PLOT
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_6);	 // STAT PLOT
+	key(script, &n, QDOS_KEY_LEFT);	 // TYPE, backwards: BOXPLOT
+	key(script, &n, QDOS_KEY_4);	 // ZOOM STAT
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "BOXPLOT  X 0.2:9.8") == line);
+	CHECK(plot_has_ink(fb));
+
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT4); // MENU
+	key(script, &n, QDOS_KEY_6);
+	key(script, &n, QDOS_KEY_LEFT); // HISTOGRAM
+	key(script, &n, QDOS_KEY_4);
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "HISTOGRAM  X 1:10  Y -0.75:3.75") == line); // bars a unit wide from the least
+	CHECK(plot_has_ink(fb));
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -5116,6 +5691,22 @@ int main(void) {
 	test_del_empties_a_slot();
 	test_x_and_y_are_keys_in_a_slot();
 	test_a_traced_slot_is_not_rounded();
+	test_calc_words();
+	test_stat_words();
+	test_lists_are_words();
+	test_stat_page_calculates();
+	test_trace_to_a_typed_x();
+	test_zoom_decimal();
+	test_calc_zero_on_the_graph();
+	test_calc_integral_and_maximum();
+	test_window_is_typed();
+	test_table_of_values();
+	test_parametric_and_polar_slots();
+	test_format_grid();
+	test_stat_plot();
+	test_calc_value_and_intersect();
+	test_zoom_box_and_free_cursor();
+	test_histogram_and_box_plot();
 	test_the_status_band_shows_clock_and_battery();
 	test_the_status_band_stays_when_it_has_nothing();
 	test_the_clock_turns_over_while_idle();

@@ -307,7 +307,7 @@ static void test_the_cursor_inverts_around_its_point(void) {
 
 /** A zoom deep enough to lose precision still ends, rather than looping on ticks. */
 static void test_a_deep_zoom_still_draws(void) {
-	qdos_graph_view v = {1e15, 1e15 + 1e-1, -1e-300, 1e-300};
+	qdos_graph_view v = {1e15, 1e15 + 1e-1, -1e-300, 1e-300, 0.0, 0.0};
 	static qdos_graph_samples s;
 	qdos_graph_sample(&s, &v, W, f_identity, NULL);
 	clear();
@@ -465,6 +465,195 @@ static void test_a_body_says_what_it_plots_as(void) {
 	// y inside another word is not y
 	CHECK(qdos_graph_body_shape("x yx * y2 +") == QDOS_GRAPH_CURVE);
 	CHECK(qdos_graph_body_shape("3") == QDOS_GRAPH_CURVE); // a constant is a flat curve
+
+	// t is parametric, theta polar; y still wins, being the older
+	CHECK(qdos_graph_body_shape("t cos t sin") == QDOS_GRAPH_PARAM);
+	CHECK(qdos_graph_body_shape("theta 2 * sin") == QDOS_GRAPH_POLAR);
+	CHECK(qdos_graph_body_shape("t theta +") == QDOS_GRAPH_PARAM);
+	CHECK(qdos_graph_body_shape("t y +") == QDOS_GRAPH_SURFACE);
+	CHECK(qdos_graph_body_shape("tt thetas") == QDOS_GRAPH_CURVE);
+}
+
+static int ink_in_plot(void);
+
+/** Decimal and integer put a column and a row on nought, and round steps either side. */
+static void test_decimal_and_integer_land_on_round_numbers(void) {
+	qdos_graph_view v;
+	qdos_graph_standard(&v);
+	qdos_graph_decimal(&v, W, PLOT_H);
+	CHECK(qdos_graph_x(&v, W / 2, W) == 0.0); // exactly, or trace reads 1.8e-15
+	CHECK(fabs(qdos_graph_x(&v, W / 2 + 20, W) - 1.0) < 1e-12);
+	CHECK(fabs(qdos_graph_x(&v, 0, W) + 10.0) < 1e-12);
+	CHECK(qdos_graph_col(&v, 1.0, W) == W / 2 + 20);
+	CHECK(qdos_graph_y(&v, (PLOT_H - 1) / 2, PLOT_H) == 0.0);
+	CHECK(fabs(qdos_graph_y(&v, (PLOT_H - 1) / 2 - 20, PLOT_H) - 1.0) < 1e-12);
+
+	v.x0 = 40.2;
+	v.x1 = 60.2;
+	v.y0 = -3.0;
+	v.y1 = 7.4;
+	qdos_graph_integer(&v, W, PLOT_H);
+	CHECK(qdos_graph_x(&v, W / 2, W) == 50.0);
+	CHECK(qdos_graph_x(&v, W / 2 + 1, W) == 51.0);
+	CHECK(qdos_graph_y(&v, (PLOT_H - 1) / 2, PLOT_H) == 2.0);
+}
+
+/** Square makes a unit as long across as down, keeping the middle where it was. */
+static void test_square_evens_the_axes(void) {
+	qdos_graph_view v;
+	qdos_graph_standard(&v);
+	qdos_graph_square(&v, W, PLOT_H);
+	const double across = (v.x1 - v.x0) / W, down = (v.y1 - v.y0) / (PLOT_H - 1);
+	CHECK(fabs(across - down) < 1e-12);
+	CHECK(fabs(v.x0 + v.x1) < 1e-12 && fabs(v.y0 + v.y1) < 1e-12);
+	CHECK(v.x1 - v.x0 >= 20.0 && v.y1 - v.y0 >= 20.0); // widened, never narrowed
+
+	qdos_graph_trig(&v, W, PLOT_H, true);
+	CHECK(fabs(qdos_graph_x(&v, W / 2 + 48, W) - 90.0) < 1e-9);
+	CHECK(v.xscl == 90.0 && v.y0 == -4.0 && v.y1 == 4.0);
+}
+
+/** A tick spacing asked for is the one drawn, and one too fine for the plot draws none. */
+static void test_scale_sets_the_ticks(void) {
+	qdos_graph_view v;
+	qdos_graph_standard(&v);
+	clear();
+	qdos_graph_draw_axes(&AREA, &v);
+	const int automatic = ink_in_plot();
+
+	v.xscl = 1.0;
+	v.yscl = 1.0;
+	clear();
+	qdos_graph_draw_axes(&AREA, &v);
+	const int ones = ink_in_plot();
+	CHECK(ones > automatic);
+
+	// The tick at x = 1 is there; axis row is the middle
+	const int row = TOP + (PLOT_H - 1) / 2;
+	CHECK(ink_at(W / 2 + 20, row - 2));
+
+	v.xscl = 1e-6;
+	v.yscl = 1e-6;
+	clear();
+	qdos_graph_draw_axes(&AREA, &v);
+	CHECK(ink_in_plot() == W + PLOT_H - 1); // two bare axes crossing
+
+	// A grid dot where two ticks cross, and none between
+	v.xscl = 5.0;
+	v.yscl = 5.0;
+	clear();
+	qdos_graph_draw_grid(&AREA, &v);
+	CHECK(ink_at(W / 2 + 100, TOP + (int)lround((PLOT_H - 1) / 4.0)));
+	CHECK(ink_in_plot() == 3 * 5); // x = -10 and 10 are the outer edges of the end columns, off the plot
+}
+
+static bool f_circle(void* user, double t, double* x, double* y) {
+	(void)user;
+	*x = 5.0 * cos(t);
+	*y = 5.0 * sin(t);
+	return true;
+}
+
+static bool f_huge_points(void* user, double t, double* x, double* y) {
+	(void)user;
+	*x = t;
+	*y = (t > 0.0) ? 1e300 : -1e300;
+	return true;
+}
+
+/** A parametric curve is taken at steps of t and drawn joined, cut to the plot. */
+static void test_points_are_joined_in_order(void) {
+	static qdos_graph_points p;
+	CHECK(qdos_graph_sample_points(&p, 0.0, 6.2832, 0.1309, f_circle, NULL) == 49);
+	CHECK(p.count == 49);
+	CHECK(fabs(p.x[0] - 5.0) < 1e-12 && fabs(p.y[0]) < 1e-12);
+
+	qdos_graph_view v;
+	qdos_graph_standard(&v);
+	clear();
+	qdos_graph_draw_points(&AREA, &v, &p, QDOS_GRAPH_SOLID);
+	CHECK(ink_at(W / 2 + 100, TOP + (PLOT_H - 1) / 2)); // (5, 0)
+	CHECK(ink_at(W / 2 - 100, TOP + (PLOT_H - 1) / 2)); // (-5, 0)
+	CHECK(!ink_at(W / 2, TOP + (PLOT_H - 1) / 2));		// not the middle
+
+	qdos_graph_view fit = v;
+	CHECK(qdos_graph_fit_points(&p, &fit));
+	CHECK(fit.y0 < -5.0 && fit.y1 > 5.0);
+
+	// Far off the plot does not overflow or draw outside it
+	CHECK(qdos_graph_sample_points(&p, -5.0, 5.0, 0.5, f_huge_points, NULL) == 21);
+	memset(g_fb, 0xFF, sizeof(g_fb));
+	qdos_graph_draw_points(&AREA, &v, &p, QDOS_GRAPH_SOLID);
+	for (int x = 0; x < W; x++) {
+		for (int y = 0; y < TOP; y++) {
+			CHECK(!ink_at(x, y));
+		}
+	}
+
+	// A step that cannot move is counted, not looped on
+	CHECK(qdos_graph_sample_points(&p, 0.0, 1e9, 1e-300, f_circle, NULL) == QDOS_GRAPH_MAX_POINTS);
+	CHECK(qdos_graph_sample_points(&p, 0.0, 1.0, 0.0, f_circle, NULL) == 0);
+}
+
+/** A segment, a rectangle and a mark land where their points are. */
+static void test_shapes_on_the_plane(void) {
+	qdos_graph_view v;
+	qdos_graph_standard(&v);
+	const int mid_row = TOP + (PLOT_H - 1) / 2;
+
+	clear();
+	qdos_graph_draw_segment(&AREA, &v, -100.0, 0.0, 100.0, 0.0, QDOS_GRAPH_SOLID);
+	CHECK(ink_in_plot() == W);
+	CHECK(ink_at(0, mid_row) && ink_at(W - 1, mid_row));
+
+	clear();
+	qdos_graph_draw_mark(&AREA, &v, 0.0, 0.0);
+	CHECK(ink_in_plot() == 16);
+	CHECK(!ink_at(W / 2, mid_row));
+	CHECK(ink_at(W / 2 + 2, mid_row));
+
+	clear();
+	qdos_graph_draw_rect(&AREA, &v, 1.0, 1.0, 2.0, 3.0);
+	CHECK(ink_at(W / 2 + 20, mid_row - (int)lround(1.0 * (PLOT_H - 1) / 20.0)));
+	CHECK(!ink_at(W / 2 + 30, mid_row - (int)lround(2.0 * (PLOT_H - 1) / 20.0)));
+
+	clear();
+	qdos_graph_draw_boxplot(&AREA, &v, -8.0, -2.0, 0.0, 3.0, 9.0);
+	const int band = TOP + PLOT_H / 4;
+	CHECK(ink_at(W / 2 - 160, band));	 // the left whisker's end
+	CHECK(ink_at(W / 2 - 20, band - 8)); // the top of the box
+	CHECK(ink_at(W / 2, band));			 // the median
+	CHECK(!ink_at(W / 2 + 10, band));	 // inside the box, clear
+}
+
+/** Shading fills between the curve and the axis, every other pixel, only between the bounds. */
+static void test_shading_under_a_curve(void) {
+	qdos_graph_view v;
+	qdos_graph_standard(&v);
+	static qdos_graph_samples s;
+	qdos_graph_sample(&s, &v, W, f_identity, NULL);
+
+	clear();
+	qdos_graph_shade(&AREA, &v, &s, 0.0, 5.0);
+	const int shaded = ink_in_plot();
+	CHECK(shaded > 0);
+	for (int x = 0; x < W / 2; x++) {
+		for (int y = TOP; y < TOP + PLOT_H; y++) {
+			CHECK(!ink_at(x, y));
+		}
+	}
+	// Half of the triangle between y = x and the axis: 100 columns, 41 rows high at the end
+	const int triangle = 100 * 42 / 2 + 100;
+	CHECK(shaded > triangle / 2 - 60 && shaded < triangle / 2 + 60);
+
+	// The cursor at a point inverts what is there
+	clear();
+	qdos_graph_draw_cursor_at(&AREA, &v, 0.0, 0.0);
+	CHECK(ink_in_plot() == 16);
+	qdos_graph_draw_cursor_at(&AREA, &v, 0.0, 0.0);
+	CHECK(ink_in_plot() == 0);
+	qdos_graph_draw_cursor_at(&AREA, &v, 1e300, 0.0);
+	CHECK(ink_in_plot() == 0);
 }
 
 static int ink_in_plot(void) {
@@ -540,5 +729,11 @@ int main(void) {
 	test_a_full_turn_is_the_same_picture();
 	test_a_body_says_what_it_plots_as();
 	test_curves_can_be_told_apart();
+	test_decimal_and_integer_land_on_round_numbers();
+	test_square_evens_the_axes();
+	test_scale_sets_the_ticks();
+	test_points_are_joined_in_order();
+	test_shapes_on_the_plane();
+	test_shading_under_a_curve();
 	return check_report("graph");
 }

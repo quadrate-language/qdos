@@ -102,14 +102,15 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 				BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("->", " -> ")),
 				BTN(KEY("abs", QDOS_KEY_ABS), TXT("R", "r"), NONE),
 				BTN(KEY("round", QDOS_KEY_ROUND), TXT("S", "s"), NONE),
-				BTN(TXT(QDOS_PAD_GLYPH_SPACE, " "), NONE, TXT("nl", " nl "))},
+				BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, TXT("nl", " nl "))},
 
 		/*
 		 * Five across again, for the numeric block. Entry and editing: ALPHA sits
-		 * beside delete, being the other thing you reach for mid-word. DEL rather
+		 * beside space, being the other thing you reach for mid-word. DEL is
+		 * above the operator column, where the right hand already is. DEL rather
 		 * than an arrow: the arrows move the cursor, and one glyph cannot mean both.
 		 */
-		{BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, TXT("print", " print ")), MOD(CAP_ALPHA, QDOS_PAD_ALPHA),
+		{BTN(TXT(QDOS_PAD_GLYPH_SPACE, " "), NONE, TXT("print", " print ")), MOD(CAP_ALPHA, QDOS_PAD_ALPHA),
 				BTN(KEY(QDOS_GLYPH_PLUSMINUS, QDOS_KEY_NEG), TXT("T", "t"), TXT("[", "[")),
 				BTN(KEY("TAB", QDOS_KEY_TAB), TXT("U", "u"), TXT("]", "]")),
 				BTN(KEY(QDOS_GLYPH_DIVIDE, QDOS_KEY_DIV), TXT("V", "v"), TXT("shl", " shl "))},

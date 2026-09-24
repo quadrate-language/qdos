@@ -656,7 +656,8 @@ static void test_numeric_block(void) {
 
 	CHECK(qdos_pad_button_at(4, 9)->plain.key == QDOS_KEY_ENTER);
 
-	CHECK(qdos_pad_button_at(0, 5)->plain.key == QDOS_KEY_BACKSPACE);
+	CHECK(strcmp(qdos_pad_button_at(0, 5)->plain.text, " ") == 0);
+	CHECK(qdos_pad_button_at(5, 4)->plain.key == QDOS_KEY_BACKSPACE); // over the operators
 	CHECK(qdos_pad_button_at(0, 6)->plain.key == QDOS_KEY_STO);
 	CHECK(qdos_pad_button_at(0, 7)->plain.key == QDOS_KEY_RCL);
 	CHECK(is_modifier(qdos_pad_button_at(0, 8), QDOS_PAD_SYMBOL));
