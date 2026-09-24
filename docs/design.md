@@ -109,10 +109,9 @@ what a key will do *next* — whether ALPHA is still locked, or whether `sin` is
 about to take degrees. Both are states that quietly change the meaning of the
 next press, and both used to live only in a menu two pages deep.
 
-- **The angle** is the fifth soft key in both calculator and line mode, labelled
-  `DEG` or `RAD`. The label is the setting and pressing it turns it over, so the
-  annunciator and the control are the same five characters. The settings page
-  still lists it; they are one setting, not two.
+- **The angle** is changed on the settings page, and `DEG` or `RAD` sits in the
+  status band beside the clock on every screen, so the setting that changes
+  answers is always on show without costing a soft key.
 - **The keypad's live face** comes from the backend, through `hal->modifier`,
   because the shell cannot know it: the layer belongs to whatever is reading
   keys. It shows as one character after the prompt, and a keypad with a single

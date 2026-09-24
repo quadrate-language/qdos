@@ -82,7 +82,7 @@ typedef enum {
 	QDOS_KEY_SETTINGS,
 	QDOS_KEY_DEBUG, ///< The log of what has been said
 	QDOS_KEY_UNDO,
-	QDOS_KEY_ANGLE, ///< Degrees or radians, the one setting that changes answers
+	QDOS_KEY_ANGLE, ///< Unused; kept so the codes after it, which apps see, do not move
 	QDOS_KEY_STO,	///< Store x in a register; the next digit says which
 	QDOS_KEY_RCL,	///< Recall one
 

@@ -63,9 +63,8 @@ work at the prompt is not that, and would otherwise fill the store with every
 `sq` ever tried, each one a row in `APPS`.
 
 `Tab` completes words. F1-F5 are soft keys, labelled on the bottom row of the
-display; the last of them is the angle mode, and reads `DEG` or `RAD` rather
-than naming itself — it is the one setting that changes an answer without
-saying so, and a label that is the setting is already the annunciator. `STO`
+display. The angle mode, degrees or radians, is on the settings page, and the
+status band shows which is in force beside the clock. `STO`
 and `RCL` are keys of their own beside the digits and take the digit after them,
 reaching registers 0 to 9; the other ninety are `n sto` and `n rcl` written
 out. Where the keypad has more than one face, which one is live shows beside

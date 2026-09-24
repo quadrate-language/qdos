@@ -757,13 +757,13 @@ typedef struct {
 
 static const soft_key SOFT[QDOS_MODE__COUNT][SOFT_KEYS] = {
 		// Turning off is the PWR key's job: the one action on the row that cannot be
-		// undone by pressing it again. The last slot's label is the setting itself.
+		// undone by pressing it again. The angle is on the settings page.
 		// PLOT where CLR was: that did what the ESC key under it does already.
 		// Four letters, like the rest, or it runs into APPS beside it.
 		[QDOS_MODE_CALC] = {{"PLOT", QDOS_KEY_GRAPH}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
-				{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_ANGLE}},
+				{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_NONE}},
 		[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
-				{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_ANGLE}},
+				{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_NONE}},
 		// No arrows here or below: the keypad has its own
 		[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"PICK", QDOS_KEY_ENTER},
 				{"EDIT", QDOS_KEY_OPEN}},
@@ -810,10 +810,6 @@ static void register_apps(qdos_shell* sh, qd_interp* interp);
 static void render_soft(qdos_shell* sh, qdos_console* con) {
 	for (int i = 0; i < SOFT_KEYS; i++) {
 		const char* label = SOFT[sh->mode][i].label;
-
-		if (SOFT[sh->mode][i].key == QDOS_KEY_ANGLE) {
-			label = angle_text();
-		}
 
 		// Two jobs, so it names whichever is next
 		if (sh->mode == QDOS_MODE_LINE && SOFT[sh->mode][i].key == QDOS_KEY_CLEAR) {
@@ -5151,14 +5147,6 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		return;
 	}
 
-	// Wherever it is pressed from: the soft label reads back as the new setting,
-	// so nothing else has to be said
-	if (ev->key == QDOS_KEY_ANGLE) {
-		qdos_math_set_degrees(!qdos_math_degrees());
-		save_settings(sh);
-		return;
-	}
-
 	if (ev->key == QDOS_KEY_SETTINGS && sh->mode != QDOS_MODE_SETTINGS) {
 		sh->page_from = (sh->mode == QDOS_MODE_DEBUG) ? sh->page_from : sh->mode;
 		sh->mode = QDOS_MODE_SETTINGS;
@@ -5463,6 +5451,13 @@ static void render_status(qdos_shell* sh, qdos_console* con) {
 	const int margin = QDOS_SMALL_FONT_W;
 	for (int i = 0; clock[i] != '\0'; i++) {
 		qdos_console_putc_small(con, margin + i * QDOS_SMALL_FONT_W, y, clock[i]);
+	}
+
+	// The one setting that changes answers, since no key shows it
+	const char* angle = angle_text();
+	const int angle_x = margin + (clock[0] ? (int)strlen(clock) + 2 : 0) * QDOS_SMALL_FONT_W;
+	for (int i = 0; angle[i] != '\0'; i++) {
+		qdos_console_putc_small(con, angle_x + i * QDOS_SMALL_FONT_W, y, angle[i]);
 	}
 	const int right = QDOS_SCREEN_W - margin - (int)strlen(charge) * QDOS_SMALL_FONT_W;
 	for (int i = 0; charge[i] != '\0'; i++) {

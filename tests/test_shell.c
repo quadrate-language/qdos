@@ -1239,6 +1239,7 @@ static void test_a_long_error_is_not_cut_at_24(void) {
 /** The clock on the left of the band and the charge on the right, white on black. */
 static void test_the_status_band_shows_clock_and_battery(void) {
 	store_reset();
+	seed_setting("settings.angle", 0);
 	g_has_clock = true;
 	g_clock_start = 14 * 3600 + 32 * 60 + 10;
 	g_has_battery = true;
@@ -1255,15 +1256,16 @@ static void test_the_status_band_shows_clock_and_battery(void) {
 
 	char band[EDIT_COLS_T + 1];
 	read_small(fb, STATUS_Y0_T, band, sizeof(band));
-	CHECK(strncmp(band, " 14:32", 6) == 0);
+	CHECK(strncmp(band, " 14:32  RAD", 11) == 0);
 	CHECK(strlen(band) == EDIT_COLS_T - 1); // ends a cell in from the edge
 	CHECK(strcmp(band + strlen(band) - 3, "87%") == 0);
 	CHECK(small_cell_is(fb, 1, STATUS_Y0_T, '1', true));
 }
 
-/** No clock set and no battery, and the band is still there, saying nothing. */
+/** No clock set and no battery, and the band is still there, saying only the angle. */
 static void test_the_status_band_stays_when_it_has_nothing(void) {
 	store_reset();
+	seed_setting("settings.angle", 0);
 	g_has_battery = true;
 	g_battery = -1;
 
@@ -1277,7 +1279,7 @@ static void test_the_status_band_stays_when_it_has_nothing(void) {
 	CHECK(status_band_is_black(fb));
 	char band[EDIT_COLS_T + 1];
 	read_small(fb, STATUS_Y0_T, band, sizeof(band));
-	CHECK(band[0] == '\0');
+	CHECK(strcmp(band, " RAD") == 0);
 }
 
 /** Left alone, the shell wakes at the turn of the minute, and only then. */
@@ -3657,9 +3659,14 @@ static void test_settings_angle_toggles_both_ways(void) {
 	char row[QDOS_COLS + 1];
 	read_row(degrees, ROW_CONTENT_FIRST_T, row, sizeof(row));
 	CHECK(strstr(row, "DEG") != NULL);
+	char band[EDIT_COLS_T + 1];
+	read_small(degrees, STATUS_Y0_T, band, sizeof(band));
+	CHECK(strstr(band, "DEG") != NULL); // the band follows
 
 	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
 	CHECK(strstr(row, "RAD") != NULL);
+	read_small(fb, STATUS_Y0_T, band, sizeof(band));
+	CHECK(strstr(band, "RAD") != NULL);
 
 	CHECK(!qdos_math_degrees()); // and the machine is as it was found
 }
@@ -4132,11 +4139,9 @@ static void test_a_register_press_does_not_outlive_the_calculator(void) {
 	CHECK(strstr(row, "STORED") == NULL);
 }
 
-/** The angle soft key is the setting, and pressing it turns it over. */
-static void test_the_angle_soft_key_shows_and_toggles(void) {
+/** The angle is on the settings page only; the soft row does not show it. */
+static void test_the_angle_is_not_on_the_soft_row(void) {
 	store_reset();
-	// The angle lives in mathwords, which outlives one shell, so say where to
-	// start rather than inheriting it from whichever test ran last
 	seed_setting("settings.angle", 0);
 
 	qdos_key_event script[64];
@@ -4148,18 +4153,22 @@ static void test_the_angle_soft_key_shows_and_toggles(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "DEG") != NULL); // radians to start with, so now degrees
+	CHECK(strstr(row, "RAD") == NULL && strstr(row, "DEG") == NULL);
 
-	// And it is the setting itself, not a mode of its own
+	// And pressing where it was changes nothing
+	key(script, &n, QDOS_KEY_SETTINGS);
 	store_reset();
 	seed_setting("settings.angle", 0);
-	n = 0;
-	key(script, &n, QDOS_KEY_SOFT5);
-	key(script, &n, QDOS_KEY_SETTINGS);
 	run_script(script, n, fb);
-
 	read_row(fb, ROW_SETTING_ANGLE, row, sizeof(row));
-	CHECK(strstr(row, "DEG") != NULL);
+	CHECK(strstr(row, "RAD") != NULL);
+
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	store_reset();
+	run_script(script, n, fb);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "RAD") == NULL && strstr(row, "DEG") == NULL); // line mode too
 }
 
 /** Which face the keypad is on shows beside the cursor, since a cap cannot. */
@@ -5918,7 +5927,7 @@ int main(void) {
 	test_sto_asks_which_register();
 	test_a_register_press_can_be_cancelled();
 	test_a_register_press_does_not_outlive_the_calculator();
-	test_the_angle_soft_key_shows_and_toggles();
+	test_the_angle_is_not_on_the_soft_row();
 	test_the_prompt_shows_the_keypad_layer();
 	test_edit_asks_before_losing_work();
 	test_an_untouched_editor_leaves_at_once();
