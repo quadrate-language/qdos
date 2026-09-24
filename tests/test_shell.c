@@ -5741,6 +5741,41 @@ static void test_output_page(void) {
 	CHECK(strstr(row, "OUTPUT") == NULL);
 }
 
+/** On the keypad a number too big for an integer is a float, and so is a sum past one. */
+static void test_keypad_numbers_past_an_integer(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	digits(script, &n, "99999999999999999999");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "9223372036854775807");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ADD);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "1e+20") != NULL); // not the nought it used to be
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "9.22337203685478e+18") != NULL); // not wrapped negative
+
+	// exp of 1000 has no finite value: refused, and 1000 still there to correct
+	n = 0;
+	digits(script, &n, "1000");
+	key(script, &n, QDOS_KEY_EXP);
+	store_reset();
+	run_script(script, n, fb);
+	char error[EDIT_COLS_T + 1];
+	read_error(fb, error, sizeof(error));
+	CHECK(strstr(error, "OVERFLOW") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1000") != NULL);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -5852,6 +5887,7 @@ int main(void) {
 	test_division_key_divides_in_a_line();
 	test_locals_and_for_at_the_prompt();
 	test_output_page();
+	test_keypad_numbers_past_an_integer();
 	test_keypad_words_reach_the_line();
 	test_a_typed_function_word_evaluates();
 	test_neg_key_types_the_word();

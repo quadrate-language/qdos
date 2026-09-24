@@ -25,6 +25,7 @@
 #include "storage.h"
 #include "wordlist.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1085,7 +1086,7 @@ static bool entry_commit(qdos_shell* sh) {
 	}
 
 	// Quadrate wants a digit on each side of the point; a keypad does not
-	char text[ENTRY_MAX + 2];
+	char text[ENTRY_MAX + 4];
 	const char* p = sh->entry;
 	size_t len = 0;
 	if (*p == '-') {
@@ -1099,6 +1100,15 @@ static bool entry_commit(qdos_shell* sh) {
 	if (text[len - 1] == '.') {
 		text[len++] = '0';
 		text[len] = '\0';
+	}
+
+	// A whole number too big for an integer is a float, not the nought Quadrate reads it as
+	if (strchr(text, '.') == NULL) {
+		errno = 0;
+		(void)strtoll(text, NULL, 10);
+		if (errno == ERANGE) {
+			memcpy(text + len, ".0", 3);
+		}
 	}
 
 	undo_snapshot(sh);
@@ -1116,7 +1126,10 @@ static void apply_word(qdos_shell* sh, const char* word) {
 		return;
 	}
 	undo_snapshot(sh);
-	if (qdos_guarded_eval(sh->interp, word)) {
+	qdos_math_set_finite_only(true);
+	const bool ok = qdos_guarded_eval(sh->interp, word);
+	qdos_math_set_finite_only(false);
+	if (ok) {
 		set_message(sh, "", false);
 		absorb_output(sh);
 	} else {
@@ -1182,8 +1195,9 @@ static const char* function_word(qdos_key key) {
 
 /* Flips the sign of the number being typed, or negates x when none is */
 static void entry_negate(qdos_shell* sh) {
+	// times, not neg, so the least integer turns into a float rather than itself
 	if (sh->entry_len == 0) {
-		apply_word(sh, "neg");
+		apply_word(sh, "-1 times");
 		return;
 	}
 
@@ -1273,13 +1287,13 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 
 	case QDOS_KEY_ADD:
-		apply_word(sh, "+");
+		apply_word(sh, "plus");
 		break;
 	case QDOS_KEY_SUB:
-		apply_word(sh, "-");
+		apply_word(sh, "minus");
 		break;
 	case QDOS_KEY_MUL:
-		apply_word(sh, "*");
+		apply_word(sh, "times");
 		break;
 	// A calculator divides rather than truncating; the language keeps "/"
 	case QDOS_KEY_DIV:

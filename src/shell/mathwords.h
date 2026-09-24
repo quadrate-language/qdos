@@ -29,6 +29,9 @@ void qdos_math_set_degrees(bool degrees);
 
 bool qdos_math_degrees(void);
 
+/** @brief Refuse a result that is infinite or not a number, putting the arguments back; for the keypad */
+void qdos_math_set_finite_only(bool on);
+
 /** @brief Argument @p depth from the top as a double, ints included */
 bool qdos_peek_number(qd_context* ctx, size_t depth, double* out);
 

@@ -10,6 +10,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 static qd_interp* fresh(void) {
 	qd_interp* interp = qd_interp_create(4096);
@@ -272,7 +273,68 @@ static void test_messages_fit_the_screen(void) {
 	}
 }
 
+/** An integer too big to stay one goes on as a float rather than wrapping. */
+static void test_overflow_becomes_a_float(void) {
+	bool ok;
+	CHECK(fabs(value_of("9223372036854775807 1 plus", &ok) - 9223372036854775808.0) < 1e4);
+	CHECK(!is_whole("9223372036854775807 1 plus"));
+	CHECK(value_of("-9223372036854775808 1 minus", &ok) < -9.2e18);
+	CHECK(fabs(value_of("4294967296 4294967296 times", &ok) - 18446744073709551616.0) < 1e5);
+	CHECK(value_of("3037000500 sq", &ok) > 9.2e18);
+	CHECK(value_of("2097152 cb", &ok) > 9.2e18);
+	CHECK(value_of("-9223372036854775808 abs", &ok) > 9.2e18);
+	CHECK(value_of("-9223372036854775808 -1 divide", &ok) > 9.2e18 && ok); // used to trap
+	CHECK(fabs(value_of("21 fac", &ok) / 51090942171709440000.0 - 1.0) < 1e-12);
+	CHECK(value_of("170 fac", &ok) > 7.2e306);
+
+	// And whole where it fits
+	CHECK(is_whole("3 4 plus") && is_whole("3 4 minus") && is_whole("3 4 times"));
+	CHECK(is_whole("20 fac") && value_of("20 fac", &ok) == 2432902008176640000.0);
+	CHECK(is_whole("-5 abs") && is_whole("-3 cb"));
+}
+
+/** In degrees a whole quarter turn is exact, and tan has no value at the odd ones. */
+static void test_degree_trig_is_exact(void) {
+	bool ok;
+	qdos_math_set_degrees(true);
+	CHECK(value_of("180 sin", &ok) == 0.0);
+	CHECK(value_of("90 cos", &ok) == 0.0);
+	CHECK(value_of("-90 sin", &ok) == -1.0);
+	CHECK(value_of("720 cos", &ok) == 1.0);
+	CHECK(value_of("180 tan", &ok) == 0.0);
+	CHECK(refuses("90 tan") && refuses("-270 tan"));
+	CHECK(fabs(value_of("30 sin", &ok) - 0.5) < 1e-15);
+	qdos_math_set_degrees(false);
+	CHECK(!refuses("90 tan")); // radians: 90 is nowhere near a pole
+}
+
+/** From the keypad a result with no finite value is refused and the arguments kept. */
+static void test_finite_only_refuses_and_restores(void) {
+	qd_interp* interp = fresh();
+	qdos_math_set_finite_only(true);
+	CHECK(!qd_interp_eval(interp, "1e308 10 times"));
+	CHECK(strstr(qd_interp_error(interp), "OVERFLOW") != NULL);
+	CHECK(qd_interp_depth(interp) == 2);
+	qd_interp_value v;
+	CHECK(qd_interp_peek(interp, 0, &v) && v.type == QD_INTERP_VALUE_INT && v.i == 10);
+	CHECK(qd_interp_peek(interp, 1, &v) && v.f == 1e308);
+
+	CHECK(qd_interp_eval(interp, "clear -8 0.5 pow") == false);
+	CHECK(strstr(qd_interp_error(interp), "UNDEFINED") != NULL);
+	CHECK(qd_interp_eval(interp, "clear 1000 exp") == false);
+	CHECK(qd_interp_eval(interp, "clear 2 3 pow"));
+	qdos_math_set_finite_only(false);
+
+	// Anywhere else infinity is a value like any other
+	CHECK(qd_interp_eval(interp, "clear 1e308 10 times"));
+	CHECK(qd_interp_peek(interp, 0, &v) && isinf(v.f));
+	qd_interp_destroy(interp);
+}
+
 int main(void) {
+	test_overflow_becomes_a_float();
+	test_degree_trig_is_exact();
+	test_finite_only_refuses_and_restores();
 	test_domains_are_errors();
 	test_plain_words();
 	test_the_words_the_shell_does_itself();

@@ -52,6 +52,14 @@ calculator once it is empty.
 The `÷` key divides as a calculator does, `7 2 ÷` being 3.5, wherever it is
 pressed: it types `divide` into a line. Quadrate's own `/` keeps its meaning, 3
 for `7 2 /`, so a program behaves on the calculator as it does on a PC.
+Likewise the keypad's `+`, `−` and `×` are `plus`, `minus` and `times`: whole
+numbers stay whole until a result will not fit 64 bits, and then it is a
+float, where Quadrate's own operators wrap as C does. `sq`, `cb`, `abs` and
+`fac` do the same, so `21 fac` is 5.1e19. A number typed on the keypad that is
+too big for an integer is a float too. From the keypad, a result with no
+finite value is refused as `OVERFLOW` or `UNDEFINED` and what it was worked
+out from stays on the stack. In degrees, whole quarter turns are exact:
+`180 sin` is 0 and `90 tan` is `UNDEFINED`.
 Parameters, `-> name` locals and `for` loops work at the prompt as in a program;
 a local bound at the prompt lasts until the next restart. What an evaluation
 prints goes to the message row, or, when it is more than a line, to a page of
