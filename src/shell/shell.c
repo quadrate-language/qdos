@@ -1176,7 +1176,8 @@ static const char* const FUNCTION_WORD[] = {
 		"floor",
 		"ceil",
 		"round",
-		"mod",
+		// modulo, as the calculator's key does; Quadrate's own mod truncates
+		"modulo",
 		"rot",
 		"over",
 };
@@ -1377,7 +1378,7 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		if (ev->ch == ':') {
 			enter_line_mode(sh);
 		} else if (ev->ch != ' ') {
-			set_message(sh, "PRESS : TO TYPE A LINE", false);
+			set_message(sh, "PRESS MODE TO TYPE A LINE", false);
 		}
 		break;
 
@@ -1445,13 +1446,13 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		input_append(sh, " divide ");
 		break;
 	case QDOS_KEY_DUP:
-		input_append(sh, "dup");
+		input_append(sh, " dup ");
 		break;
 	case QDOS_KEY_DROP:
-		input_append(sh, "drop");
+		input_append(sh, " drop ");
 		break;
 	case QDOS_KEY_SWAP:
-		input_append(sh, "swap");
+		input_append(sh, " swap ");
 		break;
 	case QDOS_KEY_NEG:
 		input_append(sh, " neg ");
@@ -2056,9 +2057,12 @@ static bool expand_soft(qdos_shell* sh, const qdos_key_event* in, qdos_key_event
 static void handle_key(qdos_shell* sh, const qdos_key_event* ev) {
 	// A message is holding the input line, so this press takes it back. Set
 	// first, so whatever this key has to say replaces it rather than being
-	// wiped by it.
-	sh->message[0] = '\0';
-	sh->message_is_error = false;
+	// wiped by it. Not by a space in the calculator, which does nothing, and
+	// ends the words a shifted key types.
+	if (!(sh->mode == QDOS_MODE_CALC && ev->key == QDOS_KEY_CHAR && ev->ch == ' ')) {
+		sh->message[0] = '\0';
+		sh->message_is_error = false;
+	}
 
 	// One keypress, one session write at most
 	qdos_natives_rearm();

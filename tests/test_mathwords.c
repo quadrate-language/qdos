@@ -295,6 +295,22 @@ static void test_overflow_becomes_a_float(void) {
 	CHECK(is_whole("-5 abs") && is_whole("-3 cb"));
 }
 
+/** A calculator's mod: decimals, and the sign of the divisor. */
+static void test_modulo(void) {
+	bool ok;
+	CHECK(is_whole("7 3 modulo") && value_of("7 3 modulo", &ok) == 1.0);
+	CHECK(value_of("-7 3 modulo", &ok) == 2.0);
+	CHECK(value_of("7 -3 modulo", &ok) == -2.0);
+	CHECK(value_of("-7 -3 modulo", &ok) == -1.0);
+	CHECK(value_of("6 3 modulo", &ok) == 0.0 && value_of("-6 3 modulo", &ok) == 0.0);
+	CHECK(is_whole("-9223372036854775807 1 - -1 modulo") && value_of("-9223372036854775807 1 - -1 modulo", &ok) == 0.0);
+	CHECK(!is_whole("7.5 2 modulo") && value_of("7.5 2 modulo", &ok) == 1.5);
+	CHECK(value_of("-7.5 2 modulo", &ok) == 0.5);
+	CHECK(value_of("7 2.5 modulo", &ok) == 2.0);
+	CHECK(value_of("-1e-20 3 modulo", &ok) == 0.0);
+	CHECK(refuses("7 0 modulo") && refuses("7.5 0.0 modulo") && refuses("\"a\" 2 modulo"));
+}
+
 /** In degrees a whole quarter turn is exact, and tan has no value at the odd ones. */
 static void test_degree_trig_is_exact(void) {
 	bool ok;
@@ -340,6 +356,7 @@ static void test_finite_only_refuses_and_restores(void) {
 
 int main(void) {
 	test_overflow_becomes_a_float();
+	test_modulo();
 	test_degree_trig_is_exact();
 	test_finite_only_refuses_and_restores();
 	test_domains_are_errors();

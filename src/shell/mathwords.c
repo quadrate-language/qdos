@@ -347,6 +347,43 @@ static int w_divide(qd_context* ctx, void* user) {
 	return qd_push_f(ctx, a / b);
 }
 
+/*
+ * What the keypad's % does: a calculator's mod, which takes decimals and has
+ * the sign of the divisor, so `-7 3 modulo` is 2 where Quadrate's mod gives -1.
+ * Whole numbers stay whole.
+ */
+static int w_modulo(qd_context* ctx, void* user) {
+	(void)user;
+	double b = 0.0, a = 0.0;
+	if (!qdos_peek_number(ctx, 0, &b) || !qdos_peek_number(ctx, 1, &a)) {
+		return qdos_math_error(ctx, "modulo", "NEEDS 2 NUMBERS");
+	}
+	if (b == 0.0) {
+		return qdos_math_error(ctx, "modulo", "ZERO DIVISOR");
+	}
+
+	qd_stack_element_t top, second;
+	if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK || qd_stack_pop(ctx->st, &second) != QD_STACK_OK) {
+		return 1;
+	}
+
+	if (top.type == QD_STACK_TYPE_INT && second.type == QD_STACK_TYPE_INT) {
+		// Anything over -1 leaves nothing, and the least integer over it traps
+		int64_t r = (top.value.i == -1) ? 0 : second.value.i % top.value.i;
+		if (r != 0 && (r < 0) != (top.value.i < 0)) {
+			r += top.value.i;
+		}
+		return qd_push_i(ctx, r);
+	}
+
+	double r = fmod(a, b);
+	if (r != 0.0 && (r < 0.0) != (b < 0.0)) {
+		r += b;
+	}
+	// A remainder too small to add to b without rounding comes out as b itself
+	return qd_push_f(ctx, (r == b) ? 0.0 : r);
+}
+
 typedef enum {
 	ARITH_PLUS,
 	ARITH_MINUS,
@@ -444,6 +481,7 @@ static const struct {
 		{"max", BINARY, w_max},
 		{"fmod", BINARY, w_fmod},
 		{"divide", BINARY, w_divide},
+		{"modulo", BINARY, w_modulo},
 		{"plus", BINARY, w_plus},
 		{"minus", BINARY, w_minus},
 		{"times", BINARY, w_times},

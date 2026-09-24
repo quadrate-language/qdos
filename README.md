@@ -53,6 +53,8 @@ MODE  fn sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
 The `÷` key divides as a calculator does, `7 2 ÷` being 3.5, wherever it is
 pressed: it types `divide` into a line. Quadrate's own `/` keeps its meaning, 3
 for `7 2 /`, so a program behaves on the calculator as it does on a PC.
+The `%` key is `modulo`, a calculator's mod: it takes decimals and has the
+sign of the divisor, `-7 3 %` being 2 where Quadrate's `mod` gives -1.
 Likewise the keypad's `+`, `−` and `×` are `plus`, `minus` and `times`: whole
 numbers stay whole until a result will not fit 64 bits, and then it is a
 float, where Quadrate's own operators wrap as C does. `sq`, `cb`, `abs` and

@@ -3002,7 +3002,8 @@ static void test_keypad_words_reach_the_line(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
-	CHECK(strstr(row, "dupswapdrop") != NULL);
+	CHECK(strstr(row, "dup") != NULL && strstr(row, "swap") != NULL && strstr(row, "drop") != NULL);
+	CHECK(strstr(row, "dupswap") == NULL && strstr(row, "swapdrop") == NULL);
 }
 
 /** A word typed by its key has room around it, so it runs the line it lands in. */
@@ -5047,6 +5048,56 @@ static void test_soft_labels_follow_mode(void) {
 	CHECK((size_t)(strstr(row, "MODE") - row) < SOFT_WIDTH_T);
 }
 
+/** A letter in the calculator names the way to a line, however many characters its key types. */
+static void test_typing_in_the_calculator_says_how(void) {
+	static const char* const KEYS[] = {"a", " nip ", "if "};
+	for (size_t k = 0; k < sizeof(KEYS) / sizeof(*KEYS); k++) {
+		store_reset();
+
+		qdos_key_event script[16];
+		size_t n = 0;
+		digits(script, &n, "2");
+		for (const char* p = KEYS[k]; *p; p++) {
+			script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+		}
+
+		static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+		run_script(script, n, fb);
+		char row[QDOS_COLS + 1];
+		read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+		CHECK(strcmp(row, "PRESS MODE TO TYPE A LINE") == 0);
+
+		// and the number being typed is still there under it
+		key(script, &n, QDOS_KEY_ENTER);
+		run_script(script, n, fb);
+		read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+		CHECK(row[0] == '1' && strstr(row, " 2") != NULL);
+	}
+}
+
+/** The stack keys type words that stand apart, so a number typed after one is not glued on. */
+static void test_stack_keys_in_a_line_stand_apart(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_DUP);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_SWAP);
+	key(script, &n, QDOS_KEY_DROP);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(row[0] == '1' && strstr(row, " 3") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(row[0] == '2' && strstr(row, " 5") != NULL);
+}
+
 /** MODE goes into a line and back out of it. */
 static void test_mode_toggles_line_mode(void) {
 	store_reset();
@@ -6046,6 +6097,8 @@ int main(void) {
 	test_edit_check_accepts_a_known_word();
 	test_check_leaves_session_alone();
 	test_soft_labels_follow_mode();
+	test_typing_in_the_calculator_says_how();
+	test_stack_keys_in_a_line_stand_apart();
 	test_mode_toggles_line_mode();
 	test_pi_key();
 	test_soft_key_opens_apps();
