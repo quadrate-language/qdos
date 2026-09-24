@@ -132,6 +132,7 @@ typedef enum {
 	QDOS_MODE_TABLE,	 ///< The curves' values down a column of x
 	QDOS_MODE_STAT,		 ///< The lists, L1 to L6
 	QDOS_MODE_RESULT,	 ///< What a statistics calculation found
+	QDOS_MODE_OUTPUT,	 ///< What the last evaluation printed, when it was more than a line
 	QDOS_MODE__COUNT
 } qdos_mode;
 
@@ -390,6 +391,11 @@ struct qdos_shell {
 	int result_count;
 	size_t result_sel;
 	size_t result_top;
+	size_t output_first; ///< Log line the last evaluation's output starts at, counted since boot
+	size_t output_count;
+	size_t output_top;
+	qdos_mode output_from;
+
 	int result_model; ///< The regression found, for TO Y; -1 for none
 	double result_coef[3];
 	qdos_surface graph_surface; ///< Sampled once; turning it only redraws
@@ -787,6 +793,8 @@ static const soft_key SOFT[QDOS_MODE__COUNT][SOFT_KEYS] = {
 				{"STEP", QDOS_KEY_TBL_STEP}, {"GRAPH", QDOS_KEY_GRAPH}},
 		[QDOS_MODE_STAT] = {{"ESC", QDOS_KEY_CLEAR}, {"CALC", QDOS_KEY_CALC}, {"PLOT", QDOS_KEY_STATPLOT},
 				{"CLR", QDOS_KEY_LIST_CLEAR}, {"GRAPH", QDOS_KEY_GRAPH}},
+		[QDOS_MODE_OUTPUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
+				{"", QDOS_KEY_NONE}},
 		[QDOS_MODE_RESULT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"PUSH", QDOS_KEY_ENTER},
 				{"TO Y", QDOS_KEY_TO_Y}, {"", QDOS_KEY_NONE}},
 		[QDOS_MODE_GRAPH3] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"STD", QDOS_KEY_STD},
@@ -836,9 +844,16 @@ static void absorb_output(qdos_shell* sh) {
 		return;
 	}
 
+	const size_t before = sh->log_count;
 	log_add(sh, printed);
 	const size_t held = log_held(sh);
-	if (held > 0) {
+	if (sh->log_count - before > 1) {
+		sh->output_first = before;
+		sh->output_count = sh->log_count - before;
+		sh->output_top = 0;
+		sh->output_from = sh->mode;
+		sh->mode = QDOS_MODE_OUTPUT;
+	} else if (held > 0) {
 		set_message(sh, log_at(sh, held - 1), false);
 	}
 }
@@ -1394,8 +1409,9 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 	case QDOS_KEY_MUL:
 		input_append(sh, "*");
 		break;
+	// divide, as the calculator's key does; Quadrate's own / truncates
 	case QDOS_KEY_DIV:
-		input_append(sh, "/");
+		input_append(sh, " divide ");
 		break;
 	case QDOS_KEY_DUP:
 		input_append(sh, "dup");
@@ -3685,7 +3701,7 @@ static void field_key(qdos_shell* sh, const qdos_key_event* ev) {
 		field_append(sh, "*");
 		break;
 	case QDOS_KEY_DIV:
-		field_append(sh, "/");
+		field_append(sh, " divide ");
 		break;
 
 	// A sign, not an operator: on the number where there is only one
@@ -5061,6 +5077,46 @@ static void field_commit(qdos_shell* sh, double value) {
 	}
 }
 
+/* Line @p i of the last output, or NULL once the ring has moved past it */
+static const char* output_line(const qdos_shell* sh, size_t i) {
+	const size_t oldest = sh->log_count - log_held(sh);
+	const size_t at = sh->output_first + i;
+	return (at >= oldest && i < sh->output_count) ? log_at(sh, at - oldest) : NULL;
+}
+
+static void handle_output_key(qdos_shell* sh, const qdos_key_event* ev) {
+	const size_t last = (sh->output_count > LIST_ROWS) ? sh->output_count - LIST_ROWS : 0;
+	switch (ev->key) {
+	case QDOS_KEY_UP:
+		sh->output_top = (sh->output_top > 0) ? sh->output_top - 1 : 0;
+		break;
+	case QDOS_KEY_DOWN:
+		sh->output_top = (sh->output_top < last) ? sh->output_top + 1 : last;
+		break;
+	case QDOS_KEY_CLEAR:
+	case QDOS_KEY_ENTER:
+		sh->mode = sh->output_from;
+		break;
+	default:
+		break;
+	}
+}
+
+static void render_output(qdos_shell* sh, qdos_console* con) {
+	char header[QDOS_COLS + 1];
+	snprintf(header, sizeof(header), "%zu LINES", sh->output_count);
+	qdos_console_puts(con, 0, ROW_HEADER, "OUTPUT");
+	qdos_console_puts_right(con, ROW_HEADER, header);
+	qdos_console_rule(con, ROW_HEADER);
+	for (size_t i = 0; i < (size_t)LIST_ROWS; i++) {
+		const char* text = output_line(sh, sh->output_top + i);
+		if (text != NULL) {
+			qdos_console_puts(con, 0, ROW_CONTENT_FIRST + (int)i, text);
+		}
+	}
+	qdos_console_rule(con, ROW_CONTENT_LAST);
+}
+
 static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 	// Only the calculator asks which register
 	if (sh->mode != QDOS_MODE_CALC) {
@@ -5156,6 +5212,8 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		handle_stat_key(sh, ev);
 	} else if (sh->mode == QDOS_MODE_RESULT) {
 		handle_result_key(sh, ev);
+	} else if (sh->mode == QDOS_MODE_OUTPUT) {
+		handle_output_key(sh, ev);
 	} else if (sh->mode == QDOS_MODE_LIST) {
 		handle_list_key(sh, ev);
 	} else if (sh->mode == QDOS_MODE_LINE) {
@@ -5485,6 +5543,13 @@ static void render(qdos_shell* sh) {
 		// Sharing the card reports from here, so this page needs one as well
 		render_settings(sh, con);
 		render_message(sh, con);
+		render_soft(sh, con);
+		sh->hal->present(sh->hal, con->fb);
+		return;
+	}
+
+	if (sh->mode == QDOS_MODE_OUTPUT) {
+		render_output(sh, con);
 		render_soft(sh, con);
 		sh->hal->present(sh->hal, con->fb);
 		return;

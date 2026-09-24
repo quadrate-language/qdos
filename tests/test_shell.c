@@ -2917,7 +2917,28 @@ static void test_keypad_types_into_the_line(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
-	CHECK(strstr(row, "1234567890.+-*/") != NULL);
+	CHECK(strstr(row, "1234567890.+-* divide") != NULL);
+}
+
+/** Typed, as on the calculator, the division key divides rather than truncating. */
+static void test_division_key_divides_in_a_line(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	digits(script, &n, "7");
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ' '};
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_DIV);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3.5") != NULL);
 }
 
 /** The stack keys spell their word out rather than acting on the spot. */
@@ -5658,6 +5679,59 @@ static void test_histogram_and_box_plot(void) {
 	CHECK(plot_has_ink(fb));
 }
 
+/** Parameters, locals and for, typed at the prompt the way the keypad spells them. */
+static void test_locals_and_for_at_the_prompt(void) {
+	store_reset();
+
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "fn tri(n:i64 -- r:i64) { 0 1 n 1 + 1 for i { i + } }");
+	type_more(script, &n, "10 tri");
+	type_more(script, &n, "5 -> k");
+	type_more(script, &n, "k k *");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "55") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "25") != NULL); // k outlives the line that bound it
+}
+
+/** More than a line of output opens a page of it; one line stays on the message row. */
+static void test_output_page(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "1 4 1 for i { i print nl }");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "OUTPUT") == row && strstr(row, "3 LINES") != NULL);
+	for (int i = 0; i < 3; i++) {
+		char want[4];
+		snprintf(want, sizeof(want), "%d", i + 1);
+		read_row(fb, ROW_CONTENT_FIRST_T + i, row, sizeof(row));
+		CHECK(strcmp(row, want) == 0);
+	}
+
+	// ESC back to the line it came from, which is still in line mode
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_more(script, &n, "\"ONE\" print");
+	store_reset();
+	run_script(script, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "ONE") != NULL);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "OUTPUT") == NULL);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -5766,6 +5840,9 @@ int main(void) {
 	test_taking_the_card_back_keeps_the_stack();
 	test_a_failed_usb_switch_is_reported();
 	test_keypad_types_into_the_line();
+	test_division_key_divides_in_a_line();
+	test_locals_and_for_at_the_prompt();
+	test_output_page();
 	test_keypad_words_reach_the_line();
 	test_a_typed_function_word_evaluates();
 	test_neg_key_types_the_word();

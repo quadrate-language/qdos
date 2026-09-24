@@ -49,6 +49,14 @@ calculator once it is empty.
 :  7 sq                              Enter    -> 49
 ```
 
+The `÷` key divides as a calculator does, `7 2 ÷` being 3.5, wherever it is
+pressed: it types `divide` into a line. Quadrate's own `/` keeps its meaning, 3
+for `7 2 /`, so a program behaves on the calculator as it does on a PC.
+Parameters, `-> name` locals and `for` loops work at the prompt as in a program;
+a local bound at the prompt lasts until the next restart. What an evaluation
+prints goes to the message row, or, when it is more than a line, to a page of
+its own.
+
 A word written at the prompt lives in memory and goes with the power. The card
 holds programs, and they get there by `edit` or by being uploaded — scratch
 work at the prompt is not that, and would otherwise fill the store with every
