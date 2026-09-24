@@ -1365,6 +1365,9 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 	case QDOS_KEY_PI:
 		apply_word(sh, "pi");
 		break;
+	case QDOS_KEY_E:
+		apply_word(sh, "e");
+		break;
 
 	case QDOS_KEY_MODE:
 		enter_line_mode(sh);
@@ -1455,6 +1458,9 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 	case QDOS_KEY_PI:
 		input_append(sh, " pi ");
+		break;
+	case QDOS_KEY_E:
+		input_append(sh, " e ");
 		break;
 
 	case QDOS_KEY_STO:

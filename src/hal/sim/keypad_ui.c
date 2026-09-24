@@ -148,11 +148,11 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 		 *
 		 * MODE on the soft row is the way into a line, so ':' is only shift-point:
 		 * where a Swedish keyboard keeps it, and the one piece of Quadrate syntax
-		 * common enough to need reaching without unlocking. Its old key is pi.
+		 * common enough to need reaching without unlocking. Its old key is pi, e on shift.
 		 */
 		{BTN(KEY("ESC", QDOS_KEY_CLEAR), NONE, NONE), BTN(KEY("0", QDOS_KEY_0), NONE, TXT("len", " len ")),
 				BTN(KEY(".", QDOS_KEY_DOT), NONE, TXT(":", ":")),
-				BTN(KEY(QDOS_GLYPH_PI, QDOS_KEY_PI), TXT("Z", "z"), NONE),
+				BTN(KEY(QDOS_GLYPH_PI, QDOS_KEY_PI), TXT("Z", "z"), KEY("e", QDOS_KEY_E)),
 				BTN(KEY("ENTER", QDOS_KEY_ENTER), NONE, TXT("=", "="))},
 };
 

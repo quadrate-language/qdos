@@ -131,6 +131,7 @@ typedef enum {
 	QDOS_KEY_TO_Y,		 ///< A regression into a Y= slot
 	QDOS_KEY_MODE,		 ///< Between the calculator and typing a line
 	QDOS_KEY_PI,		 ///< pi, onto the stack or into the line
+	QDOS_KEY_E,			 ///< e, likewise
 
 	QDOS_KEY__COUNT
 } qdos_key;

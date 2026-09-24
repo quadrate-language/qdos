@@ -5067,7 +5067,7 @@ static void test_mode_toggles_line_mode(void) {
 	CHECK(row[0] == '>');
 }
 
-/** pi lands on the stack from the calculator, and in the line from line mode. */
+/** pi and e land on the stack from the calculator, and in the line from line mode. */
 static void test_pi_key(void) {
 	store_reset();
 
@@ -5090,6 +5090,21 @@ static void test_pi_key(void) {
 	run_script(script, n, fb);
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "3.14159265358979") != NULL);
+
+	// e is shift on the same key, and does the same in both
+	n = 0;
+	key(script, &n, QDOS_KEY_E);
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "2.71828182845905") != NULL);
+
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	key(script, &n, QDOS_KEY_E);
+	key(script, &n, QDOS_KEY_ENTER);
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "2.71828182845905") != NULL);
 }
 
 /** A soft key does what its label says for the current mode. */

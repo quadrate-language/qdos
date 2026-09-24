@@ -42,7 +42,7 @@ Two modes. **Calculator** (`>`) is RPN: digits build a number, `Enter` pushes it
 an operator applies immediately. **Line** (`:`) takes whole Quadrate — control
 flow, definitions, strings. `MODE`, the leftmost soft key, goes between the two.
 `Escape` empties the line, and takes you back to the calculator once it is
-empty. The `π` key pushes pi, or types it into a line.
+empty. The `π` key pushes pi, or types it into a line; shifted, it does the same with e.
 
 ```
 6  Enter  7  *                          ->  42
