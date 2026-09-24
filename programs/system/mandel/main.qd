@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// The Mandelbrot set, drawn a band at a time. Arrows move, + and - zoom,
+// ENTER switches between coarse and fine, ESC leaves; a key stops a drawing
+// part-way. Real arithmetic rather than complex numbers: each complex value is
+// an object of its own, and this works out a great many of them.
+
+// How many steps c takes to leave the circle of radius 2, or limit if it stays
+fn escape(cx:f64 cy:f64 limit:i64 -- n:i64) {
+	0.0 -> x
+	0.0 -> y
+	0 -> n
+	loop {
+		x x * -> xx
+		y y * -> yy
+		xx yy + 4.0 > n limit >= or if { break }
+		2.0 x * y * cy + -> y
+		xx yy - cx + -> x
+		n 1 + -> n
+	}
+	n
+}
+
+// Inside is solid; outside, every other band is shaded, which is what a
+// panel with two colours can do with a gradient
+fn cell(px:i64 py:i64 size:i64 n:i64 limit:i64 -- ) {
+	n limit == if {
+		px py size size 1 ui::box
+		return
+	}
+	n 2 % 1 == size 1 > and if {
+		px py size 2 / size 2 / 1 ui::box
+		px size 2 / + py size 2 / + size 2 / size 2 / 1 ui::box
+		return
+	}
+	n 2 % 1 == if { px py 1 ui::pixel }
+}
+
+// The drawing, or the name of the key that stopped it
+fn draw(cx:f64 cy:f64 scale:f64 size:i64 limit:i64 -- pressed:str) {
+	ui::cls
+	0 240 size for py {
+		cy 120 py - scale * + -> im
+		0 400 size for px {
+			cx px 200 - scale * + im limit escape -> n
+			px py size n limit cell
+		}
+		ui::show
+		ui::key -> got -> ch -> key
+		got 1 == if { key ch ui::keyname return }
+	}
+	0 224 400 16 2 ui::box
+	0 224 400 1 1 ui::box
+	8 224 "ZOOM " 0.00875 scale divide round ui::cat "X  +- ZOOM  ENTER FINE  ESC" ui::cat ui::small
+	ui::show
+	""
+}
+
+fn main() {
+	-0.6 -> cx
+	0.0 -> cy
+	0.00875 -> scale
+	4 -> size
+	24 -> limit
+	"" -> pressed
+	loop {
+		pressed "" == if { cx cy scale size limit draw -> pressed }
+		pressed "" == if { ui::wait ui::keyname -> pressed }
+		pressed "ESC" == if { return }
+		pressed "+" == if {
+			scale 0.5 * -> scale
+			limit 8 + -> limit
+		}
+		pressed "-" == if {
+			scale 2.0 * -> scale
+			limit 8 - 24 max -> limit
+		}
+		pressed "LEFT" == if { cx scale 100.0 * - -> cx }
+		pressed "RIGHT" == if { cx scale 100.0 * + -> cx }
+		pressed "UP" == if { cy scale 60.0 * + -> cy }
+		pressed "DOWN" == if { cy scale 60.0 * - -> cy }
+		pressed "ENTER" == if {
+			size 4 == if { 1 -> size } else { 4 -> size }
+		}
+		"" -> pressed
+	}
+}

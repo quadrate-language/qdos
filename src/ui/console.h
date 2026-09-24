@@ -67,6 +67,9 @@ void qdos_console_invert_rect(qdos_console* con, int x, int y, int w, int h);
 /** @brief Centred, each pixel enlarged; scale 1 matches puts() */
 void qdos_console_puts_centered(qdos_console* con, int row, const char* text, int scale);
 
+/** @brief The reading font at any pixel, scaled; only the ink is drawn */
+void qdos_console_puts_at(qdos_console* con, int x, int y, const char* text, int scale);
+
 #ifdef __cplusplus
 }
 #endif

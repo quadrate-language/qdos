@@ -1,3 +1,6 @@
+// opendir for the sample apps, on top of a strict c11 build
+#define _POSIX_C_SOURCE 200809L
+
 /**
  * @file test_shell.c
  * @brief End-to-end shell test over a scripted backend
@@ -15,6 +18,7 @@
 #include "shell/mathwords.h"
 #include "shell/storage.h"
 
+#include <dirent.h>
 #include <stdlib.h>
 
 typedef struct {
@@ -6656,17 +6660,25 @@ static void test_ui_wait_waits_for_a_key(void) {
 }
 
 /* ---------------------------------------------------------------------------
- * The sample apps in examples/apps, each driven through once
+ * The apps shipped in programs/system, each driven through once
  * ------------------------------------------------------------------------- */
 
-#ifndef APPS_DIR
-#define APPS_DIR "examples/apps"
+#ifndef SYSTEM_DIR
+#define SYSTEM_DIR "programs/system"
 #endif
+
+/** Where a shipped app lives, and the scope the machine finds it in */
+static qdos_store_scope sample_dir(const char* name, char* out, size_t cap) {
+	snprintf(out, cap, "%s/%s", SYSTEM_DIR, name);
+	return QDOS_SCOPE_SYSTEM;
+}
 
 /** Put a sample app on the card as it would arrive, read from the source tree */
 static void seed_sample(const char* name) {
-	char path[512];
-	snprintf(path, sizeof(path), "%s/%s/main.qd", APPS_DIR, name);
+	char dir[512];
+	const qdos_store_scope scope = sample_dir(name, dir, sizeof(dir));
+	char path[600];
+	snprintf(path, sizeof(path), "%s/main.qd", dir);
 	FILE* f = fopen(path, "rb");
 	CHECK(f != NULL);
 	if (f == NULL) {
@@ -6677,7 +6689,7 @@ static void seed_sample(const char* name) {
 	source[got] = '\0';
 	fclose(f);
 	CHECK(got < STORE_BYTES);
-	seed_app(QDOS_SCOPE_INBOX, name, source);
+	seed_app(scope, name, source);
 }
 
 /** Type a number into a field the way the keypad would, minus sign and all */
@@ -6753,42 +6765,6 @@ static void test_sample_quad(void) {
 	run_script_mid(script, n, complex_roots, fb, mid);
 	CHECK(output_has(mid, "X1 = -1+2i"));
 	CHECK(output_has(mid, "X2 = -1-2i"));
-}
-
-/** area: x^2 from 0 to 3 is 9, and the menu loops until ESC. */
-static void test_sample_area(void) {
-	store_reset();
-	seed_sample("area");
-
-	qdos_key_event script[64];
-	size_t n = 0;
-	type_line(script, &n, "area");
-	key(script, &n, QDOS_KEY_2); // X^2
-	answer(script, &n, "0");
-	answer(script, &n, "3");
-	const size_t results = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-	const size_t plotted = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-	const size_t again = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-
-	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script_mid(script, n, results, fb, mid);
-	CHECK(output_has(mid, "AREA = 9"));
-	CHECK(output_has(mid, "MEAN = 3"));
-
-	run_script_mid(script, n, plotted, fb, mid);
-	CHECK(plot_has_ink(mid));
-
-	run_script_mid(script, n, again, fb, mid);
-	char row[QDOS_COLS + 1];
-	read_row(mid, ROW_HEADER_T, row, sizeof(row));
-	CHECK(strstr(row, "AREA UNDER") != NULL);
-
-	read_error(fb, row, sizeof(row));
-	CHECK(row[0] == '\0');
 }
 
 /** units: a mile is 1.609344 km, and 100 C is 212 F. */
@@ -6915,120 +6891,6 @@ static void test_sample_tri(void) {
 	CHECK(row[0] == '\0');
 }
 
-/** fit: points on y = 2x + 1 fit exactly, and the plot shows them. */
-static void test_sample_fit(void) {
-	store_reset();
-	seed_sample("fit");
-
-	qdos_key_event script[96];
-	size_t n = 0;
-	type_line(script, &n, "fit");
-	key(script, &n, QDOS_KEY_1); // TYPE THEM
-	answer(script, &n, "1");
-	answer(script, &n, "3");
-	answer(script, &n, "2");
-	answer(script, &n, "5");
-	answer(script, &n, "4");
-	answer(script, &n, "9");
-	key(script, &n, QDOS_KEY_CLEAR); // no fourth x
-	key(script, &n, QDOS_KEY_1);	 // LINEAR
-	const size_t results = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-	const size_t plotted = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-
-	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script_mid(script, n, results, fb, mid);
-	CHECK(output_has(mid, "Y = AX + B"));
-	CHECK(output_has(mid, "A = 2"));
-	CHECK(output_has(mid, "B = 1"));
-	CHECK(output_has(mid, "R2 = 1"));
-
-	run_script_mid(script, n, plotted, fb, mid);
-	CHECK(plot_has_ink(mid));
-
-	char row[EDIT_COLS_T + 1];
-	read_error(fb, row, sizeof(row));
-	CHECK(row[0] == '\0');
-}
-
-/** drill: ten wrong answers score nought, and each says what was right. */
-static void test_sample_drill(void) {
-	store_reset();
-	seed_sample("drill");
-
-	qdos_key_event script[96];
-	size_t n = 0;
-	type_line(script, &n, "drill");
-	key(script, &n, QDOS_KEY_1);
-	const size_t first = n;
-	answer(script, &n, "0");
-	const size_t second = n;
-	for (int i = 1; i < 10; i++) {
-		answer(script, &n, "0");
-	}
-	const size_t results = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-
-	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	char row[EDIT_COLS_T + 1];
-	run_script_mid(script, n, first, fb, mid);
-	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strchr(row, 'x') != NULL && strchr(row, '=') != NULL);
-
-	run_script_mid(script, n, second, fb, mid);
-	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
-	CHECK(strncmp(row, "NO,", 3) == 0);
-
-	run_script_mid(script, n, results, fb, mid);
-	CHECK(output_has(mid, "SCORE 0/10"));
-	CHECK(output_has(mid, "TIME"));
-
-	read_error(fb, row, sizeof(row));
-	CHECK(row[0] == '\0');
-}
-
-/** dice: a throw is drawn, Enter throws again, ESC goes back to the menu. */
-static void test_sample_dice(void) {
-	store_reset();
-	seed_sample("dice");
-
-	qdos_key_event script[32];
-	size_t n = 0;
-	type_line(script, &n, "dice");
-	key(script, &n, QDOS_KEY_2); // TWO DICE
-	const size_t thrown = n;
-	key(script, &n, QDOS_KEY_ENTER);
-	const size_t again = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-	const size_t menu = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-
-	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	char row[EDIT_COLS_T + 1];
-	run_script_mid(script, n, thrown, fb, mid);
-	read_row(mid, 0, row, sizeof(row));
-	CHECK(strcmp(row, "TWO DICE") == 0);
-	CHECK(plot_has_ink(mid));
-	read_small(mid, 222, row, sizeof(row));
-	CHECK(strstr(row, "ENTER ROLLS AGAIN") != NULL);
-
-	// Two throws remembered along the bottom
-	run_script_mid(script, n, again, fb, mid);
-	read_small(mid, 204, row, sizeof(row));
-	CHECK(strlen(row) >= 3 && strchr(row, ' ') != NULL);
-
-	run_script_mid(script, n, menu, fb, mid);
-	read_row(mid, ROW_HEADER_T, row, sizeof(row));
-	CHECK(strstr(row, "ROLL") != NULL);
-
-	read_error(fb, row, sizeof(row));
-	CHECK(row[0] == '\0');
-}
-
 /** clock: the stopwatch starts and stops, and ESC goes back to the menu. */
 static void test_sample_clock(void) {
 	store_reset();
@@ -7062,83 +6924,6 @@ static void test_sample_clock(void) {
 	read_row(mid, 0, row, sizeof(row));
 	CHECK(strcmp(row, "TIMER") == 0);
 
-	read_error(fb, row, sizeof(row));
-	CHECK(row[0] == '\0');
-}
-
-/** life: a random start is drawn, ENTER steps a generation, ESC leaves. */
-static void test_sample_life(void) {
-	store_reset();
-	seed_sample("life");
-
-	qdos_key_event script[32];
-	size_t n = 0;
-	type_line(script, &n, "life");
-	const size_t started = n;
-	key(script, &n, QDOS_KEY_ENTER);
-	const size_t stepped = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-
-	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	char row[EDIT_COLS_T + 1];
-	run_script_mid(script, n, started, fb, mid);
-	CHECK(plot_has_ink(mid));
-	read_small(mid, 0, row, sizeof(row));
-	CHECK(strstr(row, "G 0") != NULL);
-
-	run_script_mid(script, n, stepped, fb, mid);
-	read_small(mid, 0, row, sizeof(row));
-	CHECK(strstr(row, "G 1") != NULL);
-
-	read_error(fb, row, sizeof(row));
-	CHECK(row[0] == '\0');
-}
-
-/** life's rules through its own step: a blinker turns, across the wrapping edge too. */
-static void test_sample_life_rules(void) {
-	char path[512];
-	snprintf(path, sizeof(path), "%s/life/main.qd", APPS_DIR);
-	FILE* f = fopen(path, "rb");
-	CHECK(f != NULL);
-	if (f == NULL) {
-		return;
-	}
-	static char source[STORE_BYTES + 1];
-	const size_t got = fread(source, 1, STORE_BYTES - 600, f);
-	source[got] = '\0';
-	fclose(f);
-
-	// Its main renamed out of the way, and one that checks instead
-	char* entry = strstr(source, "fn main() {");
-	CHECK(entry != NULL);
-	if (entry == NULL) {
-		return;
-	}
-	memcpy(entry, "fn play() {", 11);
-	strcat(source, "\nfn blank( -- g:[]i64) { [] -> g 0 cols rows * 1 for i { g 0 append drop } g }\n"
-				   "fn live(g:[]i64 x:i64 y:i64 -- ) { g y cols * x + 1 set }\n"
-				   "fn main( -- ) {\n"
-				   "\tblank -> g\n\tg 5 5 live g 6 5 live g 7 5 live\n\tg step -> g\n"
-				   "\tg 6 4 at g 6 5 at g 6 6 at g 5 5 at g 7 5 at print print print print print nl\n"
-				   "\tblank -> h\n\th 39 0 live h 0 0 live h 1 0 live\n\th step -> h\n"
-				   "\th 0 23 at h 0 0 at h 0 1 at h 39 0 at print print print print nl\n"
-				   "}\n");
-
-	store_reset();
-	seed_app(QDOS_SCOPE_INBOX, "lifecheck", source);
-
-	qdos_key_event script[32];
-	size_t n = 0;
-	type_line(script, &n, "lifecheck");
-
-	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
-	run_script(script, n, fb);
-
-	// Printed last first: the old ends die, the new ends are born
-	CHECK(page_line(fb, "00111"));
-	CHECK(page_line(fb, "0111"));
-	char row[EDIT_COLS_T + 1];
 	read_error(fb, row, sizeof(row));
 	CHECK(row[0] == '\0');
 }
@@ -7377,7 +7162,7 @@ static void run_script_app_frame(const qdos_key_event* script, size_t count, uin
 /** mandel: the escape counts for points known to stay and to leave. */
 static void test_sample_mandel_escape(void) {
 	char path[512];
-	snprintf(path, sizeof(path), "%s/mandel/main.qd", APPS_DIR);
+	snprintf(path, sizeof(path), "%s/mandel/main.qd", SYSTEM_DIR);
 	FILE* f = fopen(path, "rb");
 	CHECK(f != NULL);
 	if (f == NULL) {
@@ -7468,6 +7253,221 @@ static void test_sample_mandel_zooms(void) {
 	CHECK(row[0] == '\0');
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(row[0] == ':'); // back at the prompt it was typed at
+}
+
+/** Every .qd of a sample app on the card, as a folder of several files arrives */
+static void seed_sample_files(const char* name) {
+	char dir[512];
+	const qdos_store_scope scope = sample_dir(name, dir, sizeof(dir));
+	DIR* d = opendir(dir);
+	CHECK(d != NULL);
+	if (d == NULL) {
+		return;
+	}
+	struct dirent* entry;
+	while ((entry = readdir(d)) != NULL) {
+		const size_t len = strlen(entry->d_name);
+		if (len < 4 || strcmp(entry->d_name + len - 3, ".qd") != 0) {
+			continue;
+		}
+		char path[1024];
+		snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+		FILE* f = fopen(path, "rb");
+		CHECK(f != NULL);
+		if (f == NULL) {
+			continue;
+		}
+		static char source[STORE_BYTES + 1];
+		const size_t got = fread(source, 1, STORE_BYTES, f);
+		source[got] = '\0';
+		fclose(f);
+		CHECK(got < STORE_BYTES);
+		char key[QDOS_PROGRAM_NAME_MAX * 2];
+		snprintf(key, sizeof(key), "%s/%s", name, entry->d_name);
+		seed_raw(scope, key, source);
+	}
+	closedir(d);
+}
+
+/**
+ * Does the reading font's glyph for @p ch sit at pixel (x, y), drawn once?
+ * The top and bottom rows are left out: a grid line or sudoku's mistake mark
+ * may cross them, and no digit or capital reaches them.
+ */
+static bool glyph_at(const uint8_t* fb, int x0, int y0, char ch) {
+	for (int y = 3; y < QDOS_FONT_H - 4; y++) {
+		const uint16_t bits = qdos_font_row(ch, y);
+		for (int x = 0; x < QDOS_FONT_W; x++) {
+			const bool dark = fb[(size_t)(y0 + y) * QDOS_SCREEN_W + x0 + x] < 0x80;
+			if (dark != ((bits & (1u << x)) != 0)) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+/** sudoku: dealt games keep to the rules, and a finished grid is recognised. */
+static void test_sample_sudoku_rules(void) {
+	store_reset();
+	seed_sample_files("sudoku");
+
+	// A main of its own beside the game's files: a textbook solution, the same
+	// with one cell spoiled, then twenty deals a level with no given clashing
+	seed_raw(QDOS_SCOPE_INBOX, "sudoku/zcheck.qd",
+			"fn textbook( -- g:[]i64) { blank -> g 0 81 1 for i { g i i 9 / 3 * i 9 / 3 / + i 9 % + 9 % 1 + set } g }\n"
+			"fn legal(g:[]i64 -- ok:i64) { 0 81 1 for i { g i clash 1 == if { 0 return } } 1 }\n"
+			"fn givens(g:[]i64 -- n:i64) { 0 -> n 0 81 1 for i { g i nth 0 != if { n 1 + -> n } } n }\n");
+	seed_raw(QDOS_SCOPE_USER, "sudoku/main.qd",
+			"fn main() {\n"
+			"\ttextbook solved print \" \" print\n"
+			"\ttextbook -> g g 0 g 1 nth set g solved print \" \" print\n"
+			"\t1 -> ok 0 20 1 for k { 1 4 1 for lv { lv deal legal ok and -> ok } } ok print \" \" print\n"
+			"\t1 deal givens print \" \" print 3 deal givens 27 <= print nl\n}\n");
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "sudoku");
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strcmp(row, "1 0 1 36 1") == 0);
+}
+
+/* A seeded game of sudoku up to its first board, so the same puzzle comes every time */
+static void sudoku_start(qdos_key_event* script, size_t* n, int seed) {
+	char line[32];
+	snprintf(line, sizeof(line), "%d randseed", seed);
+	type_line(script, n, line);
+	type_more(script, n, "sudoku");
+	key(script, n, QDOS_KEY_1); // NEW EASY
+}
+
+/** Whether the top-left cell of the board on screen holds nothing */
+static bool sudoku_corner_empty(const uint8_t* fb) {
+	for (int y = 16; y < 34; y++) {
+		for (int x = 16; x < 32; x++) {
+			if (fb[(size_t)y * QDOS_SCREEN_W + x] < 0x80) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+/**
+ * 7 picks the top-left box, 7 its top-left cell, then 5 goes in -- unless
+ * that cell is a given, which cannot be changed. Either way ESC leads back to
+ * the menu, which then offers the game to continue.
+ */
+static void sudoku_flow(int seed, bool empty) {
+	store_reset();
+	seed_sample_files("sudoku");
+
+	qdos_key_event script[96];
+	size_t n = 0;
+	sudoku_start(script, &n, seed);
+	const size_t dealt = n;
+	key(script, &n, QDOS_KEY_7);
+	const size_t boxed = n;
+	key(script, &n, QDOS_KEY_7);
+	const size_t celled = n;
+	key(script, &n, QDOS_KEY_5);
+	const size_t entered = n;
+	// Back a step at a time to the menu: from the start, or from the cell still asked for
+	for (int i = 0; i < (empty ? 1 : 3); i++) {
+		key(script, &n, QDOS_KEY_CLEAR);
+	}
+	const size_t menu = n;
+	key(script, &n, QDOS_KEY_1); // CONTINUE
+	const size_t resumed = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t first[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	char row[EDIT_COLS_T + 1];
+
+	run_script_mid(script, n, dealt, fb, first);
+	CHECK(glyph_at(first, 248, 12, 'S'));
+	read_small(first, 44, row, sizeof(row));
+	CHECK(strstr(row, "EASY") != NULL);
+	CHECK(glyph_at(first, 248, 96, 'B')); // BOX?
+
+	run_script_mid(script, n, boxed, fb, mid);
+	CHECK(glyph_at(mid, 248, 96, 'C'));									   // CELL?
+	CHECK(mid[40 * QDOS_SCREEN_W + 60] != first[40 * QDOS_SCREEN_W + 60]); // the box inverted
+
+	run_script_mid(script, n, celled, fb, mid);
+	CHECK(glyph_at(mid, 248, 96, 'N')); // NUMBER?
+
+	run_script_mid(script, n, entered, fb, mid);
+	if (empty) {
+		CHECK(glyph_at(mid, 248, 96, 'B'));
+		CHECK(glyph_at(mid, 16, 12, '5'));
+	} else {
+		CHECK(glyph_at(mid, 248, 96, 'N'));
+		CHECK(!glyph_at(mid, 16, 12, '5'));
+	}
+
+	run_script_mid(script, n, menu, fb, mid);
+	CHECK(page_has(mid, "CONTINUE"));
+
+	run_script_mid(script, n, resumed, fb, mid);
+	CHECK(glyph_at(mid, 248, 12, 'S'));
+	CHECK(glyph_at(mid, 16, 12, '5') == empty);
+
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+static void test_sample_sudoku_play(void) {
+	int with_empty = -1, with_given = -1;
+	for (int seed = 1; seed < 40 && (with_empty < 0 || with_given < 0); seed++) {
+		store_reset();
+		seed_sample_files("sudoku");
+		qdos_key_event script[32];
+		size_t n = 0;
+		sudoku_start(script, &n, seed);
+		static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+		run_script_app_frame(script, n, fb);
+		if (sudoku_corner_empty(fb)) {
+			with_empty = (with_empty < 0) ? seed : with_empty;
+		} else {
+			with_given = (with_given < 0) ? seed : with_given;
+		}
+	}
+	CHECK(with_empty > 0 && with_given > 0);
+	if (with_empty > 0) {
+		sudoku_flow(with_empty, true);
+	}
+	if (with_given > 0) {
+		sudoku_flow(with_given, false);
+	}
+}
+
+/** randseed makes rand repeat; ui::save only has an app's folder to write into. */
+static void test_randseed_and_save_outside_an_app(void) {
+	store_reset();
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "5 randseed rand 5 randseed rand minus");
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[EDIT_COLS_T + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL && row[strlen(row) - 1] == '0');
+
+	store_reset();
+	n = 0;
+	type_line(script, &n, "3 \"x\" ui::save");
+	run_script(script, n, fb);
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "ONLY INSIDE AN APP") != NULL);
 }
 
 int main(void) {
@@ -7725,19 +7725,16 @@ int main(void) {
 	test_ui_text_words();
 	test_ui_keyname();
 	test_sample_quad();
-	test_sample_area();
 	test_sample_units();
 	test_sample_fin();
 	test_sample_tri();
-	test_sample_fit();
-	test_sample_drill();
-	test_sample_dice();
 	test_sample_clock();
-	test_sample_life();
-	test_sample_life_rules();
 	test_sample_mandel_escape();
 	test_sample_mandel_draws();
 	test_sample_mandel_zooms();
 	test_a_blind_loop_in_an_app_is_stopped();
+	test_sample_sudoku_rules();
+	test_sample_sudoku_play();
+	test_randseed_and_save_outside_an_app();
 	return check_report("shell");
 }

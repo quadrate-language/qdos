@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Solve a triangle from three of its parts. Angles are in the calculator's
+// angle mode; side a faces angle A.
+
+fn half( -- h:f64) {
+	-1.0 acos
+}
+
+fn round4(x:f64 -- y:f64) {
+	x 10000.0 * round 10000.0 divide
+}
+
+fn side(name:str x:f64 angle:str y:f64 -- ) {
+	name " " ui::cat x round4 ui::cat "  " ui::cat angle ui::cat " " ui::cat y round4 ui::cat print nl
+}
+
+fn report(a:f64 b:f64 c:f64 aa:f64 bb:f64 cc:f64 -- ) {
+	"a" a "A" aa side
+	"b" b "B" bb side
+	"c" c "C" cc side
+	"AREA " a b * cc sin * 2.0 divide round4 ui::cat print nl
+}
+
+fn sss(a:f64 b:f64 c:f64 -- ) {
+	a b + c <= a c + b <= or b c + a <= or if { "NO SUCH TRIANGLE" print nl return }
+	b b * c c * + a a * - 2.0 b * c * divide acos -> aa
+	a a * c c * + b b * - 2.0 a * c * divide acos -> bb
+	a b c aa bb half aa - bb - report
+}
+
+fn ask(prompt:str -- x:f64 ok:i64) {
+	prompt ui::ask
+}
+
+fn main() {
+	"KNOWN" ["SSS  a b c" "SAS  a C b" "ASA  A c B" "SSA  a b A"] ui::menu -> k
+	k 0 == if { return }
+
+	k 1 == if {
+		"a?" ask 0 == if { drop return } -> a
+		"b?" ask 0 == if { drop return } -> b
+		"c?" ask 0 == if { drop return } -> c
+		a b c sss
+	}
+	k 2 == if {
+		"a?" ask 0 == if { drop return } -> a
+		"C?" ask 0 == if { drop return } -> cc
+		"b?" ask 0 == if { drop return } -> b
+		a a * b b * + 2.0 a * b * cc cos * - sqrt -> c
+		a b c sss
+	}
+	k 3 == if {
+		"A?" ask 0 == if { drop return } -> aa
+		"c?" ask 0 == if { drop return } -> c
+		"B?" ask 0 == if { drop return } -> bb
+		half aa - bb - -> cc
+		cc 0.0 <= if { "NO SUCH TRIANGLE" print nl } else {
+			c aa sin * cc sin divide c bb sin * cc sin divide c aa bb cc report
+		}
+	}
+	k 4 == if {
+		"a?" ask 0 == if { drop return } -> a
+		"b?" ask 0 == if { drop return } -> b
+		"A?" ask 0 == if { drop return } -> aa
+		b aa sin * a divide -> s
+		s 1.0 > if { "NO SUCH TRIANGLE" print nl } else {
+			s asin -> bb
+			half aa - bb - -> cc
+			cc 0.0 > if {
+				a b a cc sin * aa sin divide aa bb cc report
+			}
+			half bb - -> bb2
+			half aa - bb2 - -> cc2
+			cc2 0.0 > bb2 bb != and if {
+				"--- OR ---" print nl
+				a b a cc2 sin * aa sin divide aa bb2 cc2 report
+			}
+		}
+	}
+	ui::pause
+}

@@ -312,6 +312,17 @@ static int w_rand(qd_context* ctx, void* user) {
 	return qd_push_f(ctx, qdos_rand());
 }
 
+/* The same seed, the same numbers after it: for a lesson, or a test */
+static int w_randseed(qd_context* ctx, void* user) {
+	(void)user;
+	double a[1];
+	if (!pop_args(ctx, "randseed", a, 1)) {
+		return 1;
+	}
+	qdos_rand_seed((uint64_t)(int64_t)a[0]);
+	return 0;
+}
+
 static int w_randint(qd_context* ctx, void* user) {
 	(void)user;
 	double a[2];
@@ -353,6 +364,7 @@ static const struct {
 		{"binomcdf", "(n:i64 p:f64 k:i64 -- q:f64)", w_binomcdf},
 		{"rand", "( -- r:f64)", w_rand},
 		{"randint", "(lo:i64 hi:i64 -- n:i64)", w_randint},
+		{"randseed", "(n:i64 -- )", w_randseed},
 };
 
 void qdos_register_stats(qd_interp* interp) {

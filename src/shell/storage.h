@@ -104,6 +104,17 @@ qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name);
  */
 qdos_store_result qdos_program_copy(qdos_hal* hal, const char* from, const char* to);
 
+/**
+ * @brief An app's other sources: every .qd in its folder but main.qd, sorted
+ *
+ * They are declared before main.qd, so an app is not held to one file's worth
+ * of source. From every scope, each name once.
+ */
+size_t qdos_app_sources(qdos_hal* hal, const char* app, char (*out)[QDOS_PROGRAM_NAME_MAX], size_t cap);
+
+/** @brief One of an app's files as text, nearest scope first; NOT_FOUND if absent or empty */
+qdos_store_result qdos_app_file_load(qdos_hal* hal, const char* app, const char* leaf, char* buf, size_t cap);
+
 /** @brief Every whole-word @p from outside strings and comments becomes @p to */
 bool qdos_source_rename(const char* src, const char* from, const char* to, char* out, size_t cap);
 

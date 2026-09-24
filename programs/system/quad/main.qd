@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Roots, vertex and graph of a x^2 + b x + c
+
+fn f(x:f64 -- y:f64) {
+	0 ui::get x * x * 1 ui::get x * + 2 ui::get +
+}
+
+fn main() {
+	"A?" ui::ask 0 == if { drop return } -> a
+	a 0.0 == if {
+		"A CANNOT BE 0" ui::say
+		return
+	}
+	"B?" ui::ask 0 == if { drop return } -> b
+	"C?" ui::ask 0 == if { drop return } -> c
+	a 0 ui::put
+	b 1 ui::put
+	c 2 ui::put
+
+	b b * 4.0 a * c * - -> d
+	b neg 2.0 a * divide -> h
+	h f -> k
+	d abs sqrt 2.0 a * abs divide -> r
+
+	"D = " d ui::cat print nl
+	d 0.0 >= if {
+		"X1 = " h r - ui::cat print nl
+		"X2 = " h r + ui::cat print nl
+	} else {
+		"X1 = " h r complex ui::cat print nl
+		"X2 = " h r neg complex ui::cat print nl
+	}
+	"VERTEX X = " h ui::cat print nl
+	"VERTEX Y = " k ui::cat print nl
+	ui::pause
+
+	r 1.5 * 3.0 max -> w
+	h w - h w + 0.0 0.0 ui::window
+	"f" ui::plot
+}

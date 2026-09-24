@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// A value in one unit, shown in every other unit of its kind
+
+fn kinds( -- names:[]str) {
+	["LENGTH" "MASS" "VOLUME" "SPEED" "ENERGY" "TEMPERATURE"]
+}
+
+fn units(kind:i64 -- names:[]str) {
+	kind 1 == if { ["M" "KM" "CM" "MM" "IN" "FT" "YD" "MI"] return }
+	kind 2 == if { ["KG" "G" "LB" "OZ" "T"] return }
+	kind 3 == if { ["L" "ML" "M3" "GAL US" "QT US" "CUP US"] return }
+	kind 4 == if { ["M/S" "KM/H" "MPH" "KN"] return }
+	kind 5 == if { ["J" "KJ" "CAL" "KCAL" "WH" "KWH"] return }
+	["C" "F" "K"]
+}
+
+// How many of the kind's first unit one of each is
+fn sizes(kind:i64 -- xs:[]f64) {
+	kind 1 == if { [1.0 1000.0 0.01 0.001 0.0254 0.3048 0.9144 1609.344] return }
+	kind 2 == if { [1.0 0.001 0.45359237 0.028349523125 1000.0] return }
+	kind 3 == if { [1.0 0.001 1000.0 3.785411784 0.946352946 0.2365882365] return }
+	kind 4 == if { [1.0 0.2777777777777778 0.44704 0.5144444444444445] return }
+	[1.0 1000.0 4.184 4184.0 3600.0 3600000.0]
+}
+
+// Temperatures do not scale, so they go through Celsius
+fn to_c(v:f64 unit:i64 -- c:f64) {
+	unit 0 == if { v return }
+	unit 1 == if { v 32.0 - 5.0 * 9.0 divide return }
+	v 273.15 -
+}
+
+fn from_c(c:f64 unit:i64 -- v:f64) {
+	unit 0 == if { c return }
+	unit 1 == if { c 9.0 * 5.0 divide 32.0 + return }
+	c 273.15 +
+}
+
+fn main() {
+	loop {
+		"CONVERT" kinds ui::menu -> kind
+		kind 0 == if { return }
+		kind units -> names
+		"FROM" names ui::menu -> from
+		from 0 != if {
+			names from 1 - nth -> unit
+			unit "?" ui::cat ui::ask 0 == if { drop } else {
+				-> v
+				v " " ui::cat unit ui::cat " IS" ui::cat print nl
+				0 names len 1 for i {
+					i from 1 - != if {
+						kind 6 == if {
+							v from 1 - to_c i from_c -> out
+						} else {
+							kind sizes -> k
+							v k from 1 - nth * k i nth divide -> out
+						}
+						"  " out ui::cat " " ui::cat names i nth ui::cat print nl
+					}
+				}
+				ui::pause
+			}
+		}
+	}
+}

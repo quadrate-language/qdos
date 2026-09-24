@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// A stopwatch and a countdown timer, in large figures. It only wakes up to
+// redraw while it is running; stopped, it waits for a key and nothing else.
+
+fn two(n:f64 -- s:str) {
+	n 10.0 < if { "0" n ui::cat return }
+	n ui::str
+}
+
+fn shown(ms:f64 -- s:str) {
+	ms 100.0 divide floor -> tenths
+	tenths 600.0 divide floor two ":" ui::cat
+	tenths 600.0 fmod 10.0 divide floor two ui::cat "." ui::cat
+	tenths 10.0 fmod ui::cat
+}
+
+fn face(title:str ms:f64 hint:str -- ) {
+	ui::cls
+	0 0 title ui::text
+	3 ms shown 3 ui::big
+	8 222 hint ui::small
+	ui::show
+}
+
+// The next key's name: waiting for one while stopped, a tenth of a second at most while running
+fn next(running:i64 -- name:str) {
+	running 0 == if { ui::wait ui::keyname return }
+	100 ui::sleep
+	ui::key 0 == if { drop drop "" return }
+	ui::keyname
+}
+
+fn stopwatch() {
+	0 -> running
+	0 -> base
+	0 -> since
+	loop {
+		base -> elapsed
+		running 1 == if { base ui::ticks since - + -> elapsed }
+		"STOPWATCH" elapsed "ENTER START/STOP  DEL RESET" face
+		running next -> pressed
+		pressed "ESC" == if { return }
+		pressed "ENTER" == if {
+			running 1 == if {
+				elapsed -> base
+				0 -> running
+			} else {
+				ui::ticks -> since
+				1 -> running
+			}
+		}
+		pressed "DEL" == if {
+			0 -> base
+			ui::ticks -> since
+		}
+	}
+}
+
+fn timer() {
+	"MINUTES?" ui::ask 0 == if { drop return } -> minutes
+	minutes 60000.0 * round -> total
+	total -> left
+	0 -> running
+	0 -> since
+	loop {
+		left -> now
+		running 1 == if { left ui::ticks since - - 0 max -> now }
+		now 0 <= running 1 == and if {
+			"TIMER" 0 "TIME UP. ANY KEY" face
+			0 6 1 for i {
+				0 0 400 240 -1 ui::box
+				ui::show
+				300 ui::sleep
+			}
+			ui::wait drop drop
+			return
+		}
+		"TIMER" now "ENTER START/STOP  DEL RESET" face
+		running next -> pressed
+		pressed "ESC" == if { return }
+		pressed "ENTER" == if {
+			running 1 == if {
+				now -> left
+				0 -> running
+			} else {
+				ui::ticks -> since
+				1 -> running
+			}
+		}
+		pressed "DEL" == if {
+			total -> left
+			0 -> running
+		}
+	}
+}
+
+fn main() {
+	loop {
+		"CLOCK" ["STOPWATCH" "TIMER"] ui::menu -> k
+		k 0 == if { return }
+		k 1 == if { stopwatch } else { timer }
+	}
+}

@@ -182,7 +182,9 @@ whole thing.
 
 An app runs in an interpreter of its own, so every one of them can call its
 entry point `main` and name its helpers whatever suits it without two of them
-ever meeting; nothing it declares is left in the vocabulary afterwards.
+ever meeting; nothing it declares is left in the vocabulary afterwards. Every
+other `.qd` in the folder is declared first, so an app is not held to one
+file's worth of source.
 
 An app in Quadrate alone reaches the calculator's pages through `ui::`. The
 first group shows a page and waits until the user is done with it, so a
@@ -207,13 +209,15 @@ spinning — a key cuts it short and is still there for `ui::key` — and
 `"ESC"`, `"DEL"`, `"7"` or the character typed. `ui::put ( x slot -- )` and
 `ui::get ( slot -- x )` keep 32 numbers for the length of one run, which is how
 a word handed to `ui::plot` or `root` reads what the app worked out, without
-touching the user's registers. The language has no string concatenation, so
+touching the user's registers. `ui::save ( x name )` and `ui::load ( name -- x ok )` keep a value between
+runs, as a file in the app's own folder. The language has no string concatenation, so
 `ui::str ( x -- s )` and `ui::cat ( a b -- s )` show numbers as the calculator
 does and join them.
 
 Drawing goes straight onto the panel's buffer and is seen at `ui::show`:
 `ui::cls`, `ui::text ( col row s )` on the 25 by 10 grid, `ui::small ( x y s )`
 at a pixel, `ui::big ( row s scale )` centred and scaled 1 to 4,
+`ui::write ( x y s scale )` for the reading font at a pixel,
 `ui::pixel ( x y on )`, `ui::line ( x0 y0 x1 y1 )` and
 `ui::box ( x y w h fill )`, where fill is 0 for an outline, 1 filled, 2 cleared
 and -1 inverted. The screen is 400 by 240.
@@ -228,8 +232,14 @@ fn main( -- ) {
 }
 ```
 
-[examples/apps](./examples/apps) has more, each small enough to read on the
-calculator itself.
+The firmware ships seven apps written this way, each small enough to read and
+edit on the calculator itself: `quad` (roots, complex ones included, and the
+parabola), `units` (a value in every other unit of its kind), `fin` (loan
+payment, amount, rate or term from the other three), `tri` (any triangle from
+three of its parts), `clock` (a stopwatch and a countdown timer), `mandel`
+(the Mandelbrot set, to pan and zoom) and `sudoku`.
+Sudoku takes three presses a cell, each digit standing where it sits on the
+keypad with 7 at the top left: the box, the cell in the box, then the number.
 
 The interpreter stops an evaluation after two million steps, which is what
 ends a `loop { }` typed by mistake. A program that looks at the keypad can be

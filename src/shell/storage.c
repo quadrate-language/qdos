@@ -568,6 +568,53 @@ qdos_store_result qdos_program_copy(qdos_hal* hal, const char* from, const char*
 	return hal->store_write(hal, key, renamed, strlen(renamed));
 }
 
+static int leaf_order(const void* a, const void* b) {
+	return strcmp((const char*)a, (const char*)b);
+}
+
+size_t qdos_app_sources(qdos_hal* hal, const char* app, char (*out)[QDOS_PROGRAM_NAME_MAX], size_t cap) {
+	if (hal->store_list == NULL) {
+		return 0;
+	}
+
+	leaf_walk walk = {.count = 0};
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
+		hal->store_list(hal, (qdos_store_scope)scope, app, collect_leaf, &walk);
+	}
+
+	size_t n = 0;
+	for (size_t i = 0; i < walk.count && n < cap; i++) {
+		const size_t len = strlen(walk.leaf[i]);
+		if (len > PROGRAM_SUFFIX_LEN && strcmp(walk.leaf[i] + len - PROGRAM_SUFFIX_LEN, PROGRAM_SUFFIX) == 0 &&
+				strcmp(walk.leaf[i], QDOS_APP_MAIN) != 0) {
+			memcpy(out[n++], walk.leaf[i], len + 1);
+		}
+	}
+	qsort(out, n, sizeof(*out), leaf_order);
+	return n;
+}
+
+qdos_store_result qdos_app_file_load(qdos_hal* hal, const char* app, const char* leaf, char* buf, size_t cap) {
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	if (cap == 0 || !qdos_app_key(app, leaf, key, sizeof(key))) {
+		return QDOS_STORE_IO_ERROR;
+	}
+
+	qdos_store_result last = QDOS_STORE_NOT_FOUND;
+	for (size_t s = 0; s < sizeof(NEAREST) / sizeof(*NEAREST); s++) {
+		size_t len = 0;
+		last = hal->store_read(hal, NEAREST[s], key, buf, cap - 1, &len);
+		if (last == QDOS_STORE_OK && len > 0) {
+			buf[len] = '\0';
+			return QDOS_STORE_OK;
+		}
+		if (last == QDOS_STORE_TOO_BIG) {
+			return last;
+		}
+	}
+	return QDOS_STORE_NOT_FOUND;
+}
+
 bool qdos_program_name_ok(const char* name) {
 	return valid_program_name(name) && !(name[0] >= '0' && name[0] <= '9');
 }

@@ -182,6 +182,15 @@ void qdos_console_invert_rect(qdos_console* con, int x, int y, int w, int h) {
 	}
 }
 
+void qdos_console_puts_at(qdos_console* con, int x, int y, const char* text, int scale) {
+	if (!con || !text || scale < 1) {
+		return;
+	}
+	for (const char* p = text; *p; p++, x += QDOS_FONT_W * scale) {
+		blit_glyph(con, x, y, *p, scale, false);
+	}
+}
+
 void qdos_console_puts_centered(qdos_console* con, int row, const char* text, int scale) {
 	if (!con || !text || scale < 1) {
 		return;

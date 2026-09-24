@@ -379,8 +379,9 @@ struct qdos_shell {
 	char name_from[QDOS_PROGRAM_NAME_MAX]; ///< The program a rename or copy starts from
 	qdos_mode edit_from;
 
-	qd_interp* app_interp; ///< The app running now, whose words ui:: and the graph words evaluate
-	qdos_mode modal_home;  ///< Where a page a program opened is finished
+	qd_interp* app_interp;				  ///< The app running now, whose words ui:: and the graph words evaluate
+	char app_name[QDOS_PROGRAM_NAME_MAX]; ///< Its name, whose folder ui::save writes into
+	qdos_mode modal_home;				  ///< Where a page a program opened is finished
 	bool ui_window_set;
 	bool ui_points;			   ///< The next plot shows L1 against L2 as well
 	qdos_graph_view ui_window; ///< What ui::window asked the next plot for
@@ -2150,6 +2151,23 @@ static qd_interp* bare_interp(qdos_shell* sh) {
 	return interp;
 }
 
+/** @brief An app's other source files into @p interp, before its main.qd; false with the message set */
+static bool load_app_sources(qdos_shell* sh, qd_interp* interp, const char* app, char* error, size_t cap) {
+	char leaves[16][QDOS_PROGRAM_NAME_MAX];
+	const size_t count = qdos_app_sources(sh->hal, app, leaves, 16);
+	for (size_t i = 0; i < count; i++) {
+		char source[QDOS_PROGRAM_MAX];
+		if (qdos_app_file_load(sh->hal, app, leaves[i], source, sizeof(source)) != QDOS_STORE_OK) {
+			continue;
+		}
+		if (!qdos_guarded_eval(interp, source)) {
+			snprintf(error, cap, "%s: %s", leaves[i], qdos_guarded_error(interp));
+			return false;
+		}
+	}
+	return true;
+}
+
 /**
  * @brief Compile the editor text without letting it reach the session
  *
@@ -2174,8 +2192,16 @@ static void check_program(qdos_shell* sh) {
 	}
 	register_apps(sh, scratch);
 
+	// An app's other files are part of it, and main.qd calls into them
 	char message[80];
-	bool bad = !qdos_guarded_eval(scratch, sh->ed.text);
+	bool bad = qdos_app_exists(sh->hal, sh->ed.name) &&
+			   !load_app_sources(sh, scratch, sh->ed.name, message, sizeof(message));
+	if (bad) {
+		qd_interp_destroy(scratch);
+		set_message(sh, message, true);
+		return;
+	}
+	bad = !qdos_guarded_eval(scratch, sh->ed.text);
 	if (bad) {
 		snprintf(message, sizeof(message), "%s", qdos_guarded_error(scratch));
 	} else if (qdos_lint_program(scratch, sh->ed.text, message, sizeof(message))) {
@@ -2224,12 +2250,16 @@ static int run_app(qd_context* ctx, void* userdata) {
 	sh->ui_points = false;
 	memset(sh->ui_slot, 0, sizeof(sh->ui_slot));
 
+	snprintf(sh->app_name, sizeof(sh->app_name), "%s", name);
+
 	char error[QDOS_COLS * 3] = "";
-	if (!qdos_guarded_eval(app, source) || !qdos_guarded_eval(app, QDOS_APP_ENTRY)) {
+	if (load_app_sources(sh, app, name, error, sizeof(error)) &&
+			(!qdos_guarded_eval(app, source) || !qdos_guarded_eval(app, QDOS_APP_ENTRY))) {
 		snprintf(error, sizeof(error), "%s", qdos_guarded_error(app));
 	}
 
 	sh->app_interp = outer;
+	sh->app_name[0] = '\0';
 	qd_interp_destroy(app);
 
 	// Stopped rather than finished, so whatever ran the app stops too
@@ -7133,6 +7163,70 @@ static int native_big(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+/** `ui::write` - ( x:i64 y:i64 s scale:i64 -- ) the reading font at a pixel, 16 by 24 at scale 1 */
+static int native_write(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double scale;
+	qdos_value v;
+	double at[2];
+	if (!pop_real(ctx, &scale) || !pop_value(ctx, &v) || !pop_reals(ctx, at, 2) || scale < 1 || scale > 4) {
+		return ui_fail(ctx, "write", "NEED X Y TEXT SCALE, SCALE 1 TO 4");
+	}
+	char text[QDOS_VALUE_STRING_MAX];
+	ui_text_of(sh, &v, text, sizeof(text));
+	qdos_console_puts_at(&sh->con, (int)at[0], (int)at[1], text, (int)scale);
+	return 0;
+}
+
+/* Where an app keeps a value between runs: a file in its own folder */
+static bool app_value_key(qd_context* ctx, const qdos_shell* sh, const char* word, char* key, size_t cap) {
+	char name[QDOS_VALUE_STRING_MAX];
+	if (qd_pop_s(ctx, name, sizeof(name)) != 0 || !qdos_program_name_ok(name)) {
+		ui_fail(ctx, word, "NEED A NAME: LETTERS, DIGITS, _");
+		return false;
+	}
+	if (sh->app_name[0] == '\0') {
+		ui_fail(ctx, word, "ONLY INSIDE AN APP");
+		return false;
+	}
+	char leaf[QDOS_VALUE_STRING_MAX + 8];
+	snprintf(leaf, sizeof(leaf), "%s.val", name);
+	return qdos_app_key(sh->app_name, leaf, key, cap);
+}
+
+/** `ui::save` - ( x name:str -- ) keep a value for the next time the app runs */
+static int native_save(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	char key[QDOS_PROGRAM_NAME_MAX * 2 + QDOS_VALUE_STRING_MAX];
+	if (!app_value_key(ctx, sh, "save", key, sizeof(key))) {
+		return 1;
+	}
+	qdos_value v;
+	if (!pop_value(ctx, &v)) {
+		return ui_fail(ctx, "save", "NEED A NUMBER OR A STRING");
+	}
+	if (qdos_storage_save(sh->hal, key, &v) != QDOS_STORE_OK) {
+		return ui_fail(ctx, "save", "COULD NOT WRITE");
+	}
+	return 0;
+}
+
+/** `ui::load` - ( name:str -- x ok:i64 ) what ui::save kept, and 0 for ok when nothing was */
+static int native_load(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	char key[QDOS_PROGRAM_NAME_MAX * 2 + QDOS_VALUE_STRING_MAX];
+	if (!app_value_key(ctx, sh, "load", key, sizeof(key))) {
+		return 1;
+	}
+	qdos_value v;
+	if (qdos_storage_load(sh->hal, key, &v) != QDOS_STORE_OK || v.type == QDOS_VALUE_EMPTY) {
+		qd_push_i(ctx, 0);
+		return qd_push_i(ctx, 0);
+	}
+	push_value(ctx, &v);
+	return qd_push_i(ctx, 1);
+}
+
 /** `ui::pixel` - ( x:i64 y:i64 on:i64 -- ) 400 across, 240 down */
 static int native_pixel(qd_context* ctx, void* userdata) {
 	double p[3];
@@ -7384,6 +7478,9 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "ui::small", "(x:i64 y:i64 s:str -- )", native_small, sh);
 	qd_interp_register(interp, "ui::big", "(row:i64 s:str scale:i64 -- )", native_big, sh);
 	qd_interp_register(interp, "ui::pixel", "(x:i64 y:i64 on:i64 -- )", native_pixel, sh);
+	qd_interp_register(interp, "ui::write", "(x:i64 y:i64 s:str scale:i64 -- )", native_write, sh);
+	qd_interp_register(interp, "ui::save", "(x:f64 name:str -- )", native_save, sh);
+	qd_interp_register(interp, "ui::load", "(name:str -- x:f64 ok:i64)", native_load, sh);
 	qd_interp_register(interp, "ui::line", "(x0:i64 y0:i64 x1:i64 y1:i64 -- )", native_line, sh);
 	qd_interp_register(interp, "ui::box", "(x:i64 y:i64 w:i64 h:i64 fill:i64 -- )", native_box, sh);
 	qdos_register_math(interp);

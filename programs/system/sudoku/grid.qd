@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// The grid as 81 numbers, row by row, nought for an empty cell
+
+fn at(g:[]i64 r:i64 c:i64 -- v:i64) {
+	g r 9 * c + nth
+}
+
+fn blank( -- g:[]i64) {
+	[] -> g
+	0 81 1 for i { g 0 append drop }
+	g
+}
+
+// Digit c of a row packed into one number, the first digit the highest
+fn digit(row:i64 c:i64 -- d:i64) {
+	row [100000000 10000000 1000000 100000 10000 1000 100 10 1] c nth / 10 %
+}
+
+fn pack(g:[]i64 r:i64 -- n:i64) {
+	0 -> n
+	0 9 1 for c { n 10 * g r c at + -> n }
+	n
+}
+
+// Nine packed rows saved as prefix0 to prefix8, back into a grid
+fn unpack(prefix:str -- g:[]i64) {
+	blank -> g
+	0 9 1 for r {
+		prefix r ui::cat ui::load drop -> n
+		0 9 1 for c { g r 9 * c + n c digit set }
+	}
+	g
+}
+
+fn perm3(k:i64 j:i64 -- v:i64) {
+	[0 1 2 0 2 1 1 0 2 1 2 0 2 0 1 2 1 0] k 3 * j + nth
+}
+
+// 0 to 8 shuffled with each band of three kept together, which a sudoku allows
+fn spread( -- p:[]i64) {
+	[] -> p
+	0 5 randint -> b
+	0 3 1 for i {
+		0 5 randint -> w
+		0 3 1 for j { p b i perm3 3 * w j perm3 + append drop }
+	}
+	p
+}
+
+// A puzzle from the bank, relabelled, its rows and columns shuffled in bands
+// and perhaps turned over: a game of its own, with one solution still
+fn deal(level:i64 -- g:[]i64) {
+	level bank -> rows
+	0 rows len 9 / 1 - randint 9 * -> base
+	[0 1 2 3 4 5 6 7 8 9] -> label
+	9 1 -1 for i {
+		1 i randint -> j
+		label i nth -> t
+		label i label j nth set
+		label j t set
+	}
+	spread -> rp
+	spread -> cp
+	0 1 randint -> turn
+	blank -> g
+	0 9 1 for r {
+		0 9 1 for c {
+			rp r nth -> sr
+			cp c nth -> sc
+			turn 1 == if {
+				sr -> t
+				sc -> sr
+				t -> sc
+			}
+			g r 9 * c + label rows base sr + nth sc digit nth set
+		}
+	}
+	g
+}
+
+fn fixed(g:[]i64 -- f:[]i64) {
+	[] -> f
+	0 81 1 for i {
+		g i nth 0 != if { f 1 append drop } else { f 0 append drop }
+	}
+	f
+}
+
+// Whether cell i repeats a number in its row, column or box
+fn clash(g:[]i64 i:i64 -- bad:i64) {
+	g i nth -> v
+	v 0 == if { 0 return }
+	i 9 / -> r
+	i 9 % -> c
+	0 9 1 for k {
+		k c != g r k at v == and if { 1 return }
+		k r != g k c at v == and if { 1 return }
+		r 3 / 3 * k 3 / + -> rr
+		c 3 / 3 * k 3 % + -> cc
+		rr r != cc c != or g rr cc at v == and if { 1 return }
+	}
+	0
+}
+
+fn solved(g:[]i64 -- ok:i64) {
+	0 81 1 for i {
+		g i nth 0 == if { 0 return }
+		g i clash 1 == if { 0 return }
+	}
+	1
+}
