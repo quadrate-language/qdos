@@ -78,6 +78,15 @@ int qdos_cpx_push(qd_context* ctx, double re, double im) {
 	return 0;
 }
 
+/* Android's C library has neither below API 26, and both follow from what it has */
+static double complex cpx_log(double complex z) {
+	return CMPLX(log(cabs(z)), carg(z));
+}
+
+static double complex cpx_pow(double complex a, double complex b) {
+	return cexp(b * cpx_log(a));
+}
+
 /* Argument @p depth as a complex number, a real one included; false for anything else */
 static bool peek(qd_context* ctx, size_t depth, double complex* out, bool* is_complex) {
 	const size_t size = qd_stack_size(ctx->st);
@@ -175,7 +184,7 @@ bool qdos_cpx_apply(qd_context* ctx, const char* word, size_t arity, int* result
 		*result = (b == 0) ? qdos_math_error(ctx, word, "ZERO DIVISOR") : answer(ctx, word, 2, a / b);
 	} else if (strcmp(word, "pow") == 0) {
 		*result = (a == 0 && creal(b) <= 0.0) ? qdos_math_error(ctx, word, "0 TO THAT IS UNDEFINED")
-											  : answer(ctx, word, 2, cpow(a, b));
+											  : answer(ctx, word, 2, cpx_pow(a, b));
 	} else if (strcmp(word, "sq") == 0) {
 		*result = answer(ctx, word, 1, a * a);
 	} else if (strcmp(word, "inv") == 0) {
@@ -187,10 +196,10 @@ bool qdos_cpx_apply(qd_context* ctx, const char* word, size_t arity, int* result
 	} else if (strcmp(word, "exp") == 0) {
 		*result = answer(ctx, word, 1, cexp(a));
 	} else if (strcmp(word, "ln") == 0) {
-		*result = (a == 0) ? qdos_math_error(ctx, word, "NEEDS MORE THAN 0") : answer(ctx, word, 1, clog(a));
+		*result = (a == 0) ? qdos_math_error(ctx, word, "NEEDS MORE THAN 0") : answer(ctx, word, 1, cpx_log(a));
 	} else if (strcmp(word, "log") == 0 || strcmp(word, "log10") == 0) {
-		*result =
-				(a == 0) ? qdos_math_error(ctx, word, "NEEDS MORE THAN 0") : answer(ctx, word, 1, clog(a) / log(10.0));
+		*result = (a == 0) ? qdos_math_error(ctx, word, "NEEDS MORE THAN 0")
+						   : answer(ctx, word, 1, cpx_log(a) / log(10.0));
 	} else {
 		*result = qdos_math_error(ctx, word, "NOT FOR COMPLEX");
 	}
