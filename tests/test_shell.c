@@ -2115,6 +2115,35 @@ static void test_an_app_runs_its_entry_point(void) {
 }
 
 /**
+ * An app that asks keeps its locals across the question, and runs again.
+ *
+ * ui::ask works the typed answer out on the app's own interpreter while main is
+ * still running on it. That used to take main's locals with it, and once enough
+ * calls had returned, the interpreter's last frame too: the second run crashed.
+ */
+static void answer(qdos_key_event* script, size_t* n, const char* number);
+
+static void test_an_app_that_asks_runs_twice(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "ask", "fn main( -- ) { 5.0 -> k \"N?\" ui::ask drop k + print }");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "ask");
+	answer(script, &n, "1");
+	type_more(script, &n, "ask");
+	answer(script, &n, "2");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+	CHECK(strstr(row, "NOT DEFINED") == NULL);
+}
+
+/**
  * Every app calls its entry point `main`, so two of them have to be able to
  * without meeting. Each runs in an interpreter of its own.
  */
@@ -7545,6 +7574,7 @@ int main(void) {
 	test_list_shows_apps_and_origin();
 	test_an_app_folder_is_listed_under_its_own_name();
 	test_an_app_runs_its_entry_point();
+	test_an_app_that_asks_runs_twice();
 	test_two_apps_may_both_have_a_main();
 	test_an_app_leaves_nothing_behind();
 	test_editing_an_app_writes_into_its_folder();
