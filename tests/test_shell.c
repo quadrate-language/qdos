@@ -23,6 +23,7 @@ typedef struct {
 	size_t next;
 	bool served; ///< A key has already gone out on this pass
 	uint8_t last_fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	uint8_t prev_fb[QDOS_SCREEN_W * QDOS_SCREEN_H]; ///< The one before last_fb
 	int presents;
 
 	/** Where to stop, so a screen part-way through a script can be read */
@@ -53,6 +54,7 @@ static void stub_shutdown(qdos_hal* hal) {
 
 static void stub_present(qdos_hal* hal, const uint8_t* fb) {
 	stub_state* st = hal->impl;
+	memcpy(st->prev_fb, st->last_fb, sizeof(st->prev_fb));
 	memcpy(st->last_fb, fb, sizeof(st->last_fb));
 	st->presents++;
 
@@ -103,7 +105,7 @@ static void stub_wait(qdos_hal* hal, int timeout_ms) {
 
 /* In-memory storage, enough slots for registers and a saved session. */
 #define STORE_SLOTS 80
-#define STORE_BYTES 512
+#define STORE_BYTES 4096
 
 static struct {
 	char name[32];
@@ -198,6 +200,40 @@ static qdos_store_result stub_write(qdos_hal* h, const char* n, const void* b, s
 	g_store[slot].scope = QDOS_SCOPE_USER;
 	g_store[slot].used = true;
 	return QDOS_STORE_OK;
+}
+
+static qdos_store_result stub_remove(qdos_hal* h, const char* n) {
+	(void)h;
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used && g_store[i].scope == QDOS_SCOPE_USER && strcmp(g_store[i].name, n) == 0) {
+			g_store[i].used = false;
+			return QDOS_STORE_OK;
+		}
+	}
+	return QDOS_STORE_NOT_FOUND;
+}
+
+/** Whether an entry is in the user store at all, empty or not */
+static bool in_user_store(const char* file) {
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used && g_store[i].scope == QDOS_SCOPE_USER && strcmp(g_store[i].name, file) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** The user store's copy of an entry, as text */
+static const char* user_text(const char* file) {
+	static char text[STORE_BYTES + 1];
+	for (int i = 0; i < STORE_SLOTS; i++) {
+		if (g_store[i].used && g_store[i].scope == QDOS_SCOPE_USER && strcmp(g_store[i].name, file) == 0) {
+			memcpy(text, g_store[i].data, g_store[i].len);
+			text[g_store[i].len] = '\0';
+			return text;
+		}
+	}
+	return "";
 }
 
 /**
@@ -402,6 +438,7 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->wait = stub_wait;
 	hal->store_read = stub_read;
 	hal->store_write = stub_write;
+	hal->store_remove = stub_remove;
 	hal->store_list = stub_list;
 	hal->store_path = stub_store_path;
 	hal->store_changed = stub_store_changed;
@@ -3367,14 +3404,13 @@ static void test_usb_is_hidden_without_a_gadget(void) {
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
+	// COMPLEX moves up into the gap, so Enter stepped that instead
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_SETTING_USB, row, sizeof(row));
-	CHECK(row[0] == '\0');
+	CHECK(strstr(row, "USB") == NULL);
+	CHECK(strstr(row, "COMPLEX") != NULL);
+	CHECK(strstr(row, "a+bi") != NULL);
 	CHECK(g_usb_calls == 0);
-
-	// The selection stopped on AUTO OFF, so Enter stepped that instead
-	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
-	CHECK(strstr(row, "30 MIN") != NULL);
 }
 
 /** Where there is a gadget, the row is there and says which way round it is. */
@@ -3744,6 +3780,7 @@ static void test_settings_selection_stops_at_the_ends(void) {
 	key(script, &n, QDOS_KEY_UP); // already at the top
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN); // already at the bottom, with no gadget
 	key(script, &n, QDOS_KEY_ENTER);
 
@@ -3753,7 +3790,7 @@ static void test_settings_selection_stops_at_the_ends(void) {
 	char row[QDOS_COLS + 1];
 
 	// Neither press moved off the list, so Enter changed the last row and the
-	// two above it were left exactly as they were
+	// ones above it were left exactly as they were
 	read_row(fb, ROW_SETTING_ANGLE, row, sizeof(row));
 	CHECK(strstr(row, "RAD") != NULL);
 
@@ -3761,7 +3798,10 @@ static void test_settings_selection_stops_at_the_ends(void) {
 	CHECK(strstr(row, "AUTO") != NULL);
 
 	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
-	CHECK(strstr(row, "30 MIN") != NULL);
+	CHECK(strstr(row, "10 MIN") != NULL);
+
+	read_row(fb, ROW_SETTING_USB, row, sizeof(row));
+	CHECK(strstr(row, "a+bi") != NULL);
 }
 
 /** A fixed setting is a column to read down, so whole numbers get decimals too. */
@@ -4640,7 +4680,7 @@ static void test_the_card_is_not_read_while_it_is_shared(void) {
 /** A program can ask the machine about itself, which is how one takes over. */
 static void test_a_program_can_ask_the_machine(void) {
 	store_reset();
-	seed_system("alive", "fn alive( -- r:i64) { qdos::running }");
+	seed_system("alive", "fn alive( -- r:i64) { ui::running }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -4657,7 +4697,7 @@ static void test_a_program_can_ask_the_machine(void) {
 /** And take a keypress, there being none waiting in a scripted run. */
 static void test_a_program_can_take_a_key(void) {
 	store_reset();
-	seed_system("gotkey", "fn gotkey( -- r:i64) { qdos::key drop drop }");
+	seed_system("gotkey", "fn gotkey( -- r:i64) { ui::key drop drop }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -4674,7 +4714,7 @@ static void test_a_program_can_take_a_key(void) {
 /** PWR stops a program that only ever asks for keys, and not the machine. */
 static void test_power_breaks_a_program(void) {
 	store_reset();
-	seed_system("spin", "fn spin( -- ) { loop { qdos::key drop drop drop } }");
+	seed_system("spin", "fn spin( -- ) { loop { ui::key drop drop drop } }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -4701,7 +4741,7 @@ static void test_power_breaks_a_program(void) {
 /** An app is stopped the same way, and what it printed does not hide that. */
 static void test_power_breaks_an_app(void) {
 	store_reset();
-	seed_app(QDOS_SCOPE_INBOX, "game", "fn main( -- ) { \"BANNER\" print loop { qdos::key drop drop drop } }");
+	seed_app(QDOS_SCOPE_INBOX, "game", "fn main( -- ) { \"BANNER\" print loop { ui::key drop drop drop } }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -4774,8 +4814,8 @@ static void test_an_untouched_editor_leaves_at_once(void) {
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
 	CHECK(strstr(row, "ESC AGAIN") == NULL);
 
-	// Back at the calculator: the prompt is on the input line
-	CHECK(row[0] == '>');
+	// Back in line mode, where `edit` was typed
+	CHECK(row[0] == ':');
 }
 
 /** Arrows move the cursor, so text can be inserted rather than only appended. */
@@ -5173,10 +5213,10 @@ static void test_soft_key_opens_apps(void) {
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
 	CHECK(strstr(row, "APPS") != NULL);
 
-	// and in the list its labels have changed
+	// and in the list its labels have changed: an empty one offers only NEW
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "PICK") != NULL);
-	CHECK(strstr(row, "EDIT") != NULL);
+	CHECK(strstr(row, "NEW") != NULL);
+	CHECK(strstr(row, "EDIT") == NULL);
 
 	// and no arrows among them, the keypad having its own
 	CHECK(strstr(row, QDOS_GLYPH_DOWN) == NULL);
@@ -5255,10 +5295,11 @@ static void test_f1_is_always_the_way_out(void) {
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
 	CHECK(strstr(row, "INFO") != NULL);
 
-	// Out of the editor, without saving
+	// Out of the editor, without saving, and back out of the apps it came from
 	n = 0;
 	key(script, &n, QDOS_KEY_SOFT2);
 	key(script, &n, QDOS_KEY_SOFT5); // edit
+	key(script, &n, QDOS_KEY_SOFT1);
 	key(script, &n, QDOS_KEY_SOFT1);
 	run_script(script, n, fb);
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
@@ -5935,6 +5976,1500 @@ static void test_keypad_numbers_past_an_integer(void) {
 	CHECK(strstr(row, "1000") != NULL);
 }
 
+/* ---------------------------------------------------------------------------
+ * Writing programs on the machine: APPS and the editor
+ * ------------------------------------------------------------------------- */
+
+static void type_chars(qdos_key_event* script, size_t* n, const char* text) {
+	for (const char* p = text; *p; p++) {
+		script[(*n)++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
+}
+
+/** NEW asks for a name and opens the editor on a program of that name. */
+static void test_new_from_apps(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_SOFT2); // NEW
+	type_chars(script, &n, "sq2");
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	const size_t asked = n;
+	key(script, &n, QDOS_KEY_ENTER);
+	run_script_mid(script, n, asked, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "NEW: sq2") != NULL);
+
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strncmp(row, "sq2", 3) == 0);
+	CHECK(edit_pane_has(fb, "fn sq2( -- ) {"));
+}
+
+/** A name that is already a word, or cannot be one, is refused and can be fixed. */
+static void test_new_refuses_a_taken_name(void) {
+	static const struct {
+		const char* name;
+		const char* says;
+	} CASES[] = {{"dup", "TAKEN"}, {"hyp", "EXISTS"}, {"2x", "NOT A VALID NAME"}};
+
+	for (size_t i = 0; i < sizeof(CASES) / sizeof(*CASES); i++) {
+		store_reset();
+		seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+		qdos_key_event script[64];
+		size_t n = 0;
+		key(script, &n, QDOS_KEY_LIST);
+		key(script, &n, QDOS_KEY_SOFT2);
+		type_chars(script, &n, CASES[i].name);
+		key(script, &n, QDOS_KEY_ENTER);
+
+		static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+		run_script(script, n, fb);
+
+		char row[QDOS_COLS + 1];
+		read_error(fb, row, sizeof(row));
+		CHECK(strstr(row, CASES[i].says) != NULL);
+
+		// Still asking, with what was typed, to be corrected
+		key(script, &n, QDOS_KEY_BACKSPACE);
+		run_script(script, n, fb);
+		read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+		CHECK(strncmp(row, "NEW: ", 5) == 0);
+	}
+}
+
+/** Enter on APPS runs the program, leaving its answer on the stack. */
+static void test_enter_runs_from_apps(void) {
+	store_reset();
+	seed_scope(QDOS_SCOPE_USER, "five", "fn five( -- r:i64) { 5 }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "5") != NULL);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "APPS") == NULL);
+}
+
+/** Rename moves the program, the word inside it, and the word in the session. */
+static void test_rename_a_program(void) {
+	store_reset();
+	seed_scope(QDOS_SCOPE_USER, "old", "fn old( -- r:i64) { 7 }");
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_SOFT4); // OPTS
+	key(script, &n, QDOS_KEY_3);	 // RENAME
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	type_chars(script, &n, "neu");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "RENAMED 'neu'") != NULL);
+	CHECK(!in_user_store("old.qd"));
+	CHECK(strcmp(user_text("neu.qd"), "fn neu( -- r:i64) { 7 }") == 0);
+
+	store_reset();
+	seed_scope(QDOS_SCOPE_USER, "old", "fn old( -- r:i64) { 7 }");
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "neu");
+	type_line(script, &n, "old");
+	run_script(script, n, fb);
+
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "7") != NULL);
+}
+
+/** Only your own can be renamed; a shipped one is copied instead. */
+static void test_rename_refuses_a_shipped_program(void) {
+	store_reset();
+	seed_system("hyp", "fn hyp( -- r:i64) { 5 }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_3);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "COPY IT") != NULL);
+}
+
+/** Copying an app carries every file in its folder. */
+static void test_copy_an_app(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "game", "fn main( -- ) { }");
+	seed_raw(QDOS_SCOPE_INBOX, "game/level.txt", "xyz");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_4); // COPY
+	type_chars(script, &n, "game2");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(strcmp(user_text("game2/" QDOS_APP_MAIN), "fn main( -- ) { }") == 0);
+	CHECK(strcmp(user_text("game2/level.txt"), "xyz") == 0);
+
+	// And the copy is selected, marked as an app
+	char row[QDOS_COLS + 1];
+	bool found = false;
+	for (int r = ROW_CONTENT_FIRST_T; r <= ROW_CONTENT_LAST_T; r++) {
+		read_row(fb, r, row, sizeof(row));
+		found = found || (strstr(row, "game2") != NULL && strstr(row, "APP USER") != NULL);
+	}
+	CHECK(found);
+}
+
+/** Dropping a program takes its word out of the session and its file off the card. */
+static void test_drop_forgets_the_word(void) {
+	store_reset();
+	seed_scope(QDOS_SCOPE_USER, "gone", "fn gone( -- r:i64) { 1 }");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "gone");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL);
+	CHECK(!in_user_store("gone.qd"));
+}
+
+/** DELETE on OPTS asks by staying put, and a second pick drops it. */
+static void test_delete_from_opts_asks_twice(void) {
+	store_reset();
+	seed_scope(QDOS_SCOPE_USER, "mine", "fn mine( -- ) { }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_5);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "AGAIN TO DROP 'mine'") != NULL);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strncmp(row, "mine", 4) == 0); // still the menu, titled with the name
+	CHECK(in_user_store("mine.qd"));
+
+	key(script, &n, QDOS_KEY_5);
+	run_script(script, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "DROPPED") != NULL);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "APPS") != NULL);
+	CHECK(!in_user_store("mine.qd"));
+}
+
+/** Dropping an override brings back what it covered, in the session too. */
+static void test_drop_an_override_reverts(void) {
+	store_reset();
+	seed_system("tri", "fn tri( -- r:i64) { 3 }");
+	seed_scope(QDOS_SCOPE_USER, "tri", "fn tri( -- r:i64) { 4 }");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "AGAIN TO REVERT") != NULL);
+
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "tri");
+	run_script(script, n, fb);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+}
+
+/** INFO says how big a program is. */
+static void test_info_sizes_a_program(void) {
+	store_reset();
+	seed_scope(QDOS_SCOPE_USER, "two", "fn two( -- r:i64) {\n\t2\n}");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_LIST);
+	key(script, &n, QDOS_KEY_SOFT4);
+	key(script, &n, QDOS_KEY_6);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "3 LINES, 24 BYTES") != NULL);
+}
+
+/** The keypad's digits and operators type into a program. */
+static void test_the_keypad_types_in_the_editor(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"k\" edit");
+	key(script, &n, QDOS_KEY_4);
+	key(script, &n, QDOS_KEY_DOT);
+	key(script, &n, QDOS_KEY_5);
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_DIV);
+	key(script, &n, QDOS_KEY_DUP);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(edit_pane_has(fb, "4.5+/ dup"));
+}
+
+/** RUN saves and runs, and the editor stays open with the answer shown. */
+static void test_run_from_the_editor(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"k\" edit");
+	type_chars(script, &n, "42");
+	key(script, &n, QDOS_KEY_SOFT4); // RUN
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "RAN: 42") != NULL);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strncmp(row, "k ", 2) == 0); // no star: saved
+	CHECK(in_user_store("k.qd"));
+}
+
+/** A star marks unsaved edits; SAVE clears it and stays, so ESC then leaves at once. */
+static void test_save_stays_in_the_editor(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"k\" edit");
+	type_chars(script, &n, "1");
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	const size_t typed = n;
+	key(script, &n, QDOS_KEY_SOFT5); // SAVE
+	run_script_mid(script, n, typed, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_row(mid, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strncmp(row, "k*", 2) == 0);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strncmp(row, "k ", 2) == 0);
+
+	store_reset(); // or it opens the copy the first run saved
+	key(script, &n, QDOS_KEY_CLEAR);
+	run_script(script, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(row[0] == ':');
+}
+
+/** UNDO takes back what was typed, and a second press puts it back. */
+static void test_undo_in_the_editor(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"k\" edit");
+	type_chars(script, &n, "abc");
+	key(script, &n, QDOS_KEY_SOFT2); // UNDO
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	CHECK(!edit_pane_has(fb, "abc"));
+
+	key(script, &n, QDOS_KEY_SOFT2);
+	run_script(script, n, fb);
+	CHECK(edit_pane_has(fb, "abc"));
+}
+
+/** Enter keeps the indent, a level deeper after a brace; tabs are two cells. */
+static void test_the_editor_indents(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"k\" edit");
+	type_chars(script, &n, "x {");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_chars(script, &n, "y");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_chars(script, &n, "}");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char line[EDIT_COLS_T + 1];
+	read_edit_line(fb, 1, line, sizeof(line));
+	CHECK(strcmp(line, "  x {") == 0);
+	read_edit_line(fb, 2, line, sizeof(line));
+	CHECK(strcmp(line, "    y") == 0);
+	read_edit_line(fb, 3, line, sizeof(line));
+	CHECK(strcmp(line, "  }") == 0);
+}
+
+/** CHECK puts the cursor on the line the lint found. */
+static void test_check_goes_to_the_line(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"k\" edit");
+	type_chars(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_chars(script, &n, "nope");
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_SOFT3); // CHECK
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "L3:") != NULL);
+	read_row(fb, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "3:3") != NULL);
+}
+
+/** Saving an app compiles it alone: its `main` does not land in the session. */
+static void test_saving_an_app_declares_nothing(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "tweak", "fn main( -- ) { }");
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"tweak\" edit");
+	type_chars(script, &n, " ");
+	key(script, &n, QDOS_KEY_SAVE);
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_more(script, &n, "main");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "not defined") != NULL);
+	CHECK(stored("tweak/" QDOS_APP_MAIN));
+}
+
+/* ---------------------------------------------------------------------------
+ * ui:: -- the calculator's pages, for a program to use
+ * ------------------------------------------------------------------------- */
+
+/** What stopped an app is said, not wiped by the line that ran it succeeding. */
+static void test_an_apps_error_is_shown(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { nope }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "nope") != NULL);
+}
+
+/** The README's example, as written there. */
+static void test_the_readme_ui_example_runs(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "area",
+			"fn f(x:f64 -- y:f64) { x sin x * }\n"
+			"fn main( -- ) {\n"
+			"\t\"FROM?\" ui::ask drop -> a\n"
+			"\t\"TO?\" ui::ask drop -> b\n"
+			"\t\"f\" a b fnint print\n"
+			"\t\"f\" ui::plot\n"
+			"}");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "area");
+	digits(script, &n, "0");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	const size_t plotted = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, plotted, fb, mid);
+
+	CHECK(plot_has_ink(mid));
+	char row[EDIT_COLS_T + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "0.301") != NULL); // sin 1 - cos 1
+}
+
+/** The graph words find an app's own functions, not only the session's. */
+static void test_calc_words_see_an_apps_own_words(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x 0.5 - }\nfn main( -- ) { \"f\" 0.0 1.0 root print }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "0.5") != NULL);
+}
+
+/** ui::plot shows the graph and holds the program until ESC. */
+static void test_ui_plot_waits_for_escape(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x x * }\nfn main( -- ) { \"f\" ui::plot \"BACK\" print }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	const size_t shown = n;
+	key(script, &n, QDOS_KEY_LIST); // refused: APPS would lead away from the program
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, shown, fb, mid);
+
+	CHECK(plot_has_ink(mid));
+	char row[QDOS_COLS + 1];
+	read_row(mid, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "TRACE") != NULL);
+
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "BACK") != NULL);
+}
+
+/** `graph` in an app waits the same way, its words being gone once it returns. */
+static void test_graph_in_an_app_waits(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x }\nfn main( -- ) { \"f\" graph \"BACK\" print }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "BACK") != NULL);
+}
+
+/** PWR stops a program waiting on a page, and what came after never runs. */
+static void test_power_breaks_a_plot(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x }\nfn main( -- ) { \"f\" ui::plot \"BACK\" print }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	key(script, &n, QDOS_KEY_POWER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "BREAK") != NULL);
+}
+
+/** A window the wrong way round is refused before anything is drawn. */
+static void test_ui_window_checks_its_edges(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { 1.0 0.0 0.0 1.0 ui::window }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "WRONG WAY ROUND") != NULL);
+}
+
+/** ui::ask takes a number on the input row, working out what is typed. */
+static void test_ui_ask_takes_a_number(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { \"X?\" ui::ask drop 2.0 * print }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	const size_t asked = n;
+	digits(script, &n, "20");
+	key(script, &n, QDOS_KEY_CHAR);
+	script[n - 1].ch = ' ';
+	key(script, &n, QDOS_KEY_1);
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, asked, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strncmp(row, "X?", 2) == 0);
+
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+}
+
+/** ESC on ui::ask says so rather than inventing a number. */
+static void test_ui_ask_can_be_escaped(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { \"X?\" ui::ask 0 == if { \"NONE\" print } drop }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "NONE") != NULL);
+}
+
+/** ui::menu shows a numbered page and gives back what was picked. */
+static void test_ui_menu_picks(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { \"SHAPE\" [\"CIRCLE\" \"SQUARE\" \"TRIANGLE\"] ui::menu print }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	const size_t shown = n;
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, shown, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_row(mid, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "SHAPE") != NULL);
+	CHECK(page_has(mid, "2 SQUARE"));
+
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+
+	// A digit picks at once, and ESC is nought
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { \"SHAPE\" [\"CIRCLE\" \"SQUARE\"] ui::menu 10 + print }");
+	n = shown;
+	key(script, &n, QDOS_KEY_CLEAR);
+	run_script(script, n, fb);
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "10") != NULL);
+}
+
+/** ui::wait waits for a key and says which. */
+static void test_ui_wait_waits_for_a_key(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { ui::wait swap drop print }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, 'q'};
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "113") != NULL);
+}
+
+/* ---------------------------------------------------------------------------
+ * The sample apps in examples/apps, each driven through once
+ * ------------------------------------------------------------------------- */
+
+#ifndef APPS_DIR
+#define APPS_DIR "examples/apps"
+#endif
+
+/** Put a sample app on the card as it would arrive, read from the source tree */
+static void seed_sample(const char* name) {
+	char path[512];
+	snprintf(path, sizeof(path), "%s/%s/main.qd", APPS_DIR, name);
+	FILE* f = fopen(path, "rb");
+	CHECK(f != NULL);
+	if (f == NULL) {
+		return;
+	}
+	static char source[STORE_BYTES + 1];
+	const size_t got = fread(source, 1, STORE_BYTES, f);
+	source[got] = '\0';
+	fclose(f);
+	CHECK(got < STORE_BYTES);
+	seed_app(QDOS_SCOPE_INBOX, name, source);
+}
+
+/** Type a number into a field the way the keypad would, minus sign and all */
+static void answer(qdos_key_event* script, size_t* n, const char* number) {
+	for (const char* p = number; *p; p++) {
+		if (*p == '-') {
+			key(script, n, QDOS_KEY_SUB);
+		} else {
+			digits(script, n, (char[]){*p, '\0'});
+		}
+	}
+	key(script, n, QDOS_KEY_ENTER);
+}
+
+/** Is one row of the page exactly this? */
+static bool page_line(const uint8_t* fb, const char* text) {
+	char row[QDOS_COLS + 1];
+	for (int r = ROW_CONTENT_FIRST_T; r <= ROW_CONTENT_LAST_T; r++) {
+		read_row(fb, r, row, sizeof(row));
+		if (strcmp(row, text) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Does the OUTPUT page on this screen hold the text? */
+static bool output_has(const uint8_t* fb, const char* text) {
+	return page_has(fb, text);
+}
+
+/** quad: x^2 - 3x + 2 has roots 1 and 2 and its vertex at 1.5. */
+static void test_sample_quad(void) {
+	store_reset();
+	seed_sample("quad");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "quad");
+	answer(script, &n, "1");
+	answer(script, &n, "-3");
+	answer(script, &n, "2");
+	const size_t results = n;
+	key(script, &n, QDOS_KEY_CLEAR); // off the results, onto the graph
+	const size_t plotted = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, results, fb, mid);
+	CHECK(output_has(mid, "D = 1"));
+	CHECK(output_has(mid, "X1 = 1"));
+	CHECK(output_has(mid, "X2 = 2"));
+	CHECK(output_has(mid, "VERTEX X = 1.5"));
+
+	run_script_mid(script, n, plotted, fb, mid);
+	CHECK(plot_has_ink(mid));
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+
+	// x^2 + 2x + 5 has no real roots: -1 plus and minus 2i
+	store_reset();
+	seed_sample("quad");
+	n = 0;
+	type_line(script, &n, "quad");
+	answer(script, &n, "1");
+	answer(script, &n, "2");
+	answer(script, &n, "5");
+	const size_t complex_roots = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+	run_script_mid(script, n, complex_roots, fb, mid);
+	CHECK(output_has(mid, "X1 = -1+2i"));
+	CHECK(output_has(mid, "X2 = -1-2i"));
+}
+
+/** area: x^2 from 0 to 3 is 9, and the menu loops until ESC. */
+static void test_sample_area(void) {
+	store_reset();
+	seed_sample("area");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "area");
+	key(script, &n, QDOS_KEY_2); // X^2
+	answer(script, &n, "0");
+	answer(script, &n, "3");
+	const size_t results = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	const size_t plotted = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	const size_t again = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, results, fb, mid);
+	CHECK(output_has(mid, "AREA = 9"));
+	CHECK(output_has(mid, "MEAN = 3"));
+
+	run_script_mid(script, n, plotted, fb, mid);
+	CHECK(plot_has_ink(mid));
+
+	run_script_mid(script, n, again, fb, mid);
+	char row[QDOS_COLS + 1];
+	read_row(mid, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "AREA UNDER") != NULL);
+
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** units: a mile is 1.609344 km, and 100 C is 212 F. */
+static void test_sample_units(void) {
+	store_reset();
+	seed_sample("units");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "units");
+	key(script, &n, QDOS_KEY_1); // LENGTH
+	key(script, &n, QDOS_KEY_8); // MI
+	answer(script, &n, "1");
+	const size_t miles = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_6); // TEMPERATURE
+	key(script, &n, QDOS_KEY_1); // C
+	answer(script, &n, "100");
+	const size_t degrees = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, miles, fb, mid);
+	CHECK(output_has(mid, "1 MI IS"));
+	CHECK(output_has(mid, "1.609344 KM"));
+	CHECK(output_has(mid, "1609.344 M"));
+
+	run_script_mid(script, n, degrees, fb, mid);
+	CHECK(output_has(mid, "212 F"));
+	CHECK(output_has(mid, "373.15 K"));
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** fin: 200000 over 30 years at 5% is 1073.64 a month, and back again to the rate. */
+static void test_sample_fin(void) {
+	store_reset();
+	seed_sample("fin");
+
+	qdos_key_event script[96];
+	size_t n = 0;
+	type_line(script, &n, "fin");
+	key(script, &n, QDOS_KEY_1); // PAYMENT
+	answer(script, &n, "200000");
+	answer(script, &n, "5");
+	answer(script, &n, "30");
+	const size_t payment = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, payment, fb, mid);
+	CHECK(output_has(mid, "PAYMENT   1073.64"));
+	CHECK(output_has(mid, "TOTAL     386511.57"));
+	CHECK(output_has(mid, "INTEREST  186511.57"));
+
+	store_reset();
+	seed_sample("fin");
+	n = 0;
+	type_line(script, &n, "fin");
+	key(script, &n, QDOS_KEY_3); // RATE
+	answer(script, &n, "200000");
+	answer(script, &n, "30");
+	answer(script, &n, "1073.64");
+	const size_t rate = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	run_script_mid(script, n, rate, fb, mid);
+	CHECK(output_has(mid, "RATE %    5"));
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** tri: 3 4 5 is right-angled with area 6, and SSA can have two answers. */
+static void test_sample_tri(void) {
+	store_reset();
+	seed_sample("tri");
+
+	qdos_key_event script[96];
+	size_t n = 0;
+	type_line(script, &n, "tri");
+	key(script, &n, QDOS_KEY_1); // SSS
+	answer(script, &n, "3");
+	answer(script, &n, "4");
+	answer(script, &n, "5");
+	const size_t sss = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, sss, fb, mid);
+	CHECK(output_has(mid, "c 5  C 1.5708")); // radians, the default
+	CHECK(output_has(mid, "AREA 6"));
+
+	// 30 degrees in radians, typed as the calculator would take it
+	store_reset();
+	seed_sample("tri");
+	n = 0;
+	type_line(script, &n, "tri");
+	key(script, &n, QDOS_KEY_4); // SSA
+	answer(script, &n, "6");
+	answer(script, &n, "8");
+	type_partial(script, &n, "pi 6 divide");
+	key(script, &n, QDOS_KEY_ENTER);
+	const size_t ssa = n;
+	for (int i = 0; i < 4; i++) {
+		key(script, &n, QDOS_KEY_DOWN);
+	}
+	const size_t scrolled = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	run_script_mid(script, n, ssa, fb, mid);
+	CHECK(output_has(mid, "c 11.4003  C 1.8883"));
+	CHECK(output_has(mid, "--- OR ---"));
+	run_script_mid(script, n, scrolled, fb, mid);
+	CHECK(output_has(mid, "c 2.4561  C 0.2061"));
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** fit: points on y = 2x + 1 fit exactly, and the plot shows them. */
+static void test_sample_fit(void) {
+	store_reset();
+	seed_sample("fit");
+
+	qdos_key_event script[96];
+	size_t n = 0;
+	type_line(script, &n, "fit");
+	key(script, &n, QDOS_KEY_1); // TYPE THEM
+	answer(script, &n, "1");
+	answer(script, &n, "3");
+	answer(script, &n, "2");
+	answer(script, &n, "5");
+	answer(script, &n, "4");
+	answer(script, &n, "9");
+	key(script, &n, QDOS_KEY_CLEAR); // no fourth x
+	key(script, &n, QDOS_KEY_1);	 // LINEAR
+	const size_t results = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	const size_t plotted = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, results, fb, mid);
+	CHECK(output_has(mid, "Y = AX + B"));
+	CHECK(output_has(mid, "A = 2"));
+	CHECK(output_has(mid, "B = 1"));
+	CHECK(output_has(mid, "R2 = 1"));
+
+	run_script_mid(script, n, plotted, fb, mid);
+	CHECK(plot_has_ink(mid));
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** drill: ten wrong answers score nought, and each says what was right. */
+static void test_sample_drill(void) {
+	store_reset();
+	seed_sample("drill");
+
+	qdos_key_event script[96];
+	size_t n = 0;
+	type_line(script, &n, "drill");
+	key(script, &n, QDOS_KEY_1);
+	const size_t first = n;
+	answer(script, &n, "0");
+	const size_t second = n;
+	for (int i = 1; i < 10; i++) {
+		answer(script, &n, "0");
+	}
+	const size_t results = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	char row[EDIT_COLS_T + 1];
+	run_script_mid(script, n, first, fb, mid);
+	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strchr(row, 'x') != NULL && strchr(row, '=') != NULL);
+
+	run_script_mid(script, n, second, fb, mid);
+	read_row(mid, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strncmp(row, "NO,", 3) == 0);
+
+	run_script_mid(script, n, results, fb, mid);
+	CHECK(output_has(mid, "SCORE 0/10"));
+	CHECK(output_has(mid, "TIME"));
+
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** dice: a throw is drawn, Enter throws again, ESC goes back to the menu. */
+static void test_sample_dice(void) {
+	store_reset();
+	seed_sample("dice");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "dice");
+	key(script, &n, QDOS_KEY_2); // TWO DICE
+	const size_t thrown = n;
+	key(script, &n, QDOS_KEY_ENTER);
+	const size_t again = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	const size_t menu = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	char row[EDIT_COLS_T + 1];
+	run_script_mid(script, n, thrown, fb, mid);
+	read_row(mid, 0, row, sizeof(row));
+	CHECK(strcmp(row, "TWO DICE") == 0);
+	CHECK(plot_has_ink(mid));
+	read_small(mid, 222, row, sizeof(row));
+	CHECK(strstr(row, "ENTER ROLLS AGAIN") != NULL);
+
+	// Two throws remembered along the bottom
+	run_script_mid(script, n, again, fb, mid);
+	read_small(mid, 204, row, sizeof(row));
+	CHECK(strlen(row) >= 3 && strchr(row, ' ') != NULL);
+
+	run_script_mid(script, n, menu, fb, mid);
+	read_row(mid, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "ROLL") != NULL);
+
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** clock: the stopwatch starts and stops, and ESC goes back to the menu. */
+static void test_sample_clock(void) {
+	store_reset();
+	seed_sample("clock");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "clock");
+	key(script, &n, QDOS_KEY_1); // STOPWATCH
+	const size_t shown = n;
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_2); // TIMER
+	answer(script, &n, "1");
+	const size_t timer = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	char row[EDIT_COLS_T + 1];
+	run_script_mid(script, n, shown, fb, mid);
+	read_row(mid, 0, row, sizeof(row));
+	CHECK(strcmp(row, "STOPWATCH") == 0);
+	read_small(mid, 222, row, sizeof(row));
+	CHECK(strstr(row, "ENTER START/STOP") != NULL);
+
+	run_script_mid(script, n, timer, fb, mid);
+	read_row(mid, 0, row, sizeof(row));
+	CHECK(strcmp(row, "TIMER") == 0);
+
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** life: a random start is drawn, ENTER steps a generation, ESC leaves. */
+static void test_sample_life(void) {
+	store_reset();
+	seed_sample("life");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "life");
+	const size_t started = n;
+	key(script, &n, QDOS_KEY_ENTER);
+	const size_t stepped = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	char row[EDIT_COLS_T + 1];
+	run_script_mid(script, n, started, fb, mid);
+	CHECK(plot_has_ink(mid));
+	read_small(mid, 0, row, sizeof(row));
+	CHECK(strstr(row, "G 0") != NULL);
+
+	run_script_mid(script, n, stepped, fb, mid);
+	read_small(mid, 0, row, sizeof(row));
+	CHECK(strstr(row, "G 1") != NULL);
+
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** life's rules through its own step: a blinker turns, across the wrapping edge too. */
+static void test_sample_life_rules(void) {
+	char path[512];
+	snprintf(path, sizeof(path), "%s/life/main.qd", APPS_DIR);
+	FILE* f = fopen(path, "rb");
+	CHECK(f != NULL);
+	if (f == NULL) {
+		return;
+	}
+	static char source[STORE_BYTES + 1];
+	const size_t got = fread(source, 1, STORE_BYTES - 600, f);
+	source[got] = '\0';
+	fclose(f);
+
+	// Its main renamed out of the way, and one that checks instead
+	char* entry = strstr(source, "fn main() {");
+	CHECK(entry != NULL);
+	if (entry == NULL) {
+		return;
+	}
+	memcpy(entry, "fn play() {", 11);
+	strcat(source, "\nfn blank( -- g:[]i64) { [] -> g 0 cols rows * 1 for i { g 0 append drop } g }\n"
+				   "fn live(g:[]i64 x:i64 y:i64 -- ) { g y cols * x + 1 set }\n"
+				   "fn main( -- ) {\n"
+				   "\tblank -> g\n\tg 5 5 live g 6 5 live g 7 5 live\n\tg step -> g\n"
+				   "\tg 6 4 at g 6 5 at g 6 6 at g 5 5 at g 7 5 at print print print print print nl\n"
+				   "\tblank -> h\n\th 39 0 live h 0 0 live h 1 0 live\n\th step -> h\n"
+				   "\th 0 23 at h 0 0 at h 0 1 at h 39 0 at print print print print nl\n"
+				   "}\n");
+
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "lifecheck", source);
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "lifecheck");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Printed last first: the old ends die, the new ends are born
+	CHECK(page_line(fb, "00111"));
+	CHECK(page_line(fb, "0111"));
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** ui::input takes text as typed; ui::str and ui::cat show numbers as the calculator does. */
+static void test_ui_text_words(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g",
+			"fn main( -- ) { \"NAME?\" ui::input drop \"HI \" swap ui::cat print nl 2.5 ui::str print nl "
+			"\"N=\" 7 ui::cat print nl 1.0 3.0 divide 5 ui::put 5 ui::get ui::str print nl }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	type_partial(script, &n, "ada 2");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(page_line(fb, "HI ada 2"));
+	CHECK(page_line(fb, "2.5"));
+	CHECK(page_line(fb, "N=7"));
+	CHECK(page_line(fb, "0.3333333333"));
+}
+
+/** ui::keyname names keypad keys and typed characters alike. */
+static void test_ui_keyname(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g",
+			"fn main( -- ) { ui::wait ui::keyname print \" \" print ui::wait ui::keyname print \" \" print "
+			"ui::wait ui::keyname print nl }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_7);
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, 'q'};
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strcmp(row, "ENTER 7 q") == 0);
+}
+
+/* ---------------------------------------------------------------------------
+ * Complex numbers
+ * ------------------------------------------------------------------------- */
+
+/** What the top of the stack reads after a line typed in the given complex mode */
+static void complex_top(int mode, const char* line, char* row, size_t cap) {
+	store_reset();
+	seed_setting("settings.complex", mode);
+
+	qdos_key_event script[96];
+	size_t n = 0;
+	type_line(script, &n, line);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, cap);
+}
+
+static void complex_error(int mode, const char* line, char* row, size_t cap) {
+	store_reset();
+	seed_setting("settings.complex", mode);
+
+	qdos_key_event script[96];
+	size_t n = 0;
+	type_line(script, &n, line);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	read_error(fb, row, cap);
+}
+
+/** In REAL a negative has no square root; in a+bi it has an imaginary one. */
+static void test_complex_mode_decides_sqrt(void) {
+	char row[EDIT_COLS_T + 1];
+	complex_error(0, "-4 sqrt", row, sizeof(row));
+	CHECK(strstr(row, "NEEDS 0 OR MORE") != NULL);
+
+	complex_top(1, "-4 sqrt", row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL && strstr(row, "2i") != NULL);
+
+	complex_top(1, "-1 ln", row, sizeof(row));
+	CHECK(strstr(row, "3.141592654i") != NULL);
+
+	// The principal cube root, as a TI gives it
+	complex_top(1, "-8 1 3 divide pow", row, sizeof(row));
+	CHECK(strstr(row, "1+1.732050808i") != NULL);
+}
+
+/** Arithmetic, and an answer with nothing imaginary left is a real again. */
+static void test_complex_arithmetic(void) {
+	char row[EDIT_COLS_T + 1];
+	complex_top(0, "3 4 complex 1 2 complex times", row, sizeof(row));
+	CHECK(strstr(row, "-5+10i") != NULL);
+
+	complex_top(0, "1 2 complex 3 4 complex divide", row, sizeof(row));
+	CHECK(strstr(row, "0.44+0.08i") != NULL);
+
+	complex_top(0, "3 4 complex dup conj minus", row, sizeof(row));
+	CHECK(strstr(row, "8i") != NULL);
+
+	complex_top(0, "i sq", row, sizeof(row));
+	CHECK(strstr(row, "-1") != NULL && strchr(row, 'i') == NULL);
+
+	complex_top(0, "3 4 complex abs", row, sizeof(row));
+	CHECK(strstr(row, "5") != NULL && strchr(row, 'i') == NULL);
+
+	// The keypad's sign key negates one; Quadrate's own neg does not know them
+	store_reset();
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_I);
+	key(script, &n, QDOS_KEY_NEG);
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "-i") != NULL);
+
+	complex_error(0, "i sin", row, sizeof(row));
+	CHECK(strstr(row, "NOT FOR COMPLEX") != NULL);
+
+	// Quadrate's own operators do not know them; the calculator's words do
+	complex_error(0, "i i +", row, sizeof(row));
+	CHECK(row[0] != '\0');
+}
+
+/** Polar shows r and the angle, in the angle mode; polar and angle go the other way. */
+static void test_complex_polar(void) {
+	char row[EDIT_COLS_T + 1];
+	complex_top(2, "3 4 complex", row, sizeof(row));
+	CHECK(strstr(row, "5e^(0.927295218i)") != NULL);
+
+	store_reset();
+	seed_setting("settings.complex", 2);
+	seed_setting("settings.angle", 1);
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "2 90 polar");
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "2e^(90i)") != NULL);
+
+	complex_top(0, "1 1 complex angle", row, sizeof(row));
+	CHECK(strstr(row, "0.785398") != NULL);
+}
+
+/** From the keypad: 3 ENTER 4 CPLX is 3+4i, and CPLX again takes it apart. */
+static void test_complex_from_the_keypad(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "4");
+	key(script, &n, QDOS_KEY_COMPLEX);
+	const size_t made = n;
+	key(script, &n, QDOS_KEY_I);
+	key(script, &n, QDOS_KEY_ADD);
+	const size_t added = n;
+	key(script, &n, QDOS_KEY_COMPLEX);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	char row[QDOS_COLS + 1];
+	run_script_mid(script, n, made, fb, mid);
+	read_row(mid, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3+4i") != NULL);
+
+	run_script_mid(script, n, added, fb, mid);
+	read_row(mid, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3+5i") != NULL);
+
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "5") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "3") != NULL);
+}
+
+/** A register, undo and a power cycle all keep a complex number whole. */
+static void test_complex_is_kept(void) {
+	store_reset();
+
+	qdos_key_event first[64];
+	size_t n = 0;
+	type_line(first, &n, "3 4 complex dup 1 sto");
+	key(first, &n, QDOS_KEY_CLEAR); // leave line mode
+	key(first, &n, QDOS_KEY_ABS);
+	key(first, &n, QDOS_KEY_UNDO);
+	key(first, &n, QDOS_KEY_POWER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(first, n, fb);
+
+	qdos_key_event second[32];
+	n = 0;
+	type_line(second, &n, "1 rcl");
+	run_script(second, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3+4i") != NULL); // from the register
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(strstr(row, "3+4i") != NULL); // undone, then saved with the session
+}
+
+/**
+ * Run a script, then let the app waiting at the end of it be stopped, and
+ * return the last screen the app drew rather than the shell's one after it.
+ */
+static void run_script_app_frame(const qdos_key_event* script, size_t count, uint8_t* fb_out) {
+	stub_state st;
+	memset(&st, 0, sizeof(st));
+	st.script = script;
+	st.count = count;
+	st.wait_budget = count + 4;
+
+	qdos_hal hal;
+	stub_hal(&hal, &st);
+	qdos_shell* sh = qdos_shell_create(&hal);
+	CHECK(sh != NULL);
+	qdos_shell_run(sh);
+	qdos_shell_destroy(sh);
+
+	memcpy(fb_out, st.prev_fb, (size_t)QDOS_SCREEN_W * QDOS_SCREEN_H);
+}
+
+/** mandel: the escape counts for points known to stay and to leave. */
+static void test_sample_mandel_escape(void) {
+	char path[512];
+	snprintf(path, sizeof(path), "%s/mandel/main.qd", APPS_DIR);
+	FILE* f = fopen(path, "rb");
+	CHECK(f != NULL);
+	if (f == NULL) {
+		return;
+	}
+	static char source[STORE_BYTES + 1];
+	const size_t got = fread(source, 1, STORE_BYTES - 400, f);
+	source[got] = '\0';
+	fclose(f);
+
+	char* entry = strstr(source, "fn main() {");
+	CHECK(entry != NULL);
+	if (entry == NULL) {
+		return;
+	}
+	memcpy(entry, "fn play() {", 11);
+	strcat(source, "\nfn main() {\n\t0.0 0.0 32 escape print \" \" print 1.0 0.0 32 escape print \" \" print\n"
+				   "\t2.0 0.0 32 escape print \" \" print -1.0 0.0 32 escape print nl\n}\n");
+
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "mandelcheck", source);
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "mandelcheck");
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strcmp(row, "32 3 2 32") == 0);
+}
+
+/** mandel: the whole set is drawn, with its key along the bottom. */
+static void test_sample_mandel_draws(void) {
+	store_reset();
+	seed_sample("mandel");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "mandel");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_app_frame(script, n, fb);
+
+	// Solid in the middle of the main cardioid, blank far outside it
+	CHECK(fb[120 * QDOS_SCREEN_W + 200] < 0x80);
+	CHECK(fb[4 * QDOS_SCREEN_W + 396] >= 0x80);
+	CHECK(plot_has_ink(fb));
+
+	char row[EDIT_COLS_T + 1];
+	read_small(fb, 224, row, sizeof(row));
+	CHECK(strstr(row, "ZOOM 1X") != NULL);
+}
+
+/** A loop that never looks at the keypad is still stopped by the step limit. */
+static void test_a_blind_loop_in_an_app_is_stopped(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "spin", "fn main() { loop { } }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	type_line(script, &n, "spin");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "execution limit") != NULL);
+}
+
+/** mandel: a key part-way through a drawing is acted on, and ESC leaves. */
+static void test_sample_mandel_zooms(void) {
+	store_reset();
+	seed_sample("mandel");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "mandel");
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(row[0] == ':'); // back at the prompt it was typed at
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -6154,5 +7689,55 @@ int main(void) {
 	test_a_module_arriving_asks_for_a_restart();
 	test_the_card_is_not_read_while_it_is_shared();
 	test_an_open_list_takes_what_arrives();
+	test_new_from_apps();
+	test_new_refuses_a_taken_name();
+	test_enter_runs_from_apps();
+	test_rename_a_program();
+	test_rename_refuses_a_shipped_program();
+	test_copy_an_app();
+	test_drop_forgets_the_word();
+	test_delete_from_opts_asks_twice();
+	test_drop_an_override_reverts();
+	test_info_sizes_a_program();
+	test_the_keypad_types_in_the_editor();
+	test_run_from_the_editor();
+	test_save_stays_in_the_editor();
+	test_undo_in_the_editor();
+	test_the_editor_indents();
+	test_check_goes_to_the_line();
+	test_saving_an_app_declares_nothing();
+	test_an_apps_error_is_shown();
+	test_the_readme_ui_example_runs();
+	test_calc_words_see_an_apps_own_words();
+	test_ui_plot_waits_for_escape();
+	test_graph_in_an_app_waits();
+	test_power_breaks_a_plot();
+	test_ui_window_checks_its_edges();
+	test_ui_ask_takes_a_number();
+	test_ui_ask_can_be_escaped();
+	test_ui_menu_picks();
+	test_ui_wait_waits_for_a_key();
+	test_complex_mode_decides_sqrt();
+	test_complex_arithmetic();
+	test_complex_polar();
+	test_complex_from_the_keypad();
+	test_complex_is_kept();
+	test_ui_text_words();
+	test_ui_keyname();
+	test_sample_quad();
+	test_sample_area();
+	test_sample_units();
+	test_sample_fin();
+	test_sample_tri();
+	test_sample_fit();
+	test_sample_drill();
+	test_sample_dice();
+	test_sample_clock();
+	test_sample_life();
+	test_sample_life_rules();
+	test_sample_mandel_escape();
+	test_sample_mandel_draws();
+	test_sample_mandel_zooms();
+	test_a_blind_loop_in_an_app_is_stopped();
 	return check_report("shell");
 }

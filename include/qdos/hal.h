@@ -105,6 +105,9 @@ struct qdos_hal {
 	/** @brief No scope: the system store cannot be written, by construction */
 	qdos_store_result (*store_write)(qdos_hal* hal, const char* name, const void* buf, size_t len);
 
+	/** @brief Delete a user entry, or an emptied folder. NULL where the backend cannot. */
+	qdos_store_result (*store_remove)(qdos_hal* hal, const char* name);
+
 	/**
 	 * @brief Unordered, and may be NULL
 	 *

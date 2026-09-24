@@ -11,6 +11,7 @@
 #include "keypad_ui.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -696,6 +697,20 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
+static qdos_store_result sim_store_remove(qdos_hal* hal, const char* name) {
+	(void)hal;
+
+	char path[512];
+	if (!store_path(dir_for(QDOS_SCOPE_USER), name, path, sizeof(path))) {
+		return QDOS_STORE_IO_ERROR;
+	}
+
+	if (remove(path) == 0) {
+		return QDOS_STORE_OK;
+	}
+	return (errno == ENOENT) ? QDOS_STORE_NOT_FOUND : QDOS_STORE_IO_ERROR;
+}
+
 static bool sim_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	if (!scope_is_reachable((sim_state*)hal->impl, scope)) {
 		return false;
@@ -783,6 +798,7 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->wait = sim_wait;
 	hal->store_read = sim_store_read;
 	hal->store_write = sim_store_write;
+	hal->store_remove = sim_store_remove;
 	hal->store_list = sim_store_list;
 	hal->store_path = sim_store_path;
 	hal->usb_export = sim_usb_export;

@@ -150,6 +150,62 @@ static void test_dirty_follows_the_edits(void) {
 	CHECK(ed.dirty);
 }
 
+static void type(qdos_editor* ed, const char* text) {
+	for (const char* c = text; *c; c++) {
+		qdos_editor_insert(ed, *c);
+	}
+}
+
+static void test_undo_takes_back_a_run_and_redoes_it(void) {
+	qdos_editor ed;
+	qdos_editor_open(&ed, "u", "");
+	CHECK(!qdos_editor_undo(&ed));
+
+	type(&ed, "abc");
+	qdos_editor_backspace(&ed);
+	CHECK(strcmp(ed.text, "ab") == 0);
+
+	// The deletes are one step, the typing before them another
+	CHECK(qdos_editor_undo(&ed));
+	CHECK(strcmp(ed.text, "abc") == 0);
+	CHECK(ed.cursor == 3);
+	CHECK(qdos_editor_undo(&ed));
+	CHECK(strcmp(ed.text, "ab") == 0);
+}
+
+static void test_newline_keeps_the_indent(void) {
+	qdos_editor ed;
+	qdos_editor_open(&ed, "n", "");
+	type(&ed, "\tx {");
+	qdos_editor_newline(&ed);
+	type(&ed, "y");
+	qdos_editor_newline(&ed);
+	type(&ed, "}");
+
+	expect_line(&ed, 0, "\tx {");
+	expect_line(&ed, 1, "\t\ty");
+	expect_line(&ed, 2, "\t}");
+
+	// A brace after text on the line is only a brace
+	type(&ed, " }");
+	expect_line(&ed, 2, "\t} }");
+}
+
+static void test_goto_lands_on_the_first_word(void) {
+	qdos_editor ed;
+	qdos_editor_open(&ed, "g", "a\n\t  b\nc");
+
+	qdos_editor_goto(&ed, 1);
+	size_t line, col;
+	qdos_editor_where(&ed, &line, &col);
+	CHECK(line == 1 && col == 3);
+
+	// Past the end is the last line
+	qdos_editor_goto(&ed, 9);
+	qdos_editor_where(&ed, &line, &col);
+	CHECK(line == 2);
+}
+
 int main(void) {
 	test_open_existing();
 	test_open_new_has_a_template();
@@ -159,5 +215,8 @@ int main(void) {
 	test_movement_stops_at_the_ends();
 	test_full_buffer_is_refused();
 	test_dirty_follows_the_edits();
+	test_undo_takes_back_a_run_and_redoes_it();
+	test_newline_keeps_the_indent();
+	test_goto_lands_on_the_first_word();
 	return check_report("editor");
 }

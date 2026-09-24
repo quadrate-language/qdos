@@ -31,7 +31,8 @@ test('console', test_console)
 test_shell = executable('test_shell', 'test_shell.c',
 		include_directories: qdos_inc,
 		dependencies: [qdos_core_dep],
-		c_args: ['-DMODULE_DIR="' + meson.current_build_dir() + '"'],
+		c_args: ['-DMODULE_DIR="' + meson.current_build_dir() + '"',
+				'-DAPPS_DIR="' + meson.project_source_root() / 'examples/apps' + '"'],
 		link_language: 'cpp')
 test('shell', test_shell, depends: module_deps)
 

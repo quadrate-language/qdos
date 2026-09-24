@@ -9,6 +9,7 @@
 #include <quadrate/interp/interp.h>
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +36,9 @@ const char* qdos_guarded_error(qd_interp* interp);
  * put it on the panel instead.
  */
 const char* qdos_guarded_output(void);
+
+/** @brief What the evaluation running now has printed so far, taken so it is not given twice */
+size_t qdos_guarded_take(char* out, size_t cap);
 
 #ifdef __cplusplus
 }

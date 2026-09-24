@@ -5,6 +5,8 @@
 
 #include "mathwords.h"
 
+#include "complex.h"
+
 #include <quadrate/math/math.h>
 #include <quadrate/rt/runtime.h>
 #include <quadrate/rt/stack.h>
@@ -502,6 +504,11 @@ static int guarded(qd_context* ctx, void* user) {
 	const size_t arity = (strcmp(WORDS[i].signature, UNARY) == 0)	 ? 1
 						 : (strcmp(WORDS[i].signature, BINARY) == 0) ? 2
 																	 : 0;
+	int answered;
+	if (qdos_cpx_apply(ctx, WORDS[i].name, arity, &answered)) {
+		return answered;
+	}
+
 	const size_t depth = qd_stack_size(ctx->st);
 	qd_stack_element_t args[2];
 	bool numbers = g_finite_only && depth >= arity;

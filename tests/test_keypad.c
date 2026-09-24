@@ -22,7 +22,7 @@
 #include <unistd.h>
 
 /**
- * The key codes do not move. They are what `qdos::key` gives a Quadrate
+ * The key codes do not move. They are what `ui::key` gives a Quadrate
  * program and what a native module compares against, and neither is rebuilt
  * with QDOS: DOOM's controls are these numbers written out. A new key goes at
  * the end of the enum, never in the middle.

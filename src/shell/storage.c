@@ -8,6 +8,7 @@
 
 #include "storage.h"
 
+#include "complex.h"
 #include "guarded.h"
 
 #include <quadrate/rt/qd_string.h>
@@ -88,6 +89,17 @@ bool qdos_value_encode(const qdos_value* value, uint8_t* out, size_t* len) {
 		return true;
 	}
 
+	// The imaginary part after the header, where a string's bytes would be
+	case QDOS_VALUE_COMPLEX: {
+		uint64_t bits = 0;
+		memcpy(&bits, &value->f, sizeof(bits));
+		put_u64(&out[PAYLOAD_OFFSET], bits);
+		memcpy(&bits, &value->im, sizeof(bits));
+		put_u64(&out[HEADER_SIZE], bits);
+		*len = HEADER_SIZE + 8;
+		return true;
+	}
+
 	case QDOS_VALUE_STRING: {
 		const size_t length = strnlen(value->s, QDOS_VALUE_STRING_MAX - 1);
 		put_u64(&out[PAYLOAD_OFFSET], (uint64_t)length);
@@ -124,6 +136,17 @@ bool qdos_value_decode(const uint8_t* in, size_t len, qdos_value* value) {
 		value->type = QDOS_VALUE_FLOAT;
 		memcpy(&value->f, &payload, sizeof(value->f));
 		return true;
+
+	case QDOS_VALUE_COMPLEX: {
+		if (len < HEADER_SIZE + 8) {
+			return false;
+		}
+		const uint64_t im = get_u64(&in[HEADER_SIZE]);
+		value->type = QDOS_VALUE_COMPLEX;
+		memcpy(&value->f, &payload, sizeof(value->f));
+		memcpy(&value->im, &im, sizeof(value->im));
+		return true;
+	}
 
 	case QDOS_VALUE_STRING: {
 		// A length that overruns the record means the store is damaged
@@ -340,13 +363,213 @@ qdos_store_result qdos_program_load(qdos_hal* hal, qdos_store_scope scope, const
 	return len > 0 ? QDOS_STORE_OK : QDOS_STORE_NOT_FOUND;
 }
 
+/** @brief As many files as one app folder is copied or removed with */
+#define APP_FILES_MAX 32
+
+/** @brief The largest file a copy will carry, a module being the big one */
+#define COPY_MAX (16u * 1024u * 1024u)
+
+typedef struct {
+	char leaf[APP_FILES_MAX][QDOS_PROGRAM_NAME_MAX];
+	size_t count;
+} leaf_walk;
+
+static bool collect_leaf(const char* entry, void* user) {
+	leaf_walk* w = (leaf_walk*)user;
+
+	const size_t len = strlen(entry);
+	if (len == 0 || len >= QDOS_PROGRAM_NAME_MAX || entry[len - 1] == QDOS_STORE_DIR_MARK) {
+		return true;
+	}
+	for (size_t i = 0; i < w->count; i++) {
+		if (strcmp(w->leaf[i], entry) == 0) {
+			return true;
+		}
+	}
+	if (w->count >= APP_FILES_MAX) {
+		return false;
+	}
+
+	memcpy(w->leaf[w->count++], entry, len + 1);
+	return true;
+}
+
+/** @brief The user's copy of a folder, every file and then the folder */
+static qdos_store_result remove_folder(qdos_hal* hal, const char* name) {
+	leaf_walk walk = {.count = 0};
+	if (hal->store_list != NULL) {
+		hal->store_list(hal, QDOS_SCOPE_USER, name, collect_leaf, &walk);
+	}
+
+	for (size_t i = 0; i < walk.count; i++) {
+		char key[QDOS_PROGRAM_NAME_MAX * 2];
+		if (qdos_app_key(name, walk.leaf[i], key, sizeof(key))) {
+			hal->store_remove(hal, key);
+		}
+	}
+	return hal->store_remove(hal, name);
+}
+
 qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name) {
 	char key[QDOS_PROGRAM_NAME_MAX * 2];
 	if (!source_key(hal, name, key, sizeof(key))) {
 		return QDOS_STORE_IO_ERROR;
 	}
 
-	return hal->store_write(hal, key, "", 0);
+	if (hal->store_remove == NULL) {
+		return hal->store_write(hal, key, "", 0);
+	}
+
+	// Over a read-only app only the source is yours; whatever else it keeps stays
+	if (!qdos_app_exists(hal, name) || qdos_program_is_readonly(hal, name)) {
+		return hal->store_remove(hal, key);
+	}
+	return remove_folder(hal, name);
+}
+
+static bool word_char(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+bool qdos_source_rename(const char* src, const char* from, const char* to, char* out, size_t cap) {
+	const size_t from_len = strlen(from);
+	const size_t to_len = strlen(to);
+	size_t n = 0;
+
+	for (const char* p = src; *p;) {
+		const char* run = p;
+		const char* put = p;
+
+		if (p[0] == '/' && p[1] == '/') {
+			while (*p && *p != '\n') {
+				p++;
+			}
+		} else if (p[0] == '/' && p[1] == '*') {
+			p += 2;
+			while (*p && !(p[0] == '*' && p[1] == '/')) {
+				p++;
+			}
+			p += (*p) ? 2 : 0;
+		} else if (*p == '"') {
+			p++;
+			while (*p && *p != '"') {
+				p += (p[0] == '\\' && p[1]) ? 2 : 1;
+			}
+			p += (*p) ? 1 : 0;
+		} else if (word_char(*p)) {
+			while (word_char(*p)) {
+				p++;
+			}
+			// Another module's scope, or a name inside one, is not this word
+			const bool scoped = (run - src >= 2 && run[-1] == ':' && run[-2] == ':') || (p[0] == ':' && p[1] == ':');
+			if (!scoped && (size_t)(p - run) == from_len && strncmp(run, from, from_len) == 0) {
+				put = to;
+			}
+		} else {
+			p++;
+		}
+
+		const size_t put_len = (put == to) ? to_len : (size_t)(p - run);
+		if (n + put_len >= cap) {
+			return false;
+		}
+		memcpy(out + n, put, put_len);
+		n += put_len;
+	}
+
+	out[n] = '\0';
+	return true;
+}
+
+static const qdos_store_scope NEAREST[] = {QDOS_SCOPE_USER, QDOS_SCOPE_INBOX, QDOS_SCOPE_SYSTEM};
+
+/** @brief A whole entry however big, nearest scope first; the caller frees it */
+static void* read_whole(qdos_hal* hal, const char* key, size_t* len) {
+	for (size_t s = 0; s < sizeof(NEAREST) / sizeof(*NEAREST); s++) {
+		for (size_t cap = QDOS_PROGRAM_MAX; cap <= COPY_MAX; cap *= 2) {
+			void* buf = malloc(cap);
+			if (buf == NULL) {
+				return NULL;
+			}
+
+			const qdos_store_result r = hal->store_read(hal, NEAREST[s], key, buf, cap, len);
+			// Empty is an erased placeholder, so a scope further out may hold it
+			if (r == QDOS_STORE_OK && *len > 0) {
+				return buf;
+			}
+			free(buf);
+			if (r != QDOS_STORE_TOO_BIG) {
+				break;
+			}
+		}
+	}
+	return NULL;
+}
+
+static qdos_store_result copy_app(qdos_hal* hal, const char* from, const char* to) {
+	leaf_walk walk = {.count = 0};
+	for (int scope = 0; scope < QDOS_SCOPE__COUNT; scope++) {
+		hal->store_list(hal, (qdos_store_scope)scope, from, collect_leaf, &walk);
+	}
+
+	qdos_store_result result = QDOS_STORE_OK;
+	for (size_t i = 0; i < walk.count && result == QDOS_STORE_OK; i++) {
+		char src[QDOS_PROGRAM_NAME_MAX * 2];
+		char dst[QDOS_PROGRAM_NAME_MAX * 2];
+		if (!qdos_app_key(from, walk.leaf[i], src, sizeof(src)) || !qdos_app_key(to, walk.leaf[i], dst, sizeof(dst))) {
+			result = QDOS_STORE_IO_ERROR;
+			break;
+		}
+
+		size_t len = 0;
+		void* data = read_whole(hal, src, &len);
+		if (data == NULL) {
+			continue;
+		}
+		result = hal->store_write(hal, dst, data, len);
+		free(data);
+	}
+
+	if (result == QDOS_STORE_OK && !qdos_app_exists(hal, to)) {
+		result = QDOS_STORE_IO_ERROR;
+	}
+	if (result != QDOS_STORE_OK && hal->store_remove != NULL) {
+		remove_folder(hal, to);
+	}
+	return result;
+}
+
+qdos_store_result qdos_program_copy(qdos_hal* hal, const char* from, const char* to) {
+	if (!valid_program_name(to) || hal->store_list == NULL) {
+		return QDOS_STORE_IO_ERROR;
+	}
+	if (qdos_app_exists(hal, from)) {
+		return copy_app(hal, from, to);
+	}
+
+	char source[QDOS_PROGRAM_MAX];
+	bool found = false;
+	for (size_t s = 0; s < sizeof(NEAREST) / sizeof(*NEAREST) && !found; s++) {
+		found = qdos_program_load(hal, NEAREST[s], from, source, sizeof(source)) == QDOS_STORE_OK;
+	}
+	if (!found) {
+		return QDOS_STORE_NOT_FOUND;
+	}
+
+	// A loose program declares the word it is named after, so the name inside changes too
+	char renamed[QDOS_PROGRAM_MAX];
+	char key[QDOS_PROGRAM_NAME_MAX * 2];
+	if (!qdos_source_rename(source, from, to, renamed, sizeof(renamed))) {
+		return QDOS_STORE_TOO_BIG;
+	}
+	if (!qdos_program_key(to, key, sizeof(key))) {
+		return QDOS_STORE_IO_ERROR;
+	}
+	return hal->store_write(hal, key, renamed, strlen(renamed));
+}
+
+bool qdos_program_name_ok(const char* name) {
+	return valid_program_name(name) && !(name[0] >= '0' && name[0] <= '9');
 }
 
 typedef struct {
@@ -576,6 +799,10 @@ static bool session_encode(const qd_stack_element_t* from, qdos_value* value) {
 		return true;
 	}
 	case QD_STACK_TYPE_PTR:
+		if (qdos_cpx_of(from, &value->f, &value->im)) {
+			value->type = QDOS_VALUE_COMPLEX;
+			return true;
+		}
 		return false;
 	}
 	return false;
@@ -685,6 +912,9 @@ qdos_store_result qdos_storage_restore_session(qdos_hal* hal, qd_interp* interp)
 			break;
 		case QDOS_VALUE_STRING:
 			qd_push_s(ctx, value.s);
+			break;
+		case QDOS_VALUE_COMPLEX:
+			qdos_cpx_push(ctx, value.f, value.im);
 			break;
 		case QDOS_VALUE_EMPTY:
 			// A session written by firmware that stored a placeholder where a

@@ -692,6 +692,37 @@ static void test_restoring_drops_what_a_program_pushed(void) {
 	qd_interp_destroy(interp);
 }
 
+static void test_rename_changes_only_the_word(void) {
+	char out[256];
+	CHECK(qdos_source_rename("// old here\nfn old(x:i64 -- r:i64) { x old_ \"old\" m::old old::f /* old */ old }",
+			"old", "neu", out, sizeof(out)));
+	CHECK(strcmp(out, "// old here\nfn neu(x:i64 -- r:i64) { x old_ \"old\" m::old old::f /* old */ neu }") == 0);
+
+	// Too long for the buffer is refused rather than cut
+	CHECK(!qdos_source_rename("fn a( -- ) { }", "a", "aaaaaaaaaaaaaaaa", out, 16));
+}
+
+static void test_copy_renames_a_loose_program(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+	seed_system("tri", "fn tri(x:i64 -- r:i64) { x 3 * }");
+
+	CHECK(qdos_program_copy(&hal, "tri", "quad") == QDOS_STORE_OK);
+
+	char buf[QDOS_PROGRAM_MAX];
+	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "quad", buf, sizeof(buf)) == QDOS_STORE_OK);
+	CHECK(strcmp(buf, "fn quad(x:i64 -- r:i64) { x 3 * }") == 0);
+	CHECK(qdos_program_copy(&hal, "missing", "other") == QDOS_STORE_NOT_FOUND);
+}
+
+static void test_program_names(void) {
+	CHECK(qdos_program_name_ok("sq2"));
+	CHECK(qdos_program_name_ok("_x"));
+	CHECK(!qdos_program_name_ok("2x"));
+	CHECK(!qdos_program_name_ok("a b"));
+	CHECK(!qdos_program_name_ok(""));
+}
+
 int main(void) {
 	test_encode_decode_roundtrip();
 	test_encoding_is_explicit();
@@ -720,5 +751,8 @@ int main(void) {
 	test_gather_marks_all_three_origins();
 	test_restoring_keeps_what_is_on_the_stack();
 	test_restoring_drops_what_a_program_pushed();
+	test_rename_changes_only_the_word();
+	test_copy_renames_a_loose_program();
+	test_program_names();
 	return check_report("storage");
 }

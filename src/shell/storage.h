@@ -24,13 +24,15 @@ typedef enum {
 	QDOS_VALUE_EMPTY = 0,
 	QDOS_VALUE_INT = 1,
 	QDOS_VALUE_FLOAT = 2,
-	QDOS_VALUE_STRING = 3
+	QDOS_VALUE_STRING = 3,
+	QDOS_VALUE_COMPLEX = 4 ///< f is the real part, im the imaginary one
 } qdos_value_type;
 
 typedef struct {
 	qdos_value_type type;
 	int64_t i;
 	double f;
+	double im;
 	char s[QDOS_VALUE_STRING_MAX];
 } qdos_value;
 
@@ -91,7 +93,22 @@ qdos_store_result qdos_program_save(qdos_hal* hal, const char* name, const char*
 /** @brief NOT_FOUND if absent or erased */
 qdos_store_result qdos_program_load(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap);
 
+/** @brief Delete the user's copy, and an app's whole folder with it */
 qdos_store_result qdos_program_erase(qdos_hal* hal, const char* name);
+
+/**
+ * @brief Copy a program into the user store under a new name
+ *
+ * An app is copied with every file in its folder. A loose program declares the
+ * word it is named after, so that name is changed inside it as well.
+ */
+qdos_store_result qdos_program_copy(qdos_hal* hal, const char* from, const char* to);
+
+/** @brief Every whole-word @p from outside strings and comments becomes @p to */
+bool qdos_source_rename(const char* src, const char* from, const char* to, char* out, size_t cap);
+
+/** @brief Whether a new program may be called this: a filename and a word */
+bool qdos_program_name_ok(const char* name);
 
 /**
  * @brief Declare the stored programs of one scope into @p interp

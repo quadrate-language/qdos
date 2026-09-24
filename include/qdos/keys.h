@@ -99,7 +99,7 @@ typedef enum {
 
 	/*
 	 * Added since, and only ever added here. These numbers are what
-	 * `qdos::key` hands a Quadrate program and what a native module compares
+	 * `ui::key` hands a Quadrate program and what a native module compares
 	 * against, and neither is rebuilt when QDOS is: a key put in the middle
 	 * renumbers every one after it, and DOOM's ESC becomes something else.
 	 */
@@ -132,6 +132,10 @@ typedef enum {
 	QDOS_KEY_MODE,		 ///< Between the calculator and typing a line
 	QDOS_KEY_PI,		 ///< pi, onto the stack or into the line
 	QDOS_KEY_E,			 ///< e, likewise
+	QDOS_KEY_NEW,		 ///< Start a program, asking for its name
+	QDOS_KEY_RUN,		 ///< Run the program in the editor
+	QDOS_KEY_COMPLEX,	 ///< Two reals into one complex number, or one back into two
+	QDOS_KEY_I,			 ///< i, the imaginary unit
 
 	QDOS_KEY__COUNT
 } qdos_key;

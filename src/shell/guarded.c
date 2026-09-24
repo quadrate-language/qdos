@@ -69,6 +69,22 @@ const char* qdos_guarded_output(void) {
 	return g_output;
 }
 
+size_t qdos_guarded_take(char* out, size_t cap) {
+	if (cap == 0) {
+		return 0;
+	}
+	out[0] = '\0';
+	if (g_pipe[0] < 0) {
+		return 0;
+	}
+
+	fflush(stdout);
+	fcntl(g_pipe[0], F_SETFL, fcntl(g_pipe[0], F_GETFL) | O_NONBLOCK);
+	const ssize_t got = read(g_pipe[0], out, cap - 1);
+	out[(got > 0) ? (size_t)got : 0] = '\0';
+	return (got > 0) ? (size_t)got : 0;
+}
+
 bool qdos_guarded_eval(qd_interp* interp, const char* source) {
 	qd_context* ctx = qd_interp_context(interp);
 
@@ -79,11 +95,15 @@ bool qdos_guarded_eval(qd_interp* interp, const char* source) {
 		return qd_interp_eval(interp, source);
 	}
 
+	// A program that watches the keypad earns more steps as it goes; that lasts one evaluation
+	const uint64_t limit = qd_interp_step_limit(interp);
+
 	if (setjmp(*qd_recovery_buf(ctx)) != 0) {
 		qd_recovery_disarm(ctx);
 		// Unwinding jumped straight over the way out, so finish up here
 		g_evaluating = false;
 		capture_end();
+		qd_interp_set_step_limit(interp, limit);
 		g_recovered = true;
 		return false;
 	}
@@ -95,6 +115,7 @@ bool qdos_guarded_eval(qd_interp* interp, const char* source) {
 	const bool ok = qd_interp_eval(interp, source);
 
 	capture_end();
+	qd_interp_set_step_limit(interp, limit);
 	g_evaluating = false;
 	qd_recovery_disarm(ctx);
 	return ok;

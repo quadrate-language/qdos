@@ -63,6 +63,20 @@ too big for an integer is a float too. From the keypad, a result with no
 finite value is refused as `OVERFLOW` or `UNDEFINED` and what it was worked
 out from stays on the stack. In degrees, whole quarter turns are exact:
 `180 sin` is 0 and `90 tan` is `UNDEFINED`.
+
+Complex numbers work the way a TI-83 has them, entered the way an HP-42S does.
+`COMPLEX` in settings is `REAL`, `a+bi` or `POLAR`: in `REAL`, `-4 sqrt` is an
+error, and in the other two it is `2i`, shown as `a+bi` or `re^(θi)` with θ in
+the angle mode. `CPLX` (shift-abs) turns the two numbers on top into one,
+`3 ENTER 4 CPLX` being `3+4i`, and turns one back into two; `i` is shift-round.
+The keypad's arithmetic, `sq`, `sqrt`, `inv`, `abs`, `exp`, `ln`, `log` and
+`pow` take them, as do `complex`, `csplit`, `polar`, `real`, `imag`, `angle` and
+`conj`; an answer with no imaginary part left is a real again. Trigonometry,
+graphs, the solvers and statistics stay real, as on the TI.
+
+Quadrate has no complex type, so one is a reference-counted object the
+calculator recognises. The price is that Quadrate's own `+ - * neg` do not know
+it: a program adds two with `plus`, and `print` shows it only after `ui::str`.
 Parameters, `-> name` locals and `for` loops work at the prompt as in a program;
 a local bound at the prompt lasts until the next restart. What an evaluation
 prints goes to the message row, or, when it is more than a line, to a page of
@@ -81,8 +95,15 @@ reaching registers 0 to 9; the other ninety are `n sto` and `n rcl` written
 out. Where the keypad has more than one face, which one is live shows beside
 the prompt (`:A `), because a keycap cannot light up.
 
-`lst` browses installed programs, `edit` opens one, `check` compiles without
-saving, `forget` removes one. Programs load from three scopes — system, inbox
+`APPS` lists installed programs. Enter or `RUN` runs the selection, `NEW` asks
+for a name and opens the editor on it, and `OPTS` has run, edit, rename, copy,
+delete and info. Rename and copy carry an app's whole folder, and change a
+loose program's own name inside it. Only your own copy can be renamed or
+deleted; deleting one that covers a shipped or uploaded program reverts to it.
+In the editor `RUN` saves and runs without leaving, `SAVE` stays, `UNDO` swaps
+back the last run of edits, `CHECK` goes to the line it complains about, and
+Enter keeps the indent. At the prompt, `edit` opens a program, `forget` removes
+one. Programs load from three scopes — system, inbox
 (uploaded over USB or on the card), user — and a user copy shadows the others.
 The stack and the registers survive a power cycle.
 
@@ -162,6 +183,64 @@ whole thing.
 An app runs in an interpreter of its own, so every one of them can call its
 entry point `main` and name its helpers whatever suits it without two of them
 ever meeting; nothing it declares is left in the vocabulary afterwards.
+
+An app in Quadrate alone reaches the calculator's pages through `ui::`. The
+first group shows a page and waits until the user is done with it, so a
+program reads as a script: ask, work it out, show it.
+
+| Word | Does |
+|---|---|
+| `ui::plot ( f:str -- )` | The graph of a word, with trace, zoom and CALC, until ESC |
+| `ui::window ( x0 x1 y0 y1 -- )` | The edges the next plot opens with; equal y edges fit y to the curve |
+| `ui::points ( on -- )` | The next plots show L1 against L2 as dots |
+| `ui::ask ( prompt:str -- x:f64 ok:i64 )` | A number typed on the input row; `ok` is 0 for ESC |
+| `ui::input ( prompt:str -- s:str ok:i64 )` | Text, taken as typed |
+| `ui::menu ( title:str items:[]str -- i:i64 )` | A numbered page; the item picked from 1, 0 for ESC |
+| `ui::pause ( -- )` | What has been printed so far, on a page of its own |
+| `ui::wait ( -- key:i64 ch:i64 )` | The next key, waiting for it |
+| `ui::say ( s:str -- )` | A line on the message row, drawn now |
+
+The rest do not wait. `ui::key`, `ui::running` and `ui::ticks` are for a
+program running a loop of its own, `ui::sleep ( ms -- )` pauses one without
+spinning — a key cuts it short and is still there for `ui::key` — and
+`ui::keyname ( key ch -- s:str )` turns either key word's answer into `"ENTER"`,
+`"ESC"`, `"DEL"`, `"7"` or the character typed. `ui::put ( x slot -- )` and
+`ui::get ( slot -- x )` keep 32 numbers for the length of one run, which is how
+a word handed to `ui::plot` or `root` reads what the app worked out, without
+touching the user's registers. The language has no string concatenation, so
+`ui::str ( x -- s )` and `ui::cat ( a b -- s )` show numbers as the calculator
+does and join them.
+
+Drawing goes straight onto the panel's buffer and is seen at `ui::show`:
+`ui::cls`, `ui::text ( col row s )` on the 25 by 10 grid, `ui::small ( x y s )`
+at a pixel, `ui::big ( row s scale )` centred and scaled 1 to 4,
+`ui::pixel ( x y on )`, `ui::line ( x0 y0 x1 y1 )` and
+`ui::box ( x y w h fill )`, where fill is 0 for an outline, 1 filled, 2 cleared
+and -1 inverted. The screen is 400 by 240.
+
+```
+fn f(x:f64 -- y:f64) { x sin x * }
+fn main( -- ) {
+	"FROM?" ui::ask drop -> a
+	"TO?" ui::ask drop -> b
+	"f" a b fnint print
+	"f" ui::plot
+}
+```
+
+[examples/apps](./examples/apps) has more, each small enough to read on the
+calculator itself.
+
+The interpreter stops an evaluation after two million steps, which is what
+ends a `loop { }` typed by mistake. A program that looks at the keypad can be
+stopped with PWR instead, so each look -- `ui::key`, `ui::wait`, `ui::sleep` or
+any page that waits -- buys it two million more. One that never looks is
+still stopped.
+
+`graph`, `root`, `fnint` and the rest of the CALC words find the app's own
+functions, and `graph` inside an app waits as `ui::plot` does, since the words
+it names are gone once `main` returns. PWR stops a program waiting on any of
+them.
 
 Loose files at the top level are what they always were. A `.qd` is a library of
 words, declared at boot and listed by the words it brings. A `lib*.so` is a
@@ -251,8 +330,8 @@ a word may plot a graph, while anything touching all 96,000 pixels a frame has
 to be the program half. The interpreter cannot do a frame.
 
 It can drive one, though. An app can ask the machine about itself —
-`qdos::key ( -- key:i64 ch:i64 got:i64)`, `qdos::running ( -- r:i64)` and
-`qdos::ticks ( -- ms:i64)` — so the loop and the controls can live in Quadrate
+`ui::key ( -- key:i64 ch:i64 got:i64)`, `ui::running ( -- r:i64)` and
+`ui::ticks ( -- ms:i64)` — so the loop and the controls can live in Quadrate
 on the card while a library does the per-pixel work. DOOM is built that way:
 `doom/libdoom.so` offers `doom::start`, `doom::tick` and `doom::press`, and
 `doom/main.qd` holds the loop and the key table, editable on the calculator

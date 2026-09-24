@@ -103,6 +103,12 @@ mkdir -p "${TARGET_DIR}/usr/share/qdos/programs"
 install -m 0644 "${BOARD_DIR}/../../../programs/system/"*.qd \
 	"${TARGET_DIR}/usr/share/qdos/programs/"
 
+# Apps are folders, each copied whole
+for app in "${BOARD_DIR}/../../../programs/system/"*/; do
+	[ -d "${app}" ] || continue
+	cp -r "${app%/}" "${TARGET_DIR}/usr/share/qdos/programs/"
+done
+
 # One user app out of the box, seeding the writable partition
 install -m 0644 "${BOARD_DIR}/../../../programs/user/"*.qd \
 	"${TARGET_DIR}/var/lib/qdos/"

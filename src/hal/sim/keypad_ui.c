@@ -100,8 +100,8 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 		{BTN(KEY("dup", QDOS_KEY_DUP), TXT("O", "o"), TXT("nip", " nip ")),
 				BTN(KEY("drop", QDOS_KEY_DROP), TXT("P", "p"), KEY("UNDO", QDOS_KEY_UNDO)),
 				BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("->", " -> ")),
-				BTN(KEY("abs", QDOS_KEY_ABS), TXT("R", "r"), NONE),
-				BTN(KEY("round", QDOS_KEY_ROUND), TXT("S", "s"), NONE),
+				BTN(KEY("abs", QDOS_KEY_ABS), TXT("R", "r"), KEY("CPLX", QDOS_KEY_COMPLEX)),
+				BTN(KEY("round", QDOS_KEY_ROUND), TXT("S", "s"), KEY("i", QDOS_KEY_I)),
 				BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, TXT("nl", " nl "))},
 
 		/*

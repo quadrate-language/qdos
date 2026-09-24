@@ -400,6 +400,20 @@ static qdos_store_result device_store_write(qdos_hal* hal, const char* name, con
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
+static qdos_store_result device_store_remove(qdos_hal* hal, const char* name) {
+	device_state* st = (device_state*)hal->impl;
+
+	char path[512];
+	if (!store_path(st->store_dir, name, path, sizeof(path))) {
+		return QDOS_STORE_IO_ERROR;
+	}
+
+	if (remove(path) == 0) {
+		return QDOS_STORE_OK;
+	}
+	return (errno == ENOENT) ? QDOS_STORE_NOT_FOUND : QDOS_STORE_IO_ERROR;
+}
+
 static bool device_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
 	device_state* st = (device_state*)hal->impl;
 	return store_path(dir_for(st, scope), name, buf, cap);
@@ -542,6 +556,7 @@ void qdos_device_hal(qdos_hal* hal) {
 	hal->wait = device_wait;
 	hal->store_read = device_store_read;
 	hal->store_write = device_store_write;
+	hal->store_remove = device_store_remove;
 	hal->store_list = device_store_list;
 	hal->store_path = device_store_path;
 	hal->store_changed = device_store_changed;
