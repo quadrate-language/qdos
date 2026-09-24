@@ -759,12 +759,12 @@ typedef struct {
 static const soft_key SOFT[QDOS_MODE__COUNT][SOFT_KEYS] = {
 		// Turning off is the PWR key's job: the one action on the row that cannot be
 		// undone by pressing it again. The angle is on the settings page.
-		// PLOT where CLR was: that did what the ESC key under it does already.
-		// Four letters, like the rest, or it runs into APPS beside it.
-		[QDOS_MODE_CALC] = {{"PLOT", QDOS_KEY_GRAPH}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
-				{"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_NONE}},
-		[QDOS_MODE_LINE] = {{"ESC", QDOS_KEY_CLEAR}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
-				{"CAT", QDOS_KEY_CATALOG}, {"", QDOS_KEY_NONE}},
+		// MODE first in both, so the one key goes there and back. PLOT at the
+		// right, under the GRAPH it leads to. Four letters, like the rest.
+		[QDOS_MODE_CALC] = {{"MODE", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
+				{"INFO", QDOS_KEY_ABOUT}, {"PLOT", QDOS_KEY_GRAPH}},
+		[QDOS_MODE_LINE] = {{"MODE", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
+				{"CAT", QDOS_KEY_CATALOG}, {"ESC", QDOS_KEY_CLEAR}},
 		// No arrows here or below: the keypad has its own
 		[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"PICK", QDOS_KEY_ENTER},
 				{"EDIT", QDOS_KEY_OPEN}},
@@ -1085,6 +1085,12 @@ static bool entry_commit(qdos_shell* sh) {
 		return true;
 	}
 
+	// A sign whose digits were deleted is nothing, not Quadrate's subtraction
+	if (strcmp(sh->entry, "-") == 0) {
+		entry_clear(sh);
+		return true;
+	}
+
 	// Quadrate wants a digit on each side of the point; a keypad does not
 	char text[ENTRY_MAX + 4];
 	const char* p = sh->entry;
@@ -1197,7 +1203,11 @@ static const char* function_word(qdos_key key) {
 static void entry_negate(qdos_shell* sh) {
 	// times, not neg, so the least integer turns into a float rather than itself
 	if (sh->entry_len == 0) {
-		apply_word(sh, "-1 times");
+		// neg refuses what is not a number without pushing anything first
+		qd_interp_value top;
+		const bool number = qd_interp_peek(sh->interp, 0, &top) &&
+							(top.type == QD_INTERP_VALUE_INT || top.type == QD_INTERP_VALUE_FLOAT);
+		apply_word(sh, number ? "-1 times" : "neg");
 		return;
 	}
 
@@ -1352,6 +1362,14 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		}
 		break;
 
+	case QDOS_KEY_PI:
+		apply_word(sh, "pi");
+		break;
+
+	case QDOS_KEY_MODE:
+		enter_line_mode(sh);
+		break;
+
 	case QDOS_KEY_CHAR:
 		if (ev->ch == ':') {
 			enter_line_mode(sh);
@@ -1435,6 +1453,9 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 	case QDOS_KEY_NEG:
 		input_append(sh, " neg ");
 		break;
+	case QDOS_KEY_PI:
+		input_append(sh, " pi ");
+		break;
 
 	case QDOS_KEY_STO:
 		input_append(sh, " sto ");
@@ -1486,6 +1507,10 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		} else {
 			leave_line_mode(sh);
 		}
+		break;
+
+	case QDOS_KEY_MODE:
+		leave_line_mode(sh);
 		break;
 
 	default:

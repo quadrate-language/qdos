@@ -223,10 +223,18 @@ CHECKED(atanh, x > -1.0 && x < 1.0, "NEEDS -1 TO 1")
 static int w_fac(qd_context* ctx, void* user) {
 	(void)user;
 	double x = 0.0;
-	if (qdos_peek_number(ctx, 0, &x) && !(x >= 0.0 && x == floor(x) && x <= 170.0)) {
+	if (!qdos_peek_number(ctx, 0, &x)) {
+		return usr_math_fac(ctx);
+	}
+	if (!(x >= 0.0 && x == floor(x) && x <= 170.0)) {
 		return qdos_math_error(ctx, "fac", "WHOLE, 0 TO 170");
 	}
 	if (x <= 20.0) {
+		// lib/math takes an integer only, and 5.0 is whole
+		qd_stack_element_t discard;
+		if (qd_stack_pop(ctx->st, &discard) != QD_STACK_OK || qd_push_i(ctx, (int64_t)x) != 0) {
+			return 1;
+		}
 		return usr_math_fac(ctx);
 	}
 	double r = 1.0;
@@ -257,7 +265,9 @@ static int trig_in(qd_context* ctx, trig_kind kind, int (*op)(qd_context*)) {
 		const double r = (kind == TRIG_SIN) ? SIN[q] : (kind == TRIG_COS) ? SIN[(q + 1) % 4] : 0.0;
 		return replace_top(ctx, r);
 	}
-	if (replace_top(ctx, x * QDOS_PI / 180.0) != 0) {
+	// Within one turn first, or 390 loses digits that 30 keeps
+	const double turn = fmod(fmod(x, 360.0) + 360.0, 360.0);
+	if (replace_top(ctx, turn * QDOS_PI / 180.0) != 0) {
 		return 1;
 	}
 	return op(ctx);

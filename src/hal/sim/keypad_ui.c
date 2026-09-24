@@ -146,13 +146,13 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 		 * where every calculator puts it -- it is pressed once per value entered
 		 * and used to be the furthest key on the pad from the digits.
 		 *
-		 * ':' is a letter on the ALPHA layer, having nowhere else to go, so it is
-		 * also shift-point: where a Swedish keyboard keeps it, and the one piece
-		 * of Quadrate syntax common enough to need reaching without unlocking.
+		 * MODE on the soft row is the way into a line, so ':' is only shift-point:
+		 * where a Swedish keyboard keeps it, and the one piece of Quadrate syntax
+		 * common enough to need reaching without unlocking. Its old key is pi.
 		 */
 		{BTN(KEY("ESC", QDOS_KEY_CLEAR), NONE, NONE), BTN(KEY("0", QDOS_KEY_0), NONE, TXT("len", " len ")),
 				BTN(KEY(".", QDOS_KEY_DOT), NONE, TXT(":", ":")),
-				BTN(TXT(":", ":"), TXT("Z", "z"), TXT(QDOS_GLYPH_PI, "pi ")),
+				BTN(KEY(QDOS_GLYPH_PI, QDOS_KEY_PI), TXT("Z", "z"), NONE),
 				BTN(KEY("ENTER", QDOS_KEY_ENTER), NONE, TXT("=", "="))},
 };
 

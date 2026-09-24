@@ -290,6 +290,8 @@ static void test_overflow_becomes_a_float(void) {
 	// And whole where it fits
 	CHECK(is_whole("3 4 plus") && is_whole("3 4 minus") && is_whole("3 4 times"));
 	CHECK(is_whole("20 fac") && value_of("20 fac", &ok) == 2432902008176640000.0);
+	CHECK(is_whole("5.0 fac") && value_of("5.0 fac", &ok) == 120.0 && ok);
+	CHECK(refuses("5.5 fac") && refuses("\"x\" fac"));
 	CHECK(is_whole("-5 abs") && is_whole("-3 cb"));
 }
 
@@ -304,6 +306,11 @@ static void test_degree_trig_is_exact(void) {
 	CHECK(value_of("180 tan", &ok) == 0.0);
 	CHECK(refuses("90 tan") && refuses("-270 tan"));
 	CHECK(fabs(value_of("30 sin", &ok) - 0.5) < 1e-15);
+
+	// More than a turn is the same angle, to the last digit
+	CHECK(value_of("390 sin", &ok) == value_of("30 sin", &ok));
+	CHECK(value_of("1110 tan", &ok) == value_of("30 tan", &ok));
+	CHECK(value_of("-330 cos", &ok) == value_of("30 cos", &ok));
 	qdos_math_set_degrees(false);
 	CHECK(!refuses("90 tan")); // radians: 90 is nowhere near a pole
 }

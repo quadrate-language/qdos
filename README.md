@@ -40,13 +40,14 @@ Options:
 
 Two modes. **Calculator** (`>`) is RPN: digits build a number, `Enter` pushes it,
 an operator applies immediately. **Line** (`:`) takes whole Quadrate — control
-flow, definitions, strings. `Escape` empties the line, and takes you back to the
-calculator once it is empty.
+flow, definitions, strings. `MODE`, the leftmost soft key, goes between the two.
+`Escape` empties the line, and takes you back to the calculator once it is
+empty. The `π` key pushes pi, or types it into a line.
 
 ```
-6  Enter  7  *                       ->  42
-:  fn sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
-:  7 sq                              Enter    -> 49
+6  Enter  7  *                          ->  42
+MODE  fn sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
+      7 sq                              Enter    -> 49
 ```
 
 The `÷` key divides as a calculator does, `7 2 ÷` being 3.5, wherever it is
@@ -83,7 +84,7 @@ saving, `forget` removes one. Programs load from three scopes — system, inbox
 (uploaded over USB or on the card), user — and a user copy shadows the others.
 The stack and the registers survive a power cycle.
 
-`PLOT`, beside `APPS`, is the Y= page, as on a TI-83: six slots, `Y1` to
+`PLOT`, the rightmost soft key, is the Y= page, as on a TI-83: six slots, `Y1` to
 `Y6`, each the body of a function in x typed like any line (`x sin x *`),
 with `x`, `y`, `t` and `theta` on soft keys while it is being typed. A
 slot is declared as a word of its name, so `2 Y1` works at the prompt too, and

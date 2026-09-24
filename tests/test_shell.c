@@ -810,6 +810,49 @@ static void test_entry_editing(void) {
 	CHECK(strstr(row, "9") == NULL);
 }
 
+/** A sign left alone after its digits are deleted enters nothing, rather than subtracting. */
+static void test_a_bare_sign_is_nothing(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "10");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_NEG);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(row[0] == '1' && strstr(row, " 3") != NULL);
+	read_row(fb, ROW_TOP_VALUE - 1, row, sizeof(row));
+	CHECK(row[0] == '2' && strstr(row, "10") != NULL);
+}
+
+/** +/- with nothing to negate says so and leaves nothing behind. */
+static void test_negate_on_an_empty_stack(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_NEG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(row[0] == '\0');
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] != '\0');
+}
+
 /** A failed operation reports itself and leaves the machine usable. */
 static void test_operator_error_is_shown(void) {
 	store_reset();
@@ -1542,7 +1585,7 @@ static void type_slot(qdos_key_event* script, size_t* n, int slot, const char* b
 	}
 }
 
-/** PLOT, beside APPS, is the Y= page: six slots of the user's own. */
+/** PLOT, on the right, is the Y= page: six slots of the user's own. */
 static void test_plot_is_the_y_editor(void) {
 	store_reset();
 
@@ -1553,10 +1596,10 @@ static void test_plot_is_the_y_editor(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "PLOT") != NULL && strstr(row, "PLOT") < strstr(row, "APPS"));
-	CHECK(strstr(row, "PLOTAPPS") == NULL);
+	CHECK(strstr(row, "PLOT") != NULL && strstr(row, "PLOT") > strstr(row, "INFO"));
+	CHECK(strstr(row, "INFOPLOT") == NULL);
 
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	run_script(script, n, fb);
 
 	read_row(fb, ROW_HEADER_T, row, sizeof(row));
@@ -1578,7 +1621,7 @@ static void test_a_slot_is_typed_and_kept(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x sin x *");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1593,7 +1636,7 @@ static void test_a_slot_is_typed_and_kept(void) {
 
 	// Back after a restart, with nothing typed this time
 	n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	run_script(script, n, fb);
 	read_slot_body(fb, 0, body, sizeof(body));
 	CHECK(strcmp(body, "x sin x *") == 0);
@@ -1614,7 +1657,7 @@ static void test_graph_draws_every_slot_that_is_on(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x sin");
 	type_slot(script, &n, 1, "x cos");
 	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
@@ -1665,7 +1708,7 @@ static void test_a_slot_using_y_is_a_surface(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x x * y y * +");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1688,7 +1731,7 @@ static void test_a_broken_slot(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x sin }");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1714,7 +1757,7 @@ static void test_del_empties_a_slot(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x");
 	key(script, &n, QDOS_KEY_BACKSPACE);
 
@@ -1722,7 +1765,7 @@ static void test_del_empties_a_slot(void) {
 	run_script(script, n, fb);
 
 	n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	run_script(script, n, fb);
 	char body[EDIT_COLS_T + 1], row[QDOS_COLS + 1];
 	read_slot_body(fb, 0, body, sizeof(body));
@@ -1737,7 +1780,7 @@ static void test_x_and_y_are_keys_in_a_slot(void) {
 
 	qdos_key_event script[64];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	key(script, &n, QDOS_KEY_SOFT2); // EDIT
 	key(script, &n, QDOS_KEY_SOFT2); // x
 	key(script, &n, QDOS_KEY_SOFT2); // x
@@ -1770,7 +1813,7 @@ static void test_a_traced_slot_is_not_rounded(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x sqrt");
 	key(script, &n, QDOS_KEY_SOFT5);
 	key(script, &n, QDOS_KEY_TRACE);
@@ -4994,9 +5037,59 @@ static void test_soft_labels_follow_mode(void) {
 	CHECK(strstr(row, "COMP") != NULL);
 	CHECK(strstr(row, "ESC") != NULL);
 
-	// f1 is the way out of every mode, whatever it is called there
-	CHECK(strstr(row, "ESC") == strchr(row, 'E'));
-	CHECK((size_t)(strstr(row, "ESC") - row) < SOFT_WIDTH_T);
+	// f1 is MODE in both, the one key there and back
+	CHECK(strstr(row, "MODE") != NULL);
+	CHECK((size_t)(strstr(row, "MODE") - row) < SOFT_WIDTH_T);
+	n = 0;
+	run_script(script, n, fb);
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "MODE") != NULL);
+	CHECK((size_t)(strstr(row, "MODE") - row) < SOFT_WIDTH_T);
+}
+
+/** MODE goes into a line and back out of it. */
+static void test_mode_toggles_line_mode(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT1);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == ':');
+
+	key(script, &n, QDOS_KEY_SOFT1);
+	run_script(script, n, fb);
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == '>');
+}
+
+/** pi lands on the stack from the calculator, and in the line from line mode. */
+static void test_pi_key(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_PI);
+	key(script, &n, QDOS_KEY_MUL);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "6.28318530717959") != NULL);
+
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	key(script, &n, QDOS_KEY_PI);
+	key(script, &n, QDOS_KEY_ENTER);
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "3.14159265358979") != NULL);
 }
 
 /** A soft key does what its label says for the current mode. */
@@ -5200,7 +5293,7 @@ static void test_lists_are_words(void) {
 
 	// Still there after a restart, down L1 on the STAT page: PLOT, MENU, 5
 	n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	key(script, &n, QDOS_KEY_SOFT4); // MENU
 	key(script, &n, QDOS_KEY_5);
 	run_script(script, n, fb);
@@ -5220,7 +5313,7 @@ static void test_stat_page_calculates(void) {
 
 	qdos_key_event script[256];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1); // PLOT
+	key(script, &n, QDOS_KEY_SOFT5); // PLOT
 	key(script, &n, QDOS_KEY_SOFT4); // MENU
 	key(script, &n, QDOS_KEY_5);	 // STAT
 	type_more(script, &n, "1");
@@ -5279,7 +5372,7 @@ static void test_stat_page_calculates(void) {
 
 /* Onto the graph of Y1 from the calculator */
 static void graph_slot(qdos_key_event* script, size_t* n, const char* body) {
-	key(script, n, QDOS_KEY_SOFT1);
+	key(script, n, QDOS_KEY_SOFT5);
 	type_slot(script, n, 0, body);
 	key(script, n, QDOS_KEY_SOFT5); // GRAPH
 }
@@ -5409,7 +5502,7 @@ static void test_window_is_typed(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x");
 	key(script, &n, QDOS_KEY_SOFT4); // MENU
 	key(script, &n, QDOS_KEY_1);	 // WINDOW
@@ -5448,7 +5541,7 @@ static void test_table_of_values(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x x *");
 	type_slot(script, &n, 1, "x 1 +");
 	key(script, &n, QDOS_KEY_SOFT4); // MENU
@@ -5474,7 +5567,7 @@ static void test_parametric_and_polar_slots(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "t cos 5 * t sin 5 *");
 	type_slot(script, &n, 1, "theta 0 * 3 +");
 
@@ -5542,7 +5635,7 @@ static void test_stat_plot(void) {
 	size_t n = 0;
 	type_line(script, &n, "[1 2 3 4] 1 lsto [10 20 15 30] 2 lsto");
 	key(script, &n, QDOS_KEY_CLEAR);
-	key(script, &n, QDOS_KEY_SOFT1); // PLOT
+	key(script, &n, QDOS_KEY_SOFT5); // PLOT
 	key(script, &n, QDOS_KEY_SOFT4); // MENU
 	key(script, &n, QDOS_KEY_6);	 // STAT PLOT
 	key(script, &n, QDOS_KEY_ENTER); // TYPE: SCATTER
@@ -5561,7 +5654,7 @@ static void test_calc_value_and_intersect(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	type_slot(script, &n, 0, "x x *");
 	type_slot(script, &n, 1, "x 2 +");
 	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
@@ -5663,7 +5756,7 @@ static void test_histogram_and_box_plot(void) {
 	size_t n = 0;
 	type_line(script, &n, "[1 2 2 3 3 3 4 9] 1 lsto");
 	key(script, &n, QDOS_KEY_CLEAR);
-	key(script, &n, QDOS_KEY_SOFT1); // PLOT
+	key(script, &n, QDOS_KEY_SOFT5); // PLOT
 	key(script, &n, QDOS_KEY_SOFT4); // MENU
 	key(script, &n, QDOS_KEY_6);	 // STAT PLOT
 	key(script, &n, QDOS_KEY_LEFT);	 // TYPE, backwards: BOXPLOT
@@ -5677,7 +5770,7 @@ static void test_histogram_and_box_plot(void) {
 	CHECK(plot_has_ink(fb));
 
 	n = 0;
-	key(script, &n, QDOS_KEY_SOFT1);
+	key(script, &n, QDOS_KEY_SOFT5);
 	key(script, &n, QDOS_KEY_SOFT4); // MENU
 	key(script, &n, QDOS_KEY_6);
 	key(script, &n, QDOS_KEY_LEFT); // HISTOGRAM
@@ -5783,6 +5876,8 @@ int main(void) {
 	test_bare_point_entry();
 	test_bare_enter_duplicates();
 	test_entry_editing();
+	test_a_bare_sign_is_nothing();
+	test_negate_on_an_empty_stack();
 	test_operator_error_is_shown();
 	test_line_mode_prompt();
 	test_escape_leaves_line_mode();
@@ -5936,6 +6031,8 @@ int main(void) {
 	test_edit_check_accepts_a_known_word();
 	test_check_leaves_session_alone();
 	test_soft_labels_follow_mode();
+	test_mode_toggles_line_mode();
+	test_pi_key();
 	test_soft_key_opens_apps();
 	test_soft_open_edits_selection();
 	test_list_moves_on_the_arrow_keys();

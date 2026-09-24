@@ -129,6 +129,8 @@ typedef enum {
 	QDOS_KEY_STATPLOT,	 ///< How the lists are drawn on the graph
 	QDOS_KEY_LIST_CLEAR, ///< Empty a list
 	QDOS_KEY_TO_Y,		 ///< A regression into a Y= slot
+	QDOS_KEY_MODE,		 ///< Between the calculator and typing a line
+	QDOS_KEY_PI,		 ///< pi, onto the stack or into the line
 
 	QDOS_KEY__COUNT
 } qdos_key;
