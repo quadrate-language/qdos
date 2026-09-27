@@ -57,6 +57,9 @@ typedef bool (*qdos_store_visit)(const char* name, void* user);
 /** @brief Marks a listed name as a folder rather than a file: `doom/` */
 #define QDOS_STORE_DIR_MARK '/'
 
+/** @brief The most stack rows show_stack is handed */
+#define QDOS_SHOWN_ROWS 4
+
 /**
  * @brief Whether a name is one a store may hold
  *
@@ -161,11 +164,12 @@ struct qdos_hal {
 	 * @brief What is on top of the stack, for a backend that shows it elsewhere too
 	 *
 	 * A phone's app cover, say, where the whole panel would be too small to
-	 * read. Called on every repaint, whatever the page, with the value as the
-	 * stack row shows it and how deep the stack is; "" and 0 when it is empty.
-	 * NULL where there is nowhere else.
+	 * read. Called on every repaint, whatever the page, with up to
+	 * QDOS_SHOWN_ROWS values from the top down, each as its stack row shows
+	 * it, how many that is, and how deep the stack is; none and 0 when it is
+	 * empty. NULL where there is nowhere else.
 	 */
-	void (*show_top)(qdos_hal* hal, const char* text, size_t depth);
+	void (*show_stack)(qdos_hal* hal, const char* const* rows, size_t count, size_t depth);
 
 	/**
 	 * @brief Set by the shell, for a backend that can be killed without warning

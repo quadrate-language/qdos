@@ -6124,22 +6124,28 @@ static void render_status(qdos_shell* sh, qdos_console* con) {
 /** @brief Repaint the whole display */
 /** @brief Hand the top of the stack to a backend that shows it off the panel */
 static void report_top(qdos_shell* sh) {
-	if (sh->hal->show_top == NULL) {
+	if (sh->hal->show_stack == NULL) {
 		return;
 	}
 
-	char shown[QD_INTERP_VALUE_TEXT_MAX] = "";
+	char shown[QDOS_SHOWN_ROWS][QD_INTERP_VALUE_TEXT_MAX];
+	const char* rows[QDOS_SHOWN_ROWS];
 	const size_t depth = qd_interp_depth(sh->interp);
+	size_t count = 0;
 	qd_interp_value value;
-	if (depth > 0 && qd_interp_peek(sh->interp, 0, &value)) {
-		// As much room as stack row 1 gives it, after its "1:" and a space, so
-		// it reads the same in both places
+	while (count < depth && count < QDOS_SHOWN_ROWS && qd_interp_peek(sh->interp, count, &value)) {
+		// As much room as its stack row gives it, after its "1:" and a space,
+		// so it reads the same in both places
 		const size_t room = (size_t)(QDOS_COLS - 3);
-		if (!format_complex(sh, 0, shown, sizeof(shown), room) && !format_array(sh, 0, shown, sizeof(shown), room)) {
-			format_value(sh, &value, shown, sizeof(shown), room);
+		char* out = shown[count];
+		out[0] = '\0';
+		if (!format_complex(sh, count, out, sizeof(shown[count]), room) && !format_array(sh, count, out, sizeof(shown[count]), room)) {
+			format_value(sh, &value, out, sizeof(shown[count]), room);
 		}
+		rows[count] = out;
+		count++;
 	}
-	sh->hal->show_top(sh->hal, shown, depth);
+	sh->hal->show_stack(sh->hal, rows, count, depth);
 }
 
 static void render(qdos_shell* sh) {

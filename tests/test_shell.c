@@ -149,6 +149,8 @@ static bool g_has_show_top;
 static char g_top[QD_INTERP_VALUE_TEXT_MAX];
 static size_t g_top_depth;
 static int g_top_calls;
+static char g_second[QD_INTERP_VALUE_TEXT_MAX];
+static size_t g_top_count;
 
 static void store_reset(void) {
 	memset(g_store, 0, sizeof(g_store));
@@ -156,6 +158,8 @@ static void store_reset(void) {
 	g_top[0] = '\0';
 	g_top_depth = 0;
 	g_top_calls = 0;
+	g_second[0] = '\0';
+	g_top_count = 0;
 	g_usb_supported = false;
 	g_usb_shared = false;
 	g_usb_fails = false; // or one failing-gadget test poisons every later one
@@ -440,9 +444,11 @@ static int stub_battery(qdos_hal* hal) {
 	return g_battery;
 }
 
-static void stub_show_top(qdos_hal* h, const char* text, size_t depth) {
+static void stub_show_stack(qdos_hal* h, const char* const* rows, size_t count, size_t depth) {
 	(void)h;
-	snprintf(g_top, sizeof(g_top), "%s", text);
+	snprintf(g_top, sizeof(g_top), "%s", count > 0 ? rows[0] : "");
+	snprintf(g_second, sizeof(g_second), "%s", count > 1 ? rows[1] : "");
+	g_top_count = count;
 	g_top_depth = depth;
 	g_top_calls++;
 }
@@ -466,7 +472,7 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->usb_export = g_usb_supported ? stub_usb_export : NULL;
 	hal->time_of_day = g_has_clock ? stub_time_of_day : NULL;
 	hal->battery = g_has_battery ? stub_battery : NULL;
-	hal->show_top = g_has_show_top ? stub_show_top : NULL;
+	hal->show_stack = g_has_show_top ? stub_show_stack : NULL;
 	hal->impl = st;
 }
 
@@ -1163,6 +1169,8 @@ static void test_the_top_of_the_stack_reaches_the_hal(void) {
 
 	CHECK(g_top_calls > 0);
 	CHECK(strcmp(g_top, "3.5") == 0);
+	CHECK(strcmp(g_second, "6") == 0);
+	CHECK(g_top_count == 2);
 	CHECK(g_top_depth == 2);
 
 	char row[QDOS_COLS + 1];
@@ -1192,7 +1200,29 @@ static void test_the_top_of_an_array_and_of_nothing(void) {
 	key(script, &n, QDOS_KEY_DROP);
 	run_script(script, n, fb);
 	CHECK(strcmp(g_top, "") == 0);
+	CHECK(g_top_count == 0);
 	CHECK(g_top_depth == 0);
+}
+
+/** No more rows than the backend is told it gets, however deep the stack */
+static void test_the_hal_is_told_no_more_than_its_rows(void) {
+	store_reset();
+	g_has_show_top = true;
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	for (int i = 1; i <= 5; i++) {
+		char d[2] = {(char)('0' + i), '\0'};
+		digits(script, &n, d);
+		key(script, &n, QDOS_KEY_ENTER);
+	}
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	CHECK(strcmp(g_top, "5") == 0);
+	CHECK(strcmp(g_second, "4") == 0);
+	CHECK(g_top_count == QDOS_SHOWN_ROWS);
+	CHECK(g_top_depth == 5);
 }
 
 /** Too wide for the row, so its shape is what is left worth saying */
@@ -7633,6 +7663,7 @@ int main(void) {
 	test_an_array_shows_its_elements();
 	test_the_top_of_the_stack_reaches_the_hal();
 	test_the_top_of_an_array_and_of_nothing();
+	test_the_hal_is_told_no_more_than_its_rows();
 	test_a_wide_array_shows_its_shape();
 	test_a_lost_stack_says_so();
 	test_a_declared_word_is_not_written_to_the_card();
