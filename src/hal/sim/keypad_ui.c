@@ -90,7 +90,7 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 				BTN(KEY("%", QDOS_KEY_MOD), TXT("N", "n"), TXT("BRK", " break "))},
 
 		/*
-		 * The stack, which is Quadrate's own row. Above it, in yellow, is what else
+		 * The stack, which is Quadrate's own row. Above it, in purple, is what else
 		 * can be done to the stack: shuffling, naming and undoing.
 		 *
 		 * `->` sits where `roll` did, which is where the language went: the deep
@@ -170,7 +170,7 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
  *
  * Keys are lit from above: a gradient down the face, a highlight on the top
  * edge, a shade on the bottom, and a shadow cast below. One accent only -- the
- * yellow shift, which is yellow to match the legends it switches on -- because
+ * purple shift, which is purple to match the legends it switches on -- because
  * a second accent would leave neither of them reading as one.
  * ------------------------------------------------------------------------- */
 
@@ -208,21 +208,21 @@ static const uint8_t OP_BOTTOM[3] = {0x2A, 0x2F, 0x35};
 /*
  * The shift key, and the colour of everything it does.
  *
- * Exactly one key on the pad is coloured and it is this one: yellow, blank,
- * and the same yellow as the second function printed above every key it
+ * Exactly one key on the pad is coloured and it is this one: purple, blank,
+ * and the same purple as the second function printed above every key it
  * reaches.
- * The colour is the cross-reference -- it says "the yellow writing is what
+ * The colour is the cross-reference -- it says "the purple writing is what
  * this key gets you" without a word of explanation.
  */
-static const uint8_t SHIFT_TOP[3] = {0xF2, 0xC0, 0x30};
-static const uint8_t SHIFT_BOTTOM[3] = {0xB0, 0x86, 0x10};
-static const uint8_t SHIFT_INK[3] = {0xE8, 0xB4, 0x2E};
-static const uint8_t SHIFT_INK_DIM[3] = {0x7A, 0x60, 0x20};
+static const uint8_t SHIFT_TOP[3] = {0xBB, 0x9A, 0xF7};
+static const uint8_t SHIFT_BOTTOM[3] = {0x87, 0x6F, 0xB2};
+static const uint8_t SHIFT_INK[3] = {0xBB, 0x9A, 0xF7};
+static const uint8_t SHIFT_INK_DIM[3] = {0x63, 0x52, 0x83};
 
 /*
  * Enter. Raised a little off the plain face and no more. A wider key would say
  * it better, and a fixed grid has no width to give. It used to be brass, which
- * cannot stay -- two warm accents and neither reads as one, and the yellow has
+ * cannot stay -- two accents and neither reads as one, and the purple has
  * a job that a decoration would get in the way of.
  */
 static const uint8_t ENTER_TOP[3] = {0x6C, 0x70, 0x6B};

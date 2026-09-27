@@ -69,7 +69,7 @@ extern "C" {
 
 /*
  * Where a key sits inside its cell. The band above it is the case, printed
- * with what the shift layer does, in yellow, rather than making you press
+ * with what the shift layer does, in purple, rather than making you press
  * shift to find out what it is. The row pitch is tall enough to carry that band
  * without taking the height out of the key. The cell stays the hit target, so
  * none of the gaps cost anything to aim at.
