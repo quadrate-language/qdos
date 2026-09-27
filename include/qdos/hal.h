@@ -158,6 +158,16 @@ struct qdos_hal {
 	int (*battery)(qdos_hal* hal);
 
 	/**
+	 * @brief What is on top of the stack, for a backend that shows it elsewhere too
+	 *
+	 * A phone's app cover, say, where the whole panel would be too small to
+	 * read. Called on every repaint, whatever the page, with the value as the
+	 * stack row shows it and how deep the stack is; "" and 0 when it is empty.
+	 * NULL where there is nowhere else.
+	 */
+	void (*show_top)(qdos_hal* hal, const char* text, size_t depth);
+
+	/**
 	 * @brief Set by the shell, for a backend that can be killed without warning
 	 *
 	 * Called to save the session now. Only from inside poll_key or wait, which

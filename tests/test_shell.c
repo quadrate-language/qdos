@@ -144,8 +144,18 @@ static bool g_has_battery;
 static qdos_keypad_mod g_modifier;
 static bool g_has_modifier;
 
+/* A backend that shows the top of the stack off the panel too */
+static bool g_has_show_top;
+static char g_top[QD_INTERP_VALUE_TEXT_MAX];
+static size_t g_top_depth;
+static int g_top_calls;
+
 static void store_reset(void) {
 	memset(g_store, 0, sizeof(g_store));
+	g_has_show_top = false;
+	g_top[0] = '\0';
+	g_top_depth = 0;
+	g_top_calls = 0;
 	g_usb_supported = false;
 	g_usb_shared = false;
 	g_usb_fails = false; // or one failing-gadget test poisons every later one
@@ -430,6 +440,13 @@ static int stub_battery(qdos_hal* hal) {
 	return g_battery;
 }
 
+static void stub_show_top(qdos_hal* h, const char* text, size_t depth) {
+	(void)h;
+	snprintf(g_top, sizeof(g_top), "%s", text);
+	g_top_depth = depth;
+	g_top_calls++;
+}
+
 static void stub_hal(qdos_hal* hal, stub_state* st) {
 	memset(hal, 0, sizeof(*hal));
 	hal->init = stub_init;
@@ -449,6 +466,7 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 	hal->usb_export = g_usb_supported ? stub_usb_export : NULL;
 	hal->time_of_day = g_has_clock ? stub_time_of_day : NULL;
 	hal->battery = g_has_battery ? stub_battery : NULL;
+	hal->show_top = g_has_show_top ? stub_show_top : NULL;
 	hal->impl = st;
 }
 
@@ -1124,6 +1142,57 @@ static void test_an_array_shows_its_elements(void) {
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "[1 2 3]") != NULL);
 	CHECK(strstr(row, "0x") == NULL); // not the address it used to be
+}
+
+/** A backend that asks is told the top of the stack as row 1 shows it */
+static void test_the_top_of_the_stack_reaches_the_hal(void) {
+	store_reset();
+	g_has_show_top = true;
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "6");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_DIV); // 3.5: the formatted value, not the raw one
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(g_top_calls > 0);
+	CHECK(strcmp(g_top, "3.5") == 0);
+	CHECK(g_top_depth == 2);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, g_top) != NULL);
+}
+
+/** An array is told as its elements, and an empty stack as nothing */
+static void test_the_top_of_an_array_and_of_nothing(void) {
+	store_reset();
+	g_has_show_top = true;
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "[1 2 3]");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	CHECK(strcmp(g_top, "[1 2 3]") == 0);
+	CHECK(g_top_depth == 1);
+
+	store_reset();
+	g_has_show_top = true;
+	n = 0;
+	digits(script, &n, "4");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_DROP);
+	run_script(script, n, fb);
+	CHECK(strcmp(g_top, "") == 0);
+	CHECK(g_top_depth == 0);
 }
 
 /** Too wide for the row, so its shape is what is left worth saying */
@@ -7562,6 +7631,8 @@ int main(void) {
 	test_control_flow_in_line_mode();
 	test_session_survives_power_cycle();
 	test_an_array_shows_its_elements();
+	test_the_top_of_the_stack_reaches_the_hal();
+	test_the_top_of_an_array_and_of_nothing();
 	test_a_wide_array_shows_its_shape();
 	test_a_lost_stack_says_so();
 	test_a_declared_word_is_not_written_to_the_card();
