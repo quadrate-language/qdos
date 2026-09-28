@@ -40,18 +40,25 @@ Options:
 
 Two modes. **Calculator** (`>`) is RPN: digits build a number, `Enter` pushes it,
 an operator applies immediately. **Line** (`:`) takes whole Quadrate — control
-flow, definitions, strings. `MODE`, the leftmost soft key, goes between the two.
-`Escape` empties the line, and takes you back to the calculator once it is
-empty. In the calculator it throws away what is being typed and never the
-stack, being the key pressed out of habit: `CLST` (shift-DEL) empties the
-stack, and `UNDO` brings it back. `DEL` with nothing typed drops x, as on an
-HP 48. `EE` (shift-±) starts the exponent of the number being typed,
-`6.02 EE 23`, and ± after it is the exponent's sign; a keyboard's `e` does the
-same. The `π` key pushes pi, or types it into a line; shifted, it does the same with e.
+flow, definitions, strings. The leftmost soft key goes between the two,
+labelled for where it goes: `LINE` in the calculator, `RPN` in a line. Typing
+a letter in the calculator opens a line with it, as an HP 48 opens its command
+line, and once that line has run you are back on the stack; a line that fails
+stays to be put right. `Escape` empties the line, and takes you back to the
+calculator once it is empty; the soft `CLR` only ever empties it. In the
+calculator `Escape` throws away what is being typed and never the stack, being
+the key pressed out of habit: `CLST` (shift-DEL) empties the stack, and `UNDO`
+brings it back. A key that fails changes nothing, so `UNDO` still takes back
+the one before it. `DEL` with nothing typed drops x, as on an HP 48.
+`EE` (shift-±) starts the exponent of the number being typed, `6.02 EE 23`,
+and ± after it is the exponent's sign; a keyboard's `e` does the same. A
+second point is ignored, and a number past the largest a double holds is
+refused as `OVERFLOW`. The `π` key pushes pi, or types it into a line;
+shifted, it does the same with e.
 
 ```
 6  Enter  7  *                          ->  42
-MODE  fn sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
+LINE  fn sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
       7 sq                              Enter    -> 49
 ```
 
@@ -60,10 +67,12 @@ types `divide`; `+`, `−` and `×` likewise type `plus`, `minus` and `times`, s
 a line does what the keys do on the stack. In a string or a comment they type
 themselves, and `−` starting a word and followed by a digit, `>` or another `−`
 is a sign, `->` or `--` rather than `minus`; glued to a number, `2−3`, it is
-`minus`. Each word they type is spaced once, however the line is typed. Quadrate's own `/` keeps its meaning, 3 for `7 2 /`,
-and the editor types the operators as they are, so a program behaves on the
-calculator as it does on a PC.
-The `%` key is percent, as an HP's: `200 ENTER 15 %` leaves 200 and 30.
+`minus`. Each word they type is spaced once, however the line is typed. Those
+are the keypad's keys: `+ - * /` typed on a keyboard are Quadrate's own, so
+`7 2 /` is 3, and the editor types the operators as they are, so a program
+behaves on the calculator as it does on a PC.
+The `%` key is percent, as an HP's: `200 ENTER 15 %` leaves 200 and 30. Of a
+number alone it is a TI's, `15 %` being 0.15.
 `modulo`, a calculator's mod, takes decimals and has the sign of the divisor,
 `-7 3 modulo` being 2 where Quadrate's `mod` gives -1.
 The keypad's `+`, `−` and `×` are `plus`, `minus` and `times`: whole
@@ -102,17 +111,21 @@ work at the prompt is not that, and would otherwise fill the store with every
 display, and while a number or a name is being asked for they are `ESC` and
 `OK`. `SET` is the settings page: the angle, decimals, notation (normal, SCI or
 ENG), auto-off and complex mode. The arrows or `CHG` change the selected row,
-and `ENTER` or `ESC` is done; `INFO` there says what firmware this is and `LOG`
+a digit on `DECIMALS` sets it, and `ENTER` or `ESC` is done; `INFO` there says what firmware this is and `LOG`
 lists what has been said, errors in full. The status band shows the angle
 beside the clock. `STO` and `RCL` are keys of their own beside the digits and
 take the digit after them, reaching registers 0 to 9; `STO` leaves x where it
 was. The other ninety are `n sto` and `n rcl` written out.
 
 Up in the calculator picks out a level of the stack, scrolling to those too
-deep to show, and `ENTER` copies it to the top. In a line, up and down go
-through the lines entered. `CAT` lists every word, your own first; typing
-finds the first that starts that way, and from the calculator `PICK` applies
-it to the stack as a key would, where from a line it types it. Where the keypad has more than one face, which one is live shows beside
+deep to show; `ENTER` copies it to the top and `DEL` drops it. `lastx` brings
+back what x was before the last function on the keys, and `rolld` and `rollu`
+turn the whole stack, x to the bottom or the bottom to x, as an HP's R↓ and
+R↑. In a line, up and down go through the lines entered. `CAT` lists every
+word, your own first; typing finds the first that starts that way, a letter
+that nothing follows on from is refused and said so, and `DEL` takes one back.
+From the calculator `PICK` applies the word to the stack as a key would, where
+from a line it types it. Where the keypad has more than one face, which one is live shows beside
 the prompt (`:A `), because a keycap cannot light up.
 
 `APPS` lists installed programs. Enter or `RUN` runs the selection, `NEW` asks
@@ -128,8 +141,17 @@ one. Programs load from three scopes — system, inbox
 The stack and the registers survive a power cycle.
 
 `PLOT`, the rightmost soft key, is the Y= page, as on a TI-83: six slots, `Y1` to
-`Y6`, each the body of a function in x typed like any line (`x sin x *`),
-with `x`, `y`, `t` and `theta` on soft keys while it is being typed. A body
+`Y6`, each the body of a function in x, with `x`, `y`, `t` and `theta` on soft
+keys while it is being typed. A body is RPN typed like any line (`x sin x *`)
+or a formula as a TI takes it (`x sin(x)`, `x^2 - 4`, `2x + 1`), as an HP 48
+plots an algebraic or a program alike. What leaves one value from nothing is
+RPN; anything else is read as a formula and worked out as RPN, while the slot
+keeps what was typed. `^` binds tightest and to the right, and `-x^2` is
+-(x^2); a value beside a name or a bracket multiplies it, but two numbers do
+not, `x 2` being RPN a word short. `sin x` needs no brackets where the
+function takes one value, and `sq`, `inv` and `!` follow what they apply to.
+Numbers in a formula are floats, so `1/2` is a half. A parametric curve's
+formula is its x and y with a comma between, `cos(t), sin(t)`. A body
 works in floats, which Quadrate's own operators do not wrap, so there `+ − ×`
 type `+ - *`; `sqrt`, `divide` and `pi` are drawn as the keys have them, `√`,
 `÷` and `π`, while what is kept is the words. A
@@ -138,7 +160,9 @@ the slots are kept across a restart. `ON` picks which ones `GRAPH` draws --
 together, solid, dashed and dotted -- and in trace, up and down go from one
 curve to the next; a slot switched off says `OFF`. A body that uses `y` is a surface, and `GRAPH` on it draws
 it in 3D. One that uses `t` is parametric and leaves x and y (`t cos t sin`);
-one that uses `theta` is polar and leaves r. `DEL` empties a slot.
+one that uses `theta` is polar and leaves r. `DEL` empties a slot, and typing
+on one writes it afresh. A body that is neither is kept, marked `ERR`, with
+why on the message row.
 
 `GRAPH` from Y= draws in a window of its own, kept across a restart. `MENU`
 has the rest: `WINDOW` types its edges, tick spacing and the t and theta
@@ -152,10 +176,17 @@ as down), trig and stat. A column stands for x at its left edge, so the
 standard window's middle one is 0. `TRACE` follows a curve with x and y read
 out under it; a number typed while tracing is where it goes, and `ESC` ends
 it before a second leaves the graph. `CALC` finds a value,
-zero, minimum, maximum, intersection, dy/dx, integral (shaded) or tangent,
-asking for the bounds as a TI does -- move the cursor and press `ENTER`, or
-type the x -- and puts the answer on the calculator's stack: x for a zero, x
-and y for an extremum or intersection, a and b for a tangent y = ax + b.
+zero, minimum, maximum, intersection, dy/dx, integral (shaded), tangent or
+the area between two curves, asking for the bounds as a TI does -- move the
+cursor and press `ENTER`, or type the x -- and puts the answer on the
+calculator's stack: x for a zero, x and y for an extremum or intersection, a
+and b for a tangent y = ax + b. `AREA` is an Nspire's Bounded Area: pick the
+two curves, and the cursor is already on the first place they cross for the
+left bound and on the next for the right, so `ENTER` four times is the area
+they enclose. It is counted positive wherever either curve is on top, and
+shaded between them. A shaded area or a tangent, and what it came to, stay
+through zooming, panning, the grid and a trip to Y= and back; changing a
+curve's body, or starting another CALC, is what clears them.
 Both bounds on the one column, `ENTER` twice on the answer, is a column
 either side of it.
 
@@ -168,6 +199,7 @@ word taking x and leaving y:
 "f" a b root        x where f is 0         "f" x nderiv       f'(x)
 "f" a b fmin        x where f is lowest    "f" a b fnint      the integral
 "f" a b fmax        x where f is highest   "f" "g" a b intersect
+"f" "g" a b area    between f and g, all of it counted positive
 ```
 
 `STAT` is the lists, `L1` to `L6`, three across, typed down like a
@@ -223,6 +255,7 @@ program reads as a script: ask, work it out, show it.
 | `ui::window ( x0 x1 y0 y1 -- )` | The edges the next plot opens with; equal y edges fit y to the curve |
 | `ui::points ( on -- )` | The next plots show L1 against L2 as dots |
 | `ui::ask ( prompt:str -- x:f64 ok:i64 )` | A number typed on the input row; `ok` is 0 for ESC |
+| `ui::ask_or ( prompt:str x:f64 -- x:f64 ok:i64 )` | As `ui::ask`, offering x: ENTER takes it, a digit types over it |
 | `ui::input ( prompt:str -- s:str ok:i64 )` | Text, taken as typed |
 | `ui::menu ( title:str items:[]str -- i:i64 )` | A numbered page; the item picked from 1, 0 for ESC |
 | `ui::pause ( -- )` | What has been printed so far, on a page of its own |

@@ -167,6 +167,10 @@ void qdos_graph_draw_segment(const qdos_graph_area* area, const qdos_graph_view*
 void qdos_graph_shade(
 		const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s, double a, double b);
 
+/** @brief Dither between two curves sampled over the same columns, from @p a to @p b */
+void qdos_graph_shade_between(const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s,
+		const qdos_graph_samples* other, double a, double b);
+
 /** @brief A small square round (x, y), a scatter plot's mark */
 void qdos_graph_draw_mark(const qdos_graph_area* area, const qdos_graph_view* view, double x, double y);
 

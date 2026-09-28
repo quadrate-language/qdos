@@ -14,6 +14,7 @@
 #include "editor.h"
 #include "graph.h"
 #include "guarded.h"
+#include "infix.h"
 #include "lint.h"
 #include "mathwords.h"
 #include "native.h"
@@ -173,6 +174,7 @@ enum {
 /* The Y= slots, Y1 to Y6: one screen of them, and as many curves as one plot draws */
 #define PLOT_SLOTS 6
 #define PLOT_BODY_MAX 96
+#define PLOT_RPN_MAX (PLOT_BODY_MAX * 3) ///< A formula written out: 2 is 2.0, / is divide
 
 /* The lists, L1 to L6, and as many values as each holds */
 #define STAT_LISTS 6
@@ -210,7 +212,8 @@ typedef enum {
 	CALC_DERIVATIVE,
 	CALC_INTEGRAL,
 	CALC_TANGENT,
-	CALC_BOX ///< Not on the menu: ZOOM BOX asks for its corners the same way
+	CALC_AREA, ///< Between two curves, as an Nspire's Bounded Area
+	CALC_BOX   ///< Not on the menu: ZOOM BOX asks for its corners the same way
 } calc_kind;
 
 /* What a number typed on the input row is for */
@@ -261,7 +264,7 @@ typedef struct {
 #define RESULT_ROWS 16
 
 typedef struct {
-	char body[PLOT_BODY_MAX]; ///< Quadrate in x, and y for a surface; empty for an unused slot
+	char body[PLOT_BODY_MAX]; ///< Quadrate in x, and y for a surface, or a formula; empty for an unused slot
 	bool on;				  ///< Drawn by GRAPH
 	bool broken;			  ///< Would not declare, so there is no word to plot
 	qdos_graph_shape shape;
@@ -291,6 +294,7 @@ struct qdos_shell {
 
 	char input[INPUT_MAX]; ///< Line being typed in QDOS_MODE_LINE
 	bool line_minus;	   ///< The last key typed " minus ", which the next may make a sign
+	bool line_once;		   ///< Opened by typing a word in the calculator, so closed once it has run
 
 	char history[HISTORY_MAX][INPUT_MAX]; ///< Lines entered, oldest first
 	size_t history_count;
@@ -329,8 +333,17 @@ struct qdos_shell {
 	qdos_value undo[QDOS_REGISTER_MAX];
 	size_t undo_depth;
 	bool undo_ready;
-	bool undo_exact;   ///< The snapshot is the whole stack, so a failure can be put back
+	bool undo_exact; ///< The snapshot is the whole stack, so a failure can be put back
+
+	/* The snapshot before, for when the step that replaced it fails */
+	qdos_value undo_prev[QDOS_REGISTER_MAX];
+	size_t undo_prev_depth;
+	bool undo_prev_ready;
+	bool undo_prev_exact;
+
 	size_t stack_sel;  ///< Level picked out with the arrows, from 1; nought for none
+	qdos_value last_x; ///< x as the last function on the keys found it, for lastx
+	bool has_last_x;
 	bool delete_armed; ///< One press of backspace has already asked
 	bool drop_armed;   ///< One press of ESC has already asked, in the editor
 	bool powering_off; ///< Set by the power key, acted on by the run loop
@@ -377,8 +390,10 @@ struct qdos_shell {
 	int calc_curves[2]; ///< The curves an intersection is between
 	double calc_bound[2];
 	char graph_result[MESSAGE_COLS + 1]; ///< What the last CALC found, in the readout until the next key
+	char graph_kept[MESSAGE_COLS + 1];	 ///< What the shading or tangent on the plot is, through zooms and pans
 	bool shade_on;						 ///< The area the last integral found
 	int shade_curve;
+	int shade_other; ///< The second curve an area lies between, or -1 for the x axis
 	double shade_a, shade_b;
 	bool tangent_on; ///< The line the last TANGENT drew
 	double tangent_x, tangent_y, tangent_slope;
@@ -408,6 +423,7 @@ struct qdos_shell {
 	qdos_graph_view ui_window; ///< What ui::window asked the next plot for
 	double ask_value;
 	bool ask_done;
+	bool field_fresh; ///< Holds an answer offered, which the first key typed replaces
 	char menu_title[QDOS_COLS + 1];
 	char menu_labels[UI_MENU_MAX][QDOS_COLS + 1];
 	size_t menu_custom_count;
@@ -464,6 +480,7 @@ struct qdos_shell {
 	qdos_mode graph_return; ///< Where ESC from a graph goes: Y=, if it came from there
 
 	plot_slot slots[PLOT_SLOTS];
+	char slot_why[80]; ///< Why the last slot declared would not, for the message line
 	size_t slot_sel;
 
 	bool cursor_on; ///< Which half of the blink the cursor is in
@@ -670,6 +687,25 @@ static void format_exponent(double x, bool eng, int decimals, char* out, size_t 
 	snprintf(out, cap, "%se%d", digits, exponent);
 }
 
+/* 1e-05 and 6.02e+23 as a calculator writes them: 1e-5, 6.02e23 */
+static void tidy_exponent(char* text) {
+	char* e = strchr(text, 'e');
+	if (e == NULL) {
+		return;
+	}
+	char* digits = e + 1;
+	if (*digits == '+') {
+		memmove(digits, digits + 1, strlen(digits));
+	} else if (*digits == '-') {
+		digits++;
+	}
+	size_t zeros = 0;
+	while (digits[zeros] == '0' && digits[zeros + 1] != '\0') {
+		zeros++;
+	}
+	memmove(digits, digits + zeros, strlen(digits + zeros) + 1);
+}
+
 static void format_value(const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap, size_t room) {
 	const bool number = value->type == QD_INTERP_VALUE_INT || value->type == QD_INTERP_VALUE_FLOAT;
 	const double shown = (value->type == QD_INTERP_VALUE_INT) ? (double)value->i : value->f;
@@ -678,6 +714,9 @@ static void format_value(const qdos_shell* sh, const qd_interp_value* value, cha
 		format_exponent(shown, sh->notation == NOTATION_ENG, sh->decimals, out, cap);
 	} else if (sh->decimals == DECIMALS_AUTO || !number) {
 		snprintf(out, cap, "%s", value->text);
+		if (value->type == QD_INTERP_VALUE_FLOAT) {
+			tidy_exponent(out);
+		}
 	} else {
 		// A fixed number of decimals is a column to read down, so whole numbers
 		// get them too rather than jumping about
@@ -690,6 +729,7 @@ static void format_value(const qdos_shell* sh, const qd_interp_value* value, cha
 
 	for (int digits = 9; digits >= 0; digits--) {
 		snprintf(out, cap, "%.*e", digits, shown);
+		tidy_exponent(out);
 		if (strlen(out) <= room) {
 			return;
 		}
@@ -898,12 +938,13 @@ typedef struct {
 static const soft_key SOFT[QDOS_MODE__COUNT][SOFT_KEYS] = {
 		// Turning off is the PWR key's job: the one action on the row that cannot be
 		// undone by pressing it again. The angle is the first row of SET.
-		// MODE first in both, so the one key goes there and back. PLOT at the
-		// right, under the GRAPH it leads to. Four letters, like the rest.
-		[QDOS_MODE_CALC] = {{"MODE", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
+		// The same first key in both, so it goes there and back, named for where
+		// it goes: MODE is settings on a TI. PLOT at the right, under the GRAPH
+		// it leads to. Four letters, like the rest.
+		[QDOS_MODE_CALC] = {{"LINE", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
 				{"SET", QDOS_KEY_SETTINGS}, {"PLOT", QDOS_KEY_GRAPH}},
-		[QDOS_MODE_LINE] = {{"MODE", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
-				{"CAT", QDOS_KEY_CATALOG}, {"ESC", QDOS_KEY_CLEAR}},
+		[QDOS_MODE_LINE] = {{"RPN", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"TAB", QDOS_KEY_TAB},
+				{"CAT", QDOS_KEY_CATALOG}, {"CLR", QDOS_KEY_CLEAR}},
 		// No arrows here or below: the keypad has its own
 		[QDOS_MODE_LIST] = {{"ESC", QDOS_KEY_CLEAR}, {"NEW", QDOS_KEY_NEW}, {"RUN", QDOS_KEY_ENTER},
 				{"OPTS", QDOS_KEY_MENU}, {"EDIT", QDOS_KEY_OPEN}},
@@ -969,9 +1010,9 @@ static void render_soft(qdos_shell* sh, qdos_console* con) {
 	for (int i = 0; i < SOFT_KEYS; i++) {
 		const char* label = SOFT[sh->mode][i].label;
 
-		// Two jobs, so it names whichever is next
-		if (sh->mode == QDOS_MODE_LINE && SOFT[sh->mode][i].key == QDOS_KEY_CLEAR) {
-			label = (sh->input_len > 0) ? "CLR" : "ESC";
+		// Only ever clears, so with nothing to clear it is nothing
+		if (sh->mode == QDOS_MODE_LINE && SOFT[sh->mode][i].key == QDOS_KEY_CLEAR && sh->input_len == 0) {
+			label = "";
 		}
 
 		if (label[0] == '\0') {
@@ -1048,6 +1089,11 @@ static bool value_at(qdos_shell* sh, size_t i, qdos_value* out) {
 
 /* One step back, which is all a calculator ever offers */
 static void undo_snapshot(qdos_shell* sh) {
+	memcpy(sh->undo_prev, sh->undo, sh->undo_depth * sizeof(*sh->undo));
+	sh->undo_prev_depth = sh->undo_depth;
+	sh->undo_prev_ready = sh->undo_ready;
+	sh->undo_prev_exact = sh->undo_exact;
+
 	const size_t depth = qd_interp_depth(sh->interp);
 	sh->undo_depth = (depth > QDOS_REGISTER_MAX) ? (size_t)QDOS_REGISTER_MAX : depth;
 	sh->undo_exact = sh->undo_depth == depth;
@@ -1098,6 +1144,12 @@ static void undo_restore(qdos_shell* sh) {
 static void undo_failed(qdos_shell* sh) {
 	if (sh->undo_ready && sh->undo_exact) {
 		undo_put_back(sh);
+
+		// Nothing happened, so UNDO still means the step before it
+		memcpy(sh->undo, sh->undo_prev, sh->undo_prev_depth * sizeof(*sh->undo));
+		sh->undo_depth = sh->undo_prev_depth;
+		sh->undo_ready = sh->undo_prev_ready;
+		sh->undo_exact = sh->undo_prev_exact;
 	}
 }
 
@@ -1422,9 +1474,16 @@ static bool entry_commit(qdos_shell* sh) {
 		}
 	}
 
+	// Refused as the keys refuse a result past the largest double
+	if (!isfinite(strtod(text, NULL))) {
+		set_message(sh, "OVERFLOW", true);
+		return false;
+	}
+
 	undo_snapshot(sh);
 	if (!qdos_guarded_eval(sh->interp, text)) {
 		set_message(sh, qdos_guarded_error(sh->interp), true);
+		undo_failed(sh);
 		return false;
 	}
 	entry_clear(sh);
@@ -1462,16 +1521,34 @@ static void set_key_error(qdos_shell* sh, const char* error, const char* word, c
 	}
 }
 
+/* Moves things about or brings a constant, so x is not an argument an HP keeps */
+static bool keeps_last_x(const char* word) {
+	static const char* const STACK_WORDS[] = {"dup", "drop", "swap", "rot", "over", "nip", "pi", "e", "i", "lastx",
+			"rolld", "rollu", "neg", "-1 times", "complex", "csplit"};
+	for (size_t i = 0; i < sizeof(STACK_WORDS) / sizeof(*STACK_WORDS); i++) {
+		if (strcmp(STACK_WORDS[i], word) == 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 /** @brief Apply a word to the stack, committing any pending number first */
 static void apply_key_word(qdos_shell* sh, const char* word, const char* label) {
 	if (!entry_commit(sh)) {
 		return;
 	}
+	qdos_value x;
+	const bool had_x = keeps_last_x(word) && value_at(sh, 0, &x);
 	undo_snapshot(sh);
 	qdos_math_set_finite_only(true);
 	const bool ok = qdos_guarded_eval(sh->interp, word);
 	qdos_math_set_finite_only(false);
 	if (ok) {
+		if (had_x) {
+			sh->last_x = x;
+			sh->has_last_x = true;
+		}
 		set_message(sh, "", false);
 		absorb_output(sh);
 	} else {
@@ -1490,6 +1567,7 @@ static void enter_line_mode(qdos_shell* sh) {
 	// Commit first, or the digits already typed are lost.
 	entry_commit(sh);
 	sh->mode = QDOS_MODE_LINE;
+	sh->line_once = false;
 	input_clear(sh);
 
 	// No announcement: it would sit on the input line and hide the ':' prompt,
@@ -1497,11 +1575,22 @@ static void enter_line_mode(qdos_shell* sh) {
 	set_message(sh, "", false);
 }
 
-static void leave_line_mode(qdos_shell* sh) {
+/* Back to the calculator's face too: a locked ALPHA there makes + a letter */
+static void line_closed(qdos_shell* sh) {
 	sh->mode = QDOS_MODE_CALC;
+	sh->line_once = false;
+	if (sh->hal->modifier_reset != NULL) {
+		sh->hal->modifier_reset(sh->hal);
+	}
+}
+
+static void leave_line_mode(qdos_shell* sh) {
+	line_closed(sh);
 	input_clear(sh);
 	set_message(sh, "", false);
 }
+
+static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev);
 
 /** Keys while the keypad is a calculator. */
 /* In QDOS_KEY_FN_FIRST..QDOS_KEY_FN_LAST order */
@@ -1619,6 +1708,14 @@ static const char* key_label(const char* word) {
 	return NULL;
 }
 
+/* Level @p level, from 1, moved to the top and the rest closed up; nothing is copied or freed */
+static void stack_raise(qd_stack* st, size_t level) {
+	const size_t at = st->size - level;
+	const qd_stack_element_t moved = st->data[at];
+	memmove(&st->data[at], &st->data[at + 1], (level - 1) * sizeof(*st->data));
+	st->data[st->size - 1] = moved;
+}
+
 /* Pick out a level with the arrows, as an HP 48's stack; ENTER copies it to the top */
 static bool stack_select_key(qdos_shell* sh, const qdos_key_event* ev) {
 	const size_t depth = qd_interp_depth(sh->interp);
@@ -1648,6 +1745,16 @@ static bool stack_select_key(qdos_shell* sh, const qdos_key_event* ev) {
 		push_value(qd_interp_context(sh->interp), &value);
 		return true;
 	}
+	// The level picked out goes, not x: dropped from the top once it is there
+	case QDOS_KEY_BACKSPACE:
+	case QDOS_KEY_DROP:
+		undo_snapshot(sh);
+		stack_raise(qd_interp_context(sh->interp)->st, sh->stack_sel);
+		qdos_guarded_eval(sh->interp, "drop");
+		if (sh->stack_sel > depth - 1) {
+			sh->stack_sel = depth - 1;
+		}
+		return true;
 	default:
 		return false;
 	}
@@ -1659,6 +1766,11 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 
 	const char* word = function_word(ev->key);
+
+	// Of nothing, a percent is a fraction, as a TI's 15% is 0.15
+	if (ev->key == QDOS_KEY_MOD && entry_commit(sh) && qd_interp_depth(sh->interp) == 1) {
+		word = "100.0 divide";
+	}
 	if (word != NULL) {
 		apply_key_word(sh, word, key_label(word));
 		return;
@@ -1695,8 +1807,11 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 	case QDOS_KEY_9:
 		entry_append(sh, '9');
 		break;
+	// One point, and none in the exponent, as a calculator ignores the rest
 	case QDOS_KEY_DOT:
-		entry_append(sh, '.');
+		if (strpbrk(sh->entry, ".e") == NULL) {
+			entry_append(sh, '.');
+		}
 		break;
 
 	case QDOS_KEY_ADD:
@@ -1804,7 +1919,10 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		} else if ((ev->ch == 'e' || ev->ch == 'E') && sh->entry_len > 0) {
 			entry_exponent(sh);
 		} else if (ev->ch != ' ') {
-			set_message(sh, "PRESS MODE TO TYPE A LINE", false);
+			// A word typed straight in, as an HP 48 opens its command line
+			enter_line_mode(sh);
+			sh->line_once = true;
+			handle_line_key(sh, ev);
 		}
 		break;
 
@@ -1931,6 +2049,13 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 	const char* word = function_word(ev->key);
 	if (word != NULL) {
 		input_word(sh, word);
+		return;
+	}
+
+	// The keypad's operators are the calculator's; a keyboard's are Quadrate's own
+	if (ev->key >= QDOS_KEY_ADD && ev->key <= QDOS_KEY_DIV && ev->ch != 0) {
+		const char text[2] = {ev->ch, '\0'};
+		input_append(sh, text);
 		return;
 	}
 
@@ -2065,10 +2190,15 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 
 	case QDOS_KEY_ENTER:
-		if (input_is_complete(sh)) {
-			submit(sh);
-		} else {
+		if (!input_is_complete(sh)) {
 			input_append(sh, "\n");
+			break;
+		}
+		submit(sh);
+		// Run, so back to the stack with whatever it had to say; a line that
+		// failed stays to be corrected
+		if (sh->line_once && sh->mode == QDOS_MODE_LINE && sh->input_len == 0) {
+			line_closed(sh);
 		}
 		break;
 
@@ -2541,7 +2671,38 @@ static bool app_act(qdos_shell* sh, int action) {
 	return true;
 }
 
+/* The first row that starts with @p find, and so the row to show it by */
+static bool list_find_row(qdos_shell* sh, const char* find) {
+	const size_t len = strlen(find);
+	size_t i = 0;
+	while (i < list_count(sh) && strncmp(list_name(sh, i), find, len) != 0) {
+		i++;
+	}
+	if (i == list_count(sh)) {
+		return false;
+	}
+	sh->list_sel = i;
+	sh->list_top = i; // the match at the top, with its neighbours under it
+	list_scroll_into_view(sh);
+	return true;
+}
+
 static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
+	// While a name is being found, DEL takes back what was typed of it
+	const size_t found = strlen(sh->list_find);
+	if (ev->key == QDOS_KEY_BACKSPACE && found > 0) {
+		sh->list_find[found - 1] = '\0';
+		list_find_row(sh, sh->list_find);
+		return;
+	}
+
+	// A name has digits in it, log10 and atan2, once it is being typed
+	qdos_key_event typed;
+	if (ev->key >= QDOS_KEY_0 && ev->key <= QDOS_KEY_9 && found > 0) {
+		typed = (qdos_key_event){QDOS_KEY_CHAR, (char)('0' + (ev->key - QDOS_KEY_0))};
+		ev = &typed;
+	}
+
 	if (ev->key != QDOS_KEY_BACKSPACE) {
 		sh->delete_armed = false;
 	}
@@ -2583,30 +2744,23 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 
 	// Typing finds the first word that starts that way, which is how a catalog of
-	// hundreds is usable; a letter nothing follows on from starts again
+	// hundreds is usable. A letter nothing follows on from is refused and said so.
 	case QDOS_KEY_CHAR: {
 		const char want = (ev->ch >= 'A' && ev->ch <= 'Z') ? (char)(ev->ch + 32) : ev->ch;
-		for (int attempt = 0; attempt < 2; attempt++) {
-			const size_t len = attempt ? 0 : strlen(sh->list_find);
-			if (len + 1 >= sizeof(sh->list_find)) {
-				continue;
-			}
-			char find[QDOS_WORDLIST_NAME];
-			memcpy(find, sh->list_find, len);
-			find[len] = want;
-			find[len + 1] = '\0';
-
-			size_t i = 0;
-			while (i < list_count(sh) && strncmp(list_name(sh, i), find, len + 1) != 0) {
-				i++;
-			}
-			if (i < list_count(sh)) {
-				memcpy(sh->list_find, find, len + 2);
-				sh->list_sel = i;
-				sh->list_top = i; // the match at the top, with its neighbours under it
-				list_scroll_into_view(sh);
-				break;
-			}
+		const size_t len = strlen(sh->list_find);
+		if (len + 1 >= sizeof(sh->list_find)) {
+			return;
+		}
+		char find[QDOS_WORDLIST_NAME];
+		memcpy(find, sh->list_find, len);
+		find[len] = want;
+		find[len + 1] = '\0';
+		if (list_find_row(sh, find)) {
+			memcpy(sh->list_find, find, len + 2);
+		} else {
+			char message[QDOS_COLS + 1];
+			snprintf(message, sizeof(message), "NOTHING STARTS %.*s", QDOS_COLS - 15, find);
+			set_message(sh, message, false);
 		}
 		return;
 	}
@@ -3124,6 +3278,13 @@ static bool expand_soft(qdos_shell* sh, const qdos_key_event* in, qdos_key_event
 		return false;
 	}
 
+	// CLR pressed twice out of habit stays in the line; the ESC key leaves it
+	if (sh->field == FIELD_NONE && sh->mode == QDOS_MODE_LINE && sk->key == QDOS_KEY_CLEAR && sh->input_len == 0) {
+		out->key = QDOS_KEY_NONE;
+		out->ch = 0;
+		return true;
+	}
+
 	out->key = sk->key;
 	out->ch = 0;
 	return true;
@@ -3386,6 +3547,23 @@ static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 		setting_step(sh, -1);
 		break;
 
+	// FIX 4 is typed, not stepped to
+	case QDOS_KEY_0:
+	case QDOS_KEY_1:
+	case QDOS_KEY_2:
+	case QDOS_KEY_3:
+	case QDOS_KEY_4:
+	case QDOS_KEY_5:
+	case QDOS_KEY_6:
+	case QDOS_KEY_7:
+	case QDOS_KEY_8:
+	case QDOS_KEY_9:
+		if (setting_at(sh, sh->setting_sel) == SETTING_DECIMALS) {
+			sh->decimals = (int)(ev->key - QDOS_KEY_0);
+			save_settings(sh);
+		}
+		break;
+
 	// Done, as ENTER is everywhere else: a change is kept the moment it is made
 	case QDOS_KEY_ENTER:
 	case QDOS_KEY_CLEAR:
@@ -3552,6 +3730,15 @@ static bool difference_eval(void* user, double x, double* y) {
 	return true;
 }
 
+/* How far apart two curves are, whichever is on top */
+static bool gap_eval(void* user, double x, double* y) {
+	if (!difference_eval(user, x, y)) {
+		return false;
+	}
+	*y = fabs(*y);
+	return true;
+}
+
 static bool is_function(const qdos_shell* sh, int i) {
 	return i >= 0 && i < sh->graph_count && sh->graph_shape[i] == QDOS_GRAPH_CURVE;
 }
@@ -3571,13 +3758,32 @@ static void curve_range(const qdos_shell* sh, int i, double* t0, double* t1, dou
 
 static void graph_clear_results(qdos_shell* sh) {
 	sh->graph_result[0] = '\0';
+	sh->graph_kept[0] = '\0';
 	sh->shade_on = false;
 	sh->tangent_on = false;
+}
+
+/* The same curves as are plotted now, so what was found on them still holds */
+static bool graph_same(
+		const qdos_shell* sh, const char words[][QDOS_PROGRAM_NAME_MAX], const qdos_graph_shape* shapes, int count) {
+	if (sh->mode == QDOS_MODE_GRAPH3 || count != sh->graph_count) {
+		return false;
+	}
+	for (int i = 0; i < count; i++) {
+		if (strcmp(words[i], sh->graph_words[i]) != 0 || shapes[i] != sh->graph_shape[i]) {
+			return false;
+		}
+	}
+	return true;
 }
 
 /** @brief Plot @p count words on one pair of axes, each a curve in x or a parametric or polar one */
 static void graph_open_many(
 		qdos_shell* sh, const char words[][QDOS_PROGRAM_NAME_MAX], const qdos_graph_shape* shapes, int count) {
+	// Back from Y= to the same curves, an area found on them is still theirs
+	if (!graph_same(sh, words, shapes, count)) {
+		graph_clear_results(sh);
+	}
 	sh->graph_count = count;
 	for (int i = 0; i < count; i++) {
 		snprintf(sh->graph_words[i], sizeof(sh->graph_words[i]), "%s", words[i]);
@@ -3590,7 +3796,7 @@ static void graph_open_many(
 	sh->graph_state = GRAPH_PAN;
 	sh->graph_curve = 0;
 	sh->graph_statplot = false;
-	graph_clear_results(sh);
+	sh->graph_result[0] = '\0';
 	sh->graph_return = QDOS_MODE_CALC;
 	sh->mode = QDOS_MODE_GRAPH;
 	set_message(sh, "", false);
@@ -3750,7 +3956,7 @@ static const char* calc_prompt(const qdos_shell* sh) {
 		return sh->calc_step == 0 ? "FIRST CORNER?" : "SECOND CORNER?";
 	}
 	int step = sh->calc_step;
-	if (sh->calc == CALC_INTERSECT) {
+	if (sh->calc == CALC_INTERSECT || sh->calc == CALC_AREA) {
 		if (step < 2) {
 			return step == 0 ? "FIRST CURVE?" : "SECOND CURVE?";
 		}
@@ -3763,7 +3969,7 @@ static const char* calc_prompt(const qdos_shell* sh) {
 }
 
 static bool asking_for_curve(const qdos_shell* sh) {
-	return sh->graph_state == GRAPH_ASK && sh->calc == CALC_INTERSECT && sh->calc_step < 2;
+	return sh->graph_state == GRAPH_ASK && (sh->calc == CALC_INTERSECT || sh->calc == CALC_AREA) && sh->calc_step < 2;
 }
 
 static bool uses_free_cursor(const qdos_shell* sh) {
@@ -3780,7 +3986,8 @@ static void render_graph(qdos_shell* sh, qdos_console* con) {
 		qdos_graph_draw_axes(&area, v);
 	}
 	if (sh->shade_on && is_function(sh, sh->shade_curve)) {
-		qdos_graph_shade(&area, v, &sh->graph_samples[sh->shade_curve], sh->shade_a, sh->shade_b);
+		const qdos_graph_samples* other = is_function(sh, sh->shade_other) ? &sh->graph_samples[sh->shade_other] : NULL;
+		qdos_graph_shade_between(&area, v, &sh->graph_samples[sh->shade_curve], other, sh->shade_a, sh->shade_b);
 	}
 	for (int i = 0; i < sh->graph_count; i++) {
 		if (is_function(sh, i)) {
@@ -3851,6 +4058,9 @@ static void render_graph(qdos_shell* sh, qdos_console* con) {
 		}
 	} else if (sh->graph_result[0]) {
 		snprintf(line, sizeof(line), "%s", sh->graph_result);
+	} else if ((sh->shade_on || sh->tangent_on) && sh->graph_kept[0]) {
+		// Still on the plot, so still said, where the window's edges would go
+		snprintf(line, sizeof(line), "%s", sh->graph_kept);
 	} else {
 		char names[64] = "";
 		for (int i = 0; i < sh->graph_count; i++) {
@@ -3929,10 +4139,9 @@ static void menu_open(qdos_shell* sh, menu_id id);
 static void window_save(qdos_shell* sh);
 static void stat_zoom(qdos_shell* sh, qdos_graph_view* v);
 
-/* The window moved: new samples, and the old answers no longer where they were drawn */
+/* The window moved: new samples. A shaded area or a tangent is where it was on the plane, so it stays. */
 static void graph_moved(qdos_shell* sh) {
 	sh->graph_stale = true;
-	sh->shade_on = false;
 }
 
 /* Trace put on the middle of the plot, on a curve that is there */
@@ -4002,7 +4211,10 @@ static void graph_push(qdos_shell* sh, const double* values, int count) {
 }
 
 static void calc_start(qdos_shell* sh, calc_kind kind) {
-	graph_clear_results(sh);
+	// A zoom box only moves the window, so what was found stays
+	if (kind != CALC_BOX) {
+		graph_clear_results(sh);
+	}
 	if (kind == CALC_BOX) {
 		sh->calc = kind;
 		sh->calc_step = 0;
@@ -4022,6 +4234,10 @@ static void calc_start(qdos_shell* sh, calc_kind kind) {
 	}
 	if (kind == CALC_INTERSECT && functions < 2) {
 		set_message(sh, "INTERSECT NEEDS TWO CURVES", true);
+		return;
+	}
+	if (kind == CALC_AREA && functions < 2) {
+		set_message(sh, "AREA NEEDS TWO CURVES", true);
 		return;
 	}
 	if (!is_function(sh, sh->graph_curve)) {
@@ -4057,7 +4273,7 @@ static void calc_finish(qdos_shell* sh) {
 	sh->graph_error[0] = '\0';
 
 	// Both bounds on one column: ENTER, ENTER on the answer itself. A column either side.
-	if (lo == hi && sh->calc != CALC_INTEGRAL) {
+	if (lo == hi && sh->calc != CALC_INTEGRAL && sh->calc != CALC_AREA) {
 		const double column = (sh->graph_view.x1 - sh->graph_view.x0) / QDOS_SCREEN_W;
 		lo -= column;
 		hi += column;
@@ -4112,6 +4328,7 @@ static void calc_finish(qdos_shell* sh) {
 			const double line[2] = {d, y - d * x};
 			graph_push(sh, line, 2);
 			snprintf(text, sizeof(text), "TANGENT Y=%.8gX%+.8g", d, y - d * x);
+			snprintf(sh->graph_kept, sizeof(sh->graph_kept), "%s", text);
 			sh->tangent_on = true;
 			sh->tangent_x = x;
 			sh->tangent_y = y;
@@ -4128,9 +4345,31 @@ static void calc_finish(qdos_shell* sh) {
 		}
 		graph_push(sh, &area, 1);
 		snprintf(text, sizeof(text), "INTEGRAL=%.10g", area);
+		snprintf(sh->graph_kept, sizeof(sh->graph_kept), "%s", text);
 		calc_answer(sh, text, sh->calc_bound[1]);
 		sh->shade_on = true;
 		sh->shade_curve = sh->graph_curve;
+		sh->shade_other = -1;
+		sh->shade_a = lo;
+		sh->shade_b = hi;
+		return;
+	}
+
+	// Counted the same whichever curve is on top, as an Nspire counts it
+	case CALC_AREA: {
+		graph_call pair = {sh, sh->graph_words[sh->calc_curves[0]], sh->graph_words[sh->calc_curves[1]]};
+		double area;
+		if (!qdos_num_integral(gap_eval, &pair, lo, hi, &area)) {
+			break;
+		}
+		graph_push(sh, &area, 1);
+		snprintf(text, sizeof(text), "AREA=%.10g", area);
+		snprintf(sh->graph_kept, sizeof(sh->graph_kept), "%s", text);
+		sh->graph_curve = sh->calc_curves[0];
+		calc_answer(sh, text, hi);
+		sh->shade_on = true;
+		sh->shade_curve = sh->calc_curves[0];
+		sh->shade_other = sh->calc_curves[1];
 		sh->shade_a = lo;
 		sh->shade_b = hi;
 		return;
@@ -4148,6 +4387,7 @@ static void calc_finish(qdos_shell* sh) {
 static int calc_steps(calc_kind kind) {
 	switch (kind) {
 	case CALC_INTERSECT:
+	case CALC_AREA:
 		return 4;
 	case CALC_DERIVATIVE:
 	case CALC_TANGENT:
@@ -4157,9 +4397,24 @@ static int calc_steps(calc_kind kind) {
 	}
 }
 
+/*
+ * The cursor to where the two curves cross next, rightwards from @p from in the
+ * window, so ENTER and ENTER take the area they enclose. Left where it is if
+ * they do not.
+ */
+static void area_snap(qdos_shell* sh, double from) {
+	graph_call pair = {sh, sh->graph_words[sh->calc_curves[0]], sh->graph_words[sh->calc_curves[1]]};
+	double x;
+	if (from < sh->graph_view.x1 && qdos_num_root(difference_eval, &pair, from, sh->graph_view.x1, &x)) {
+		trace_to(sh, x);
+	}
+	sh->graph_error[0] = '\0';
+}
+
 /* The step's answer is x, from the cursor or typed */
 static void calc_accept_x(qdos_shell* sh, double x) {
-	int bound = sh->calc_step - (sh->calc == CALC_INTERSECT ? 2 : 0);
+	const bool two_curves = sh->calc == CALC_INTERSECT || sh->calc == CALC_AREA;
+	int bound = sh->calc_step - (two_curves ? 2 : 0);
 	if (bound >= 0 && bound < 2) {
 		sh->calc_bound[bound] = x;
 	}
@@ -4167,6 +4422,9 @@ static void calc_accept_x(qdos_shell* sh, double x) {
 	sh->graph_x = x;
 	if (++sh->calc_step >= calc_steps(sh->calc)) {
 		calc_finish(sh);
+	} else if (sh->calc == CALC_AREA) {
+		// Past the crossing just taken, by a column, or it is found again
+		area_snap(sh, x + (sh->graph_view.x1 - sh->graph_view.x0) / QDOS_SCREEN_W);
 	}
 }
 
@@ -4230,6 +4488,10 @@ static void handle_ask_key(qdos_shell* sh, const qdos_key_event* ev) {
 			sh->calc_curves[sh->calc_step++] = sh->graph_curve;
 			if (sh->calc_step == 1) {
 				curve_step(sh, 1, true);
+			} else if (sh->calc == CALC_AREA) {
+				// Bounds along the first curve, starting where the two first cross
+				sh->graph_curve = sh->calc_curves[0];
+				area_snap(sh, sh->graph_view.x0);
 			}
 			break;
 		default:
@@ -4252,7 +4514,7 @@ static void handle_ask_key(qdos_shell* sh, const qdos_key_event* ev) {
 	case QDOS_KEY_UP:
 	case QDOS_KEY_DOWN:
 		// The curve is chosen at the first step; after that it is the one asked about
-		if (sh->calc_step == 0 && sh->calc != CALC_INTERSECT) {
+		if (sh->calc_step == 0 && sh->calc != CALC_INTERSECT && sh->calc != CALC_AREA) {
 			curve_step(sh, ev->key == QDOS_KEY_DOWN ? 1 : -1, true);
 		}
 		break;
@@ -4280,7 +4542,7 @@ typedef enum {
 
 static void graph_zoom(qdos_shell* sh, zoom_kind kind) {
 	qdos_graph_view* v = &sh->graph_view;
-	graph_clear_results(sh);
+	sh->graph_result[0] = '\0';
 	switch (kind) {
 	case ZOOM_BOX:
 		calc_start(sh, CALC_BOX);
@@ -4419,7 +4681,6 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 			break;
 		}
 		qdos_graph_pan(v, 0.0, (ev->key == QDOS_KEY_UP) ? GRAPH_PAN : -GRAPH_PAN);
-		sh->shade_on = false;
 		break;
 
 	case QDOS_KEY_ADD:
@@ -4478,6 +4739,11 @@ static void slot_name(size_t i, char* out, size_t cap) {
 }
 
 /** @brief Declare slot @p i as the word it names; false, and the word gone, if it would not */
+/* A parametric curve leaves its x and y; everything else one value */
+static int slot_leaves(qdos_graph_shape shape) {
+	return (shape == QDOS_GRAPH_PARAM) ? 2 : 1;
+}
+
 static bool slot_declare(qdos_shell* sh, size_t i) {
 	plot_slot* slot = &sh->slots[i];
 	char name[8];
@@ -4488,15 +4754,49 @@ static bool slot_declare(qdos_shell* sh, size_t i) {
 	qd_interp_undeclare(sh->interp, name);
 	slot->shape = qdos_graph_body_shape(slot->body);
 	slot->broken = false;
+	sh->slot_why[0] = '\0';
+	graph_clear_results(sh); // an area found on the old body is not this one's
 	if (slot->shape == QDOS_GRAPH_NONE) {
 		return true;
 	}
 
+	// RPN as it stands, or else a formula as a TI takes it, as an HP 48 plots
+	// either. Declaring checks neither, so the count is what tells them apart.
+	const char* body = slot->body;
+	char rpn[PLOT_RPN_MAX];
+	const int left = qdos_rpn_results(body);
+	if (left != QDOS_RPN_UNKNOWN && left != slot_leaves(slot->shape)) {
+		int results;
+		char why[sizeof(sh->slot_why)];
+		if (!qdos_infix_to_rpn(body, rpn, sizeof(rpn), &results, why, sizeof(why))) {
+			// Said as it was meant: a formula's mistake, or RPN a word short
+			if (left >= 0 && strpbrk(body, "()^,") == NULL) {
+				snprintf(
+						sh->slot_why, sizeof(sh->slot_why), "LEAVES %d VALUES, NOT %d", left, slot_leaves(slot->shape));
+			} else {
+				snprintf(sh->slot_why, sizeof(sh->slot_why), "%s", why);
+			}
+			slot->broken = true;
+			return false;
+		}
+		body = rpn;
+		slot->shape = qdos_graph_body_shape(rpn);
+		if (results != slot_leaves(slot->shape)) {
+			snprintf(sh->slot_why, sizeof(sh->slot_why), "%s",
+					slot->shape == QDOS_GRAPH_PARAM ? "A CURVE IN t IS x, y" : "ONE VALUE, NOT SEVERAL");
+			slot->broken = true;
+			return false;
+		}
+	}
+
 	static const char* const TAKES[] = {"", "x:f64", "x:f64 y:f64", "t:f64", "theta:f64"};
-	char source[PLOT_BODY_MAX + 64];
+	char source[PLOT_RPN_MAX + 64];
 	snprintf(source, sizeof(source), "fn %s(%s -- %s) { %s }", name, TAKES[slot->shape],
-			slot->shape == QDOS_GRAPH_PARAM ? "x:f64 y:f64" : "r:f64", slot->body);
+			slot->shape == QDOS_GRAPH_PARAM ? "x:f64 y:f64" : "r:f64", body);
 	slot->broken = !qdos_guarded_eval(sh->interp, source);
+	if (slot->broken) {
+		snprintf(sh->slot_why, sizeof(sh->slot_why), "%s", qdos_guarded_error(sh->interp));
+	}
 	return !slot->broken;
 }
 
@@ -4675,6 +4975,8 @@ static void render_plot_edit(qdos_shell* sh, qdos_console* con) {
 	}
 }
 
+static void handle_plot_edit_key(qdos_shell* sh, const qdos_key_event* ev);
+
 static void handle_plot_key(qdos_shell* sh, const qdos_key_event* ev) {
 	plot_slot* slot = &sh->slots[sh->slot_sel];
 
@@ -4721,7 +5023,15 @@ static void handle_plot_key(qdos_shell* sh, const qdos_key_event* ev) {
 		sh->mode = QDOS_MODE_CALC;
 		break;
 
+	// Typing on a slot writes it afresh, as on a TI
 	default:
+		if ((ev->key >= QDOS_KEY_0 && ev->key <= QDOS_KEY_DIV) || ev->key == QDOS_KEY_CHAR ||
+				function_word(ev->key) != NULL || ev->key == QDOS_KEY_PI || ev->key == QDOS_KEY_E ||
+				ev->key == QDOS_KEY_NEG) {
+			input_clear(sh);
+			sh->mode = QDOS_MODE_PLOT_EDIT;
+			handle_plot_edit_key(sh, ev);
+		}
 		break;
 	}
 }
@@ -4772,7 +5082,7 @@ static void handle_plot_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 		memcpy(slot->body, sh->input, sh->input_len + 1);
 		trim(slot->body);
 		if (!slot_declare(sh, sh->slot_sel)) {
-			set_message(sh, qdos_guarded_error(sh->interp), true);
+			set_message(sh, sh->slot_why, true);
 		}
 		if (was_empty && slot->shape != QDOS_GRAPH_NONE) {
 			slot->on = true;
@@ -4812,6 +5122,7 @@ static void field_open(qdos_shell* sh, field_target target, const char* prompt, 
 	snprintf(sh->field_prompt, sizeof(sh->field_prompt), "%s", prompt);
 	snprintf(sh->field_text, sizeof(sh->field_text), "%s", initial);
 	sh->field_len = strlen(sh->field_text);
+	sh->field_fresh = false;
 }
 
 /* The keys that begin a number, and so open a field where one is wanted */
@@ -4874,6 +5185,14 @@ static bool field_number(qdos_shell* sh, double* out) {
 static void field_commit(qdos_shell* sh, double value);
 
 static void field_key(qdos_shell* sh, const qdos_key_event* ev) {
+	// An answer offered is taken with ENTER, or typed over as a TI's is
+	const bool fresh = sh->field_fresh;
+	sh->field_fresh = false;
+	if (fresh && ev->key != QDOS_KEY_ENTER && ev->key != QDOS_KEY_CLEAR && ev->key != QDOS_KEY_NEG) {
+		sh->field_text[0] = '\0';
+		sh->field_len = 0;
+	}
+
 	const char* word = function_word(ev->key);
 	if (word != NULL) {
 		field_append(sh, " ");
@@ -4979,6 +5298,7 @@ static void render_field(qdos_shell* sh, qdos_console* con) {
 static void fit_number(double v, char* out, size_t cap, size_t width) {
 	for (int digits = 10; digits >= 1; digits--) {
 		snprintf(out, cap, "%.*g", digits, v);
+		tidy_exponent(out);
 		if (strlen(out) <= width) {
 			return;
 		}
@@ -5139,6 +5459,7 @@ static const menu_item CALC_ITEMS[] = {
 		{"DY/DX", CALC_DERIVATIVE},
 		{"INTEGRAL", CALC_INTEGRAL},
 		{"TANGENT", CALC_TANGENT},
+		{"AREA", CALC_AREA},
 };
 
 static const menu_item GRAPH_TOOL_ITEMS[] = {
@@ -6383,9 +6704,10 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		sh->register_wait = REGISTER_IDLE;
 	}
 
-	// A picked level lasts only while the arrows and ENTER are what is pressed
+	// A picked level lasts only while the arrows, ENTER and dropping are what is pressed
 	if (sh->mode != QDOS_MODE_CALC || sh->field != FIELD_NONE ||
-			(ev->key != QDOS_KEY_UP && ev->key != QDOS_KEY_DOWN && ev->key != QDOS_KEY_ENTER)) {
+			(ev->key != QDOS_KEY_UP && ev->key != QDOS_KEY_DOWN && ev->key != QDOS_KEY_ENTER &&
+					ev->key != QDOS_KEY_BACKSPACE && ev->key != QDOS_KEY_DROP)) {
 		sh->stack_sel = 0;
 	}
 
@@ -7472,6 +7794,25 @@ static int native_intersect(qd_context* ctx, void* userdata) {
 	return qd_push_f(ctx, x);
 }
 
+/** `area` - ( f:str g:str a:f64 b:f64 -- area:f64 ) between two words from a to b, whichever is on top */
+static int native_area(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	char f[QDOS_PROGRAM_NAME_MAX], g[QDOS_PROGRAM_NAME_MAX];
+	double a[2], area;
+	if (!pop_word_and_numbers(ctx, "area", 2, a, g, sizeof(g))) {
+		return 1;
+	}
+	if (qd_pop_s(ctx, f, sizeof(f)) != 0) {
+		return qdos_math_error(ctx, "area", "NEEDS TWO WORDS' NAMES");
+	}
+	graph_call call = {sh, f, g};
+	sh->graph_error[0] = '\0';
+	if (!qdos_num_integral(gap_eval, &call, a[0], a[1], &area)) {
+		return numeric_fail(ctx, sh, "area", "UNDEFINED IN RANGE");
+	}
+	return qd_push_f(ctx, area);
+}
+
 /** `L1` to `L6` - ( -- xs:[]f64 ) a list, as the STAT page holds it */
 static int native_list(qd_context* ctx, void* userdata) {
 	const list_word* w = userdata;
@@ -7583,6 +7924,7 @@ static int native_plot(qd_context* ctx, void* userdata) {
 	return plot_and_wait(ctx, sh, name, false);
 }
 
+static bool pop_real(qd_context* ctx, double* out);
 static bool pop_reals(qd_context* ctx, double* out, int count);
 
 /** `ui::window` - ( x0:f64 x1:f64 y0:f64 y1:f64 -- ) the edges of the next plot */
@@ -7605,16 +7947,8 @@ static int native_window(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
-/** `ui::ask` - ( prompt:str -- x:f64 ok:i64 ) a number typed on the input row; ok is 0 for ESC */
-static int native_ask(qd_context* ctx, void* userdata) {
-	qdos_shell* sh = userdata;
-
-	char prompt[QDOS_VALUE_STRING_MAX];
-	if (qd_pop_s(ctx, prompt, sizeof(prompt)) != 0) {
-		qd_set_error_msg(ctx, "ui::ask: NEED A PROMPT");
-		return 1;
-	}
-
+/* A number typed on the input row, @p offered already in it if not NULL */
+static int ask_number(qd_context* ctx, qdos_shell* sh, const char* prompt, const char* offered) {
 	// Over the calculator, whose page is the one with an input row
 	const qdos_mode home = sh->mode;
 	sh->mode = QDOS_MODE_CALC;
@@ -7622,7 +7956,8 @@ static int native_ask(qd_context* ctx, void* userdata) {
 	set_message(sh, "", false);
 	char shown[sizeof(sh->field_prompt)];
 	snprintf(shown, sizeof(shown), "%.*s ", (int)sizeof(shown) - 2, prompt);
-	field_open(sh, FIELD_ASK, shown, "");
+	field_open(sh, FIELD_ASK, shown, offered ? offered : "");
+	sh->field_fresh = offered != NULL;
 
 	const bool finished = modal_run(sh, field_closed);
 	sh->field = FIELD_NONE;
@@ -7634,6 +7969,29 @@ static int native_ask(qd_context* ctx, void* userdata) {
 
 	qd_push_f(ctx, sh->ask_done ? sh->ask_value : 0.0);
 	return qd_push_i(ctx, sh->ask_done ? 1 : 0);
+}
+
+/** `ui::ask` - ( prompt:str -- x:f64 ok:i64 ) a number typed on the input row; ok is 0 for ESC */
+static int native_ask(qd_context* ctx, void* userdata) {
+	char prompt[QDOS_VALUE_STRING_MAX];
+	if (qd_pop_s(ctx, prompt, sizeof(prompt)) != 0) {
+		qd_set_error_msg(ctx, "ui::ask: NEED A PROMPT");
+		return 1;
+	}
+	return ask_number(ctx, userdata, prompt, NULL);
+}
+
+/** `ui::ask_or` - ( prompt:str x:f64 -- x:f64 ok:i64 ) as ui::ask, with x there to take by ENTER */
+static int native_ask_or(qd_context* ctx, void* userdata) {
+	double offered;
+	char prompt[QDOS_VALUE_STRING_MAX];
+	if (!pop_real(ctx, &offered) || qd_pop_s(ctx, prompt, sizeof(prompt)) != 0) {
+		qd_set_error_msg(ctx, "ui::ask_or: NEED A PROMPT AND A NUMBER");
+		return 1;
+	}
+	char text[32];
+	fit_number(offered, text, sizeof(text), 16);
+	return ask_number(ctx, userdata, prompt, text);
 }
 
 /* A number off the stack, whole or not */
@@ -8146,7 +8504,41 @@ static int native_cls(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+/** `lastx` - ( -- x ) what x was before the last function on the keys, as an HP's LASTx */
+static int native_lastx(qd_context* ctx, void* userdata) {
+	const qdos_shell* sh = userdata;
+	if (!sh->has_last_x) {
+		qd_set_error_msg(ctx, "lastx: NO FUNCTION YET");
+		return 1;
+	}
+	return push_value(ctx, &sh->last_x);
+}
+
+/** `rolld` - ( a .. y x -- x a .. y ) the whole stack down one, x to the bottom, as R-down */
+static int native_rolld(qd_context* ctx, void* userdata) {
+	(void)userdata;
+	qd_stack* st = ctx->st;
+	if (st->size > 1) {
+		const qd_stack_element_t top = st->data[st->size - 1];
+		memmove(&st->data[1], &st->data[0], (st->size - 1) * sizeof(*st->data));
+		st->data[0] = top;
+	}
+	return 0;
+}
+
+/** `rollu` - ( a b .. x -- b .. x a ) the other way, the bottom to x */
+static int native_rollu(qd_context* ctx, void* userdata) {
+	(void)userdata;
+	if (ctx->st->size > 1) {
+		stack_raise(ctx->st, ctx->st->size);
+	}
+	return 0;
+}
+
 static void register_natives(qdos_shell* sh, qd_interp* interp) {
+	qd_interp_register(interp, "lastx", "( -- x:f64)", native_lastx, sh);
+	qd_interp_register(interp, "rolld", "( -- )", native_rolld, sh);
+	qd_interp_register(interp, "rollu", "( -- )", native_rollu, sh);
 	qd_interp_register(interp, "sto", "(value:i64 slot:i64 -- )", native_sto, sh);
 	qd_interp_register(interp, "rcl", "(slot:i64 -- value:i64)", native_rcl, sh);
 	qd_interp_register(interp, "clr", "(slot:i64 -- )", native_clr, sh);
@@ -8163,6 +8555,7 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "nderiv", "(f:str x:f64 -- d:f64)", native_nderiv, sh);
 	qd_interp_register(interp, "fnint", "(f:str a:f64 b:f64 -- area:f64)", native_fnint, sh);
 	qd_interp_register(interp, "intersect", "(f:str g:str a:f64 b:f64 -- x:f64)", native_intersect, sh);
+	qd_interp_register(interp, "area", "(f:str g:str a:f64 b:f64 -- area:f64)", native_area, sh);
 
 	for (int i = 0; i < STAT_LISTS; i++) {
 		char name[4];
@@ -8183,6 +8576,7 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "ui::plot", "(f:str -- )", native_plot, sh);
 	qd_interp_register(interp, "ui::window", "(x0:f64 x1:f64 y0:f64 y1:f64 -- )", native_window, sh);
 	qd_interp_register(interp, "ui::ask", "(prompt:str -- x:f64 ok:i64)", native_ask, sh);
+	qd_interp_register(interp, "ui::ask_or", "(prompt:str x:f64 -- x:f64 ok:i64)", native_ask_or, sh);
 	qd_interp_register(interp, "ui::menu", "(title:str items:[]str -- i:i64)", native_menu, sh);
 	qd_interp_register(interp, "ui::pause", "( -- )", native_pause, sh);
 	qd_interp_register(interp, "ui::sleep", "(ms:i64 -- )", native_sleep, sh);
@@ -8384,6 +8778,7 @@ void qdos_shell_run(qdos_shell* sh) {
 
 	uint32_t last_key = sh->hal->ticks_ms(sh->hal);
 	uint32_t last_blink = last_key;
+	char shown_face = modifier_char(sh);
 
 	while (sh->hal->running(sh->hal)) {
 		qdos_key_event ev;
@@ -8399,6 +8794,13 @@ void qdos_shell_run(qdos_shell* sh) {
 				qdos_storage_save_session(sh->hal, sh->interp);
 				return;
 			}
+		}
+
+		// A modifier is pressed without a key coming of it, and is shown at once
+		const char face = modifier_char(sh);
+		if (face != shown_face) {
+			shown_face = face;
+			dirty = true;
 		}
 
 		// Never while a host has the card: those blocks are not ours to read

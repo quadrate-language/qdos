@@ -90,6 +90,12 @@ test_numeric = executable('test_numeric', 'test_numeric.c',
 		link_language: 'cpp')
 test('numeric', test_numeric)
 
+test_infix = executable('test_infix', 'test_infix.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		link_language: 'cpp')
+test('infix', test_infix)
+
 test_stats = executable('test_stats', 'test_stats.c',
 		include_directories: qdos_inc,
 		dependencies: [qdos_core_dep],

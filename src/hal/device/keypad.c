@@ -291,15 +291,19 @@ bool qdos_keypad_map(uint16_t code, bool shift, bool altgr, qdos_key_event* out)
 			return true;
 		case '+':
 			out->key = QDOS_KEY_ADD;
+			out->ch = ch; // typed, so a line takes the character and not the key's word
 			return true;
 		case '-':
 			out->key = QDOS_KEY_SUB;
+			out->ch = ch;
 			return true;
 		case '*':
 			out->key = QDOS_KEY_MUL;
+			out->ch = ch;
 			return true;
 		case '/':
 			out->key = QDOS_KEY_DIV;
+			out->ch = ch;
 			return true;
 		default:
 			out->key = QDOS_KEY_CHAR;

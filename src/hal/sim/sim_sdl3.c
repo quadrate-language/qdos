@@ -394,15 +394,19 @@ static void map_char(char ch, qdos_key_event* out) {
 		return;
 	case '+':
 		out->key = QDOS_KEY_ADD;
+		out->ch = ch; // typed, so a line takes the character and not the key's word
 		return;
 	case '-':
 		out->key = QDOS_KEY_SUB;
+		out->ch = ch;
 		return;
 	case '*':
 		out->key = QDOS_KEY_MUL;
+		out->ch = ch;
 		return;
 	case '/':
 		out->key = QDOS_KEY_DIV;
+		out->ch = ch;
 		return;
 	default:
 		out->key = QDOS_KEY_CHAR;
@@ -572,6 +576,15 @@ static qdos_keypad_mod sim_modifier(qdos_hal* hal) {
 		return QDOS_MOD_SYMBOL;
 	default:
 		return QDOS_MOD_NONE;
+	}
+}
+
+static void sim_modifier_reset(qdos_hal* hal) {
+	sim_state* st = (sim_state*)hal->impl;
+	if (st->layer != QDOS_PAD_PLAIN || st->locked != QDOS_PAD_PLAIN) {
+		st->layer = QDOS_PAD_PLAIN;
+		st->locked = QDOS_PAD_PLAIN;
+		push_frame(st);
 	}
 }
 
@@ -793,6 +806,7 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->present = sim_present;
 	hal->poll_key = sim_poll_key;
 	hal->modifier = sim_modifier;
+	hal->modifier_reset = sim_modifier_reset;
 	hal->running = sim_running;
 	hal->ticks_ms = sim_ticks_ms;
 	hal->wait = sim_wait;

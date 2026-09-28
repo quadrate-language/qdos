@@ -221,6 +221,16 @@ CHECKED(atanh, x > -1.0 && x < 1.0, "NEEDS -1 TO 1")
 
 #undef CHECKED
 
+/* log10 under the name on the key, so a refusal names the key */
+static int w_log(qd_context* ctx, void* user) {
+	(void)user;
+	double x = 0.0;
+	if (qdos_peek_number(ctx, 0, &x) && !(x > 0.0)) {
+		return qdos_math_error(ctx, "log", "NEEDS MORE THAN 0");
+	}
+	return usr_math_log10(ctx);
+}
+
 /* Whole numbers to 20 as lib/math has them; past that a float, which reaches 170 */
 static int w_fac(qd_context* ctx, void* user) {
 	(void)user;
@@ -485,7 +495,7 @@ static const struct {
 		{"ln", UNARY, w_ln},
 		{"log10", UNARY, w_log10},
 		// What a calculator means by log, so the cap can say it
-		{"log", UNARY, w_log10},
+		{"log", UNARY, w_log},
 		{"log2", UNARY, w_log2},
 		{"acosh", UNARY, w_acosh},
 		{"atanh", UNARY, w_atanh},

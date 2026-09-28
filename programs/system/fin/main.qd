@@ -17,18 +17,20 @@ fn gap(rate:f64 -- y:f64) {
 	0 ui::get rate 2 ui::get pay 3 ui::get -
 }
 
-fn ask(prompt:str -- x:f64 ok:i64) {
-	prompt ui::ask
+// Offering what was given last time, which ENTER takes
+fn ask(prompt:str name:str -- x:f64 ok:i64) {
+	name ui::load -> had -> last
+	had if { prompt last ui::ask_or } else { prompt ui::ask }
 }
 
 fn main() {
 	"SOLVE FOR" ["PAYMENT" "LOAN" "RATE %" "YEARS"] ui::menu -> want
 	want 0 == if { return }
 
-	want 2 != if { "LOAN?" ask 0 == if { drop return } 0 ui::put }
-	want 3 != if { "RATE %?" ask 0 == if { drop return } 1 ui::put }
-	want 4 != if { "YEARS?" ask 0 == if { drop return } 2 ui::put }
-	want 1 != if { "PAYMENT?" ask 0 == if { drop return } 3 ui::put }
+	want 2 != if { "LOAN?" "loan" ask 0 == if { drop return } 0 ui::put }
+	want 3 != if { "RATE %?" "rate" ask 0 == if { drop return } 1 ui::put }
+	want 4 != if { "YEARS?" "years" ask 0 == if { drop return } 2 ui::put }
+	want 1 != if { "PAYMENT?" "payment" ask 0 == if { drop return } 3 ui::put }
 
 	0 ui::get -> p
 	1 ui::get 1200.0 divide -> i
@@ -49,6 +51,10 @@ fn main() {
 	}
 
 	want 1 == if { 3 } else { want 2 - } ui::get ui::answer
+	0 ui::get "loan" ui::save
+	1 ui::get "rate" ui::save
+	2 ui::get "years" ui::save
+	3 ui::get "payment" ui::save
 
 	0 ui::get -> p
 	3 ui::get -> m

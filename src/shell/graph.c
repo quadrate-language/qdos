@@ -450,16 +450,22 @@ static int clamp_row(const qdos_graph_area* a, double r) {
 
 void qdos_graph_shade(
 		const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s, double a, double b) {
+	qdos_graph_shade_between(area, view, s, NULL, a, b);
+}
+
+void qdos_graph_shade_between(const qdos_graph_area* area, const qdos_graph_view* view, const qdos_graph_samples* s,
+		const qdos_graph_samples* other, double a, double b) {
 	const double lo = fmin(a, b), hi = fmax(a, b);
 	const int axis = clamp_row(area, row_of(area, view, 0.0));
 	for (int c = 0; c < s->columns; c++) {
 		const double x = qdos_graph_x(view, c, s->columns);
-		if (!s->ok[c] || x < lo || x > hi) {
+		if (!s->ok[c] || x < lo || x > hi || (other != NULL && !other->ok[c])) {
 			continue;
 		}
 		const int px = area->left + c * area->width / s->columns;
 		const int r = clamp_row(area, row_of(area, view, s->y[c]));
-		for (int y = (r < axis ? r : axis); y <= (r < axis ? axis : r); y++) {
+		const int to = (other != NULL) ? clamp_row(area, row_of(area, view, other->y[c])) : axis;
+		for (int y = (r < to ? r : to); y <= (r < to ? to : r); y++) {
 			if ((px + y) % 2 == 0) {
 				dot(area, px, y);
 			}

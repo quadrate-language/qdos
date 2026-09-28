@@ -4298,9 +4298,27 @@ static void test_clear_empties_the_line_before_leaving(void) {
 	CHECK(row[0] == ':');
 	CHECK(strstr(row, "zzz") == NULL);
 
-	// The label says which of its two jobs is next
+	// Nothing left to clear, so no CLR: pressed again, it would do nothing
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "ESC") != NULL);
+	CHECK(strstr(row, "CLR") == NULL);
+}
+
+/** CLR pressed twice out of habit stays in the line; only ESC leaves it. */
+static void test_soft_clear_twice_stays_in_the_line(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "1 2");
+	key(script, &n, QDOS_KEY_SOFT5);
+	key(script, &n, QDOS_KEY_SOFT5);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strcmp(row, ":") == 0);
 }
 
 /** Infix is valid Quadrate that means something else, so it is refused. */
@@ -4427,7 +4445,7 @@ static void test_a_wide_number_keeps_its_magnitude(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
-	CHECK(strstr(row, "e+") != NULL);
+	CHECK(strstr(row, "e24") != NULL);
 	CHECK(strstr(row, "1:") != NULL); // and it did not draw over the label
 }
 
@@ -5393,22 +5411,24 @@ static void test_soft_labels_follow_mode(void) {
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
 	run_script(script, n, fb);
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "COMP") != NULL);
-	CHECK(strstr(row, "ESC") != NULL);
+	CHECK(strstr(row, "TAB") != NULL);
+	CHECK(strstr(row, "CLR") == NULL); // nothing typed, so nothing to clear
 
-	// f1 is MODE in both, the one key there and back
-	CHECK(strstr(row, "MODE") != NULL);
-	CHECK((size_t)(strstr(row, "MODE") - row) < SOFT_WIDTH_T);
+	// f1 is the one key there and back, named for where it goes
+	CHECK(strstr(row, "RPN") != NULL);
+	CHECK((size_t)(strstr(row, "RPN") - row) < SOFT_WIDTH_T);
 	n = 0;
 	run_script(script, n, fb);
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "MODE") != NULL);
-	CHECK((size_t)(strstr(row, "MODE") - row) < SOFT_WIDTH_T);
+	CHECK(strstr(row, "LINE") != NULL);
+	CHECK((size_t)(strstr(row, "LINE") - row) < SOFT_WIDTH_T);
+	CHECK(strstr(row, "MODE") == NULL); // a TI's MODE is its settings
 }
 
-/** A letter in the calculator names the way to a line, however many characters its key types. */
-static void test_typing_in_the_calculator_says_how(void) {
+/** A letter in the calculator opens a line with it, however many characters its key types. */
+static void test_typing_in_the_calculator_opens_a_line(void) {
 	static const char* const KEYS[] = {"a", " nip ", "if "};
+	static const char* const SHOWN[] = {": a", ": nip", ": if"};
 	for (size_t k = 0; k < sizeof(KEYS) / sizeof(*KEYS); k++) {
 		store_reset();
 
@@ -5422,15 +5442,46 @@ static void test_typing_in_the_calculator_says_how(void) {
 		static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 		run_script(script, n, fb);
 		char row[QDOS_COLS + 1];
-		read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
-		CHECK(strcmp(row, "PRESS MODE TO TYPE A LINE") == 0);
+		read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+		CHECK(strncmp(row, SHOWN[k], strlen(SHOWN[k])) == 0);
 
-		// and the number being typed is still there under it
-		key(script, &n, QDOS_KEY_ENTER);
-		run_script(script, n, fb);
+		// and the number being typed went onto the stack first
 		read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 		CHECK(row[0] == '1' && strstr(row, " 2") != NULL);
 	}
+}
+
+/** That line runs and hands back to the calculator, as an HP 48's command line does. */
+static void test_a_line_typed_from_the_calculator_closes_after_it_runs(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "16");
+	for (const char* p = "sqrt"; *p; p++) {
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(row[0] == '>');
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "4") != NULL);
+
+	// A line that fails stays, to be put right
+	store_reset();
+	n = 0;
+	for (const char* p = "zzz"; *p; p++) {
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+	}
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_LEFT);
+	run_script(script, n, fb);
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strncmp(row, ": zzz", 5) == 0);
 }
 
 /** The stack keys type words that stand apart, so a number typed after one is not glued on. */
@@ -6280,9 +6331,9 @@ static void test_keypad_numbers_past_an_integer(void) {
 
 	char row[QDOS_COLS + 1];
 	read_level(fb, 1, row, sizeof(row));
-	CHECK(strstr(row, "1e+20") != NULL); // not the nought it used to be
+	CHECK(strstr(row, "1e20") != NULL); // not the nought it used to be
 	read_level(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "9.22337203685478e+18") != NULL); // not wrapped negative
+	CHECK(strstr(row, "9.22337203685478e18") != NULL); // not wrapped negative
 
 	// exp of 1000 has no finite value: refused, and 1000 still there to correct
 	n = 0;
@@ -7834,7 +7885,7 @@ static void test_ee_types_an_exponent(void) {
 	read_level(fb, 0, row, sizeof(row));
 	CHECK(strstr(row, "0.001") != NULL);
 	read_level(fb, 1, row, sizeof(row));
-	CHECK(strstr(row, "6.02e+23") != NULL);
+	CHECK(strstr(row, "6.02e23") != NULL); // no + and no leading nought, as a calculator writes it
 }
 
 /** % is a calculator's percent: y stays, x becomes that percent of it. */
@@ -7915,7 +7966,7 @@ static void test_line_arithmetic_does_not_wrap(void) {
 
 	char row[QDOS_COLS + 1];
 	read_level(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "1.6e+19") != NULL);
+	CHECK(strstr(row, "1.6e19") != NULL);
 }
 
 /** A line that fails part-way leaves the stack as it found it. */
@@ -8039,7 +8090,7 @@ static void test_settings_enter_is_done(void) {
 	CHECK(qdos_math_degrees());
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "MODE") != NULL);
+	CHECK(strstr(row, "LINE") != NULL);
 	qdos_math_set_degrees(false);
 }
 
@@ -8148,6 +8199,446 @@ static void test_an_app_answers_onto_the_stack(void) {
 	CHECK(strstr(row, "4.5") != NULL);
 	read_level(fb, 1, row, sizeof(row));
 	CHECK(strstr(row, " 3") != NULL);
+}
+
+/** A second point, or one in the exponent, is ignored as a calculator ignores it. */
+static void test_a_second_point_is_ignored(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "1..5");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_EE);
+	digits(script, &n, "3.");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 1.5") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 1000") != NULL);
+}
+
+/** A number typed past the largest double is refused, not put on the stack as inf. */
+static void test_a_typed_overflow_is_refused(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_EE);
+	digits(script, &n, "400");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "OVERFLOW") != NULL);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "inf") == NULL);
+}
+
+/** A key that fails changes nothing, so UNDO still takes back the one before it. */
+static void test_a_failed_key_keeps_the_undo(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_ADD); // one value: refused
+	key(script, &n, QDOS_KEY_UNDO);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 1") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL);
+}
+
+/** DEL with a level picked out drops that level, as an HP 48's stack does. */
+static void test_del_drops_the_level_picked(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	for (const char* d = "123"; *d; d++) {
+		digits(script, &n, (char[]){*d, '\0'});
+		key(script, &n, QDOS_KEY_ENTER);
+	}
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 1") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, "3:") == NULL);
+}
+
+/** % of a number alone is that fraction of it, as a TI's 15% is 0.15. */
+static void test_percent_of_one_number(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "15");
+	key(script, &n, QDOS_KEY_MOD);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 0.15") != NULL);
+}
+
+/** lastx brings back what the last function took; rolld and rollu turn the stack. */
+static void test_lastx_and_the_rolls(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "9");
+	key(script, &n, QDOS_KEY_SQRT);
+	type_line(script, &n, "lastx");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 9") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+
+	store_reset();
+	n = 0;
+	type_line(script, &n, "1 2 3 rolld");
+	run_script(script, n, fb);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+
+	store_reset();
+	n = 0;
+	type_line(script, &n, "1 2 3 rollu");
+	run_script(script, n, fb);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 1") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL);
+}
+
+/** A letter nothing follows on from is refused and said so; DEL takes one back. */
+static void test_catalog_says_when_nothing_matches(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_CATALOG);
+	type_partial(script, &n, "lasq");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strcmp(row, "NOTHING STARTS lasq") == 0);
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strncmp(row, " lastx", 6) == 0); // still where las found it
+
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	key(script, &n, QDOS_KEY_BACKSPACE);
+	type_partial(script, &n, "n");
+	run_script(script, n, fb);
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strncmp(row, " ln", 3) == 0);
+}
+
+/** Typing on a Y= slot writes it, and a formula there is worked out as a TI would. */
+static void test_typing_on_a_slot_writes_it(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_GRAPH);
+	type_partial(script, &n, "x^2-4");
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "3 Y1");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 5") != NULL);
+}
+
+/** RPN and formulas side by side in Y=, as an HP 48 plots either; the slot keeps what was typed. */
+static void test_y_takes_rpn_or_a_formula(void) {
+	store_reset();
+
+	static const char* const BODIES[] = {"x sq", "2sin(x)+x/2", "cos(t), sin(t)", "x 2", "(x+1"};
+	static const char* const TAGS[] = {"2D", "2D", "PAR", "ERR", "ERR"};
+	qdos_key_event script[96];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_GRAPH);
+	for (size_t i = 0; i < sizeof(BODIES) / sizeof(*BODIES); i++) {
+		type_partial(script, &n, BODIES[i]);
+		key(script, &n, QDOS_KEY_ENTER);
+		key(script, &n, QDOS_KEY_DOWN);
+	}
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	for (size_t i = 0; i < sizeof(BODIES) / sizeof(*BODIES); i++) {
+		char row[QDOS_COLS + 1];
+		read_row(fb, ROW_CONTENT_FIRST_T + (int)i, row, sizeof(row));
+		CHECK(strstr(row, BODIES[i]) != NULL);
+		CHECK(strstr(row, TAGS[i]) != NULL);
+	}
+
+	// Each refusal says why, as it was meant
+	n = 0;
+	store_reset();
+	key(script, &n, QDOS_KEY_GRAPH);
+	type_partial(script, &n, "x 2");
+	key(script, &n, QDOS_KEY_ENTER);
+	run_script(script, n, fb);
+	char error[EDIT_COLS_T + 1];
+	read_error(fb, error, sizeof(error));
+	CHECK(strstr(error, "LEAVES 2 VALUES, NOT 1") != NULL);
+
+	n = 0;
+	store_reset();
+	key(script, &n, QDOS_KEY_GRAPH);
+	type_partial(script, &n, "(x+1");
+	key(script, &n, QDOS_KEY_ENTER);
+	run_script(script, n, fb);
+	read_error(fb, error, sizeof(error));
+	CHECK(strstr(error, "MISSING )") != NULL);
+
+	n = 0;
+	store_reset();
+	key(script, &n, QDOS_KEY_GRAPH);
+	type_partial(script, &n, "sin(t)");
+	key(script, &n, QDOS_KEY_ENTER);
+	run_script(script, n, fb);
+	read_error(fb, error, sizeof(error));
+	CHECK(strstr(error, "A CURVE IN t IS x, y") != NULL);
+}
+
+/** A digit on DECIMALS sets it, rather than stepping round to it. */
+static void test_a_digit_sets_decimals(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	digits(script, &n, "4");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_SQRT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 1.4142") != NULL);
+	CHECK(strstr(row, " 1.41421") == NULL);
+}
+
+/** A keyboard's / is Quadrate's own in a line; the keypad's ÷ is the calculator's. */
+static void test_a_typed_operator_is_the_language_s(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "7 2 ");
+	script[n++] = (qdos_key_event){QDOS_KEY_DIV, '/'};
+	key(script, &n, QDOS_KEY_ENTER);
+	type_partial(script, &n, "7 2");
+	key(script, &n, QDOS_KEY_DIV);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL && strstr(row, "3.5") == NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 3.5") != NULL);
+}
+
+/** ui::ask_or offers an answer: ENTER takes it, a digit types over it. */
+static void test_ask_or_offers_an_answer(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "offer", "fn main( -- ) { \"N?\" 5.0 ui::ask_or drop 2.0 * ui::answer }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "offer");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_more(script, &n, "offer");
+	answer(script, &n, "3");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 10") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 6") != NULL);
+}
+
+/** The log key's refusal names the key, not the log10 behind it. */
+static void test_log_refusal_names_the_key(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	digits(script, &n, "0");
+	key(script, &n, QDOS_KEY_LOG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strncmp(row, "log: ", 5) == 0);
+}
+
+/** AREA, as an Nspire's Bounded Area: two curves, the bounds offered where they cross. */
+static void test_calc_area_between_two_curves(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT5);
+	type_slot(script, &n, 0, "x^2");
+	type_slot(script, &n, 1, "x+2");
+	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_9);	 // AREA
+	for (int i = 0; i < 4; i++) {
+		key(script, &n, QDOS_KEY_ENTER); // Y1, Y2, and the two crossings offered
+	}
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "AREA=4.5") == 0);
+
+	// Bounds typed instead, the way every other CALC item takes them
+	n = 0;
+	key(script, &n, QDOS_KEY_SOFT5);
+	type_slot(script, &n, 0, "x^2");
+	type_slot(script, &n, 1, "x+2");
+	key(script, &n, QDOS_KEY_SOFT5);
+	key(script, &n, QDOS_KEY_SOFT3);
+	key(script, &n, QDOS_KEY_9);
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER);
+	type_more(script, &n, "0");
+	type_more(script, &n, "1");
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "AREA=2.166666667") == 0);
+
+	// One curve is not enough
+	n = 0;
+	graph_slot(script, &n, "x");
+	key(script, &n, QDOS_KEY_SOFT3);
+	key(script, &n, QDOS_KEY_9);
+	store_reset();
+	run_script(script, n, fb);
+	read_error(fb, line, sizeof(line));
+	CHECK(strstr(line, "AREA NEEDS TWO CURVES") != NULL);
+}
+
+/** The word counts every part as area, whichever curve is on top. */
+static void test_area_word_counts_both_sides(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_more(script, &n, "fn f(x:f64 -- r:f64) { x }");
+	type_more(script, &n, "fn g(x:f64 -- r:f64) { 0.0 }");
+	type_more(script, &n, "\"f\" \"g\" -1 1 area");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 1") != NULL); // not the nought the signed integral is
+}
+
+/** What CALC found stays through a zoom, a pan and a trip to Y=, but not a change to a curve. */
+static void test_an_area_survives_zooming(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT5);
+	type_slot(script, &n, 0, "x^2");
+	type_slot(script, &n, 1, "x+2");
+	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_9);	 // AREA
+	for (int i = 0; i < 4; i++) {
+		key(script, &n, QDOS_KEY_ENTER);
+	}
+	key(script, &n, QDOS_KEY_CLEAR); // out of trace
+	key(script, &n, QDOS_KEY_SOFT2); // ZOOM
+	key(script, &n, QDOS_KEY_3);	 // OUT
+	key(script, &n, QDOS_KEY_UP);	 // and a pan
+	key(script, &n, QDOS_KEY_CLEAR); // to Y=
+	key(script, &n, QDOS_KEY_SOFT5); // and back
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "AREA=4.5") == 0);
+
+	// A new body is a new curve, and the area was the old one's
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_slot(script, &n, 1, "x+3");
+	key(script, &n, QDOS_KEY_SOFT5);
+	store_reset();
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "AREA") == NULL);
 }
 
 int main(void) {
@@ -8320,7 +8811,8 @@ int main(void) {
 	test_edit_check_accepts_a_known_word();
 	test_check_leaves_session_alone();
 	test_soft_labels_follow_mode();
-	test_typing_in_the_calculator_says_how();
+	test_typing_in_the_calculator_opens_a_line();
+	test_a_line_typed_from_the_calculator_closes_after_it_runs();
 	test_stack_keys_in_a_line_stand_apart();
 	test_mode_toggles_line_mode();
 	test_pi_key();
@@ -8341,6 +8833,7 @@ int main(void) {
 	test_auto_off_waits_for_the_card();
 	test_a_failed_line_is_kept();
 	test_clear_empties_the_line_before_leaving();
+	test_soft_clear_twice_stays_in_the_line();
 	test_infix_is_refused_with_the_postfix();
 	test_unspaced_infix_is_refused();
 	test_the_hint_leaves_real_lines_alone();
@@ -8440,5 +8933,21 @@ int main(void) {
 	test_a_graph_message_hides_the_readout();
 	test_a_prompt_has_its_own_soft_keys();
 	test_an_app_answers_onto_the_stack();
+	test_a_second_point_is_ignored();
+	test_a_typed_overflow_is_refused();
+	test_a_failed_key_keeps_the_undo();
+	test_del_drops_the_level_picked();
+	test_percent_of_one_number();
+	test_lastx_and_the_rolls();
+	test_catalog_says_when_nothing_matches();
+	test_typing_on_a_slot_writes_it();
+	test_y_takes_rpn_or_a_formula();
+	test_a_digit_sets_decimals();
+	test_a_typed_operator_is_the_language_s();
+	test_ask_or_offers_an_answer();
+	test_log_refusal_names_the_key();
+	test_calc_area_between_two_curves();
+	test_area_word_counts_both_sides();
+	test_an_area_survives_zooming();
 	return check_report("shell");
 }

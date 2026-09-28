@@ -83,6 +83,9 @@ struct qdos_hal {
 	/** @brief Which keypad face is live. NULL where the keypad has only one. */
 	qdos_keypad_mod (*modifier)(qdos_hal* hal);
 
+	/** @brief Back to the plain face, a locked one too. NULL where modifier is. */
+	void (*modifier_reset)(qdos_hal* hal);
+
 	bool (*running)(qdos_hal* hal);
 
 	/**
