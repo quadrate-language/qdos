@@ -71,10 +71,10 @@ static void test_sampling_takes_one_value_per_column(void) {
 	CHECK(qdos_graph_sample(&s, &v, W, f_identity, NULL) == W);
 	CHECK(s.columns == W);
 
-	// Each at the middle of its column, so the two ends are half a column in
-	CHECK(fabs(s.y[0] - (-10.0 + 10.0 / W)) < 1e-12);
-	CHECK(fabs(s.y[W - 1] - (10.0 - 10.0 / W)) < 1e-12);
-	CHECK(fabs(qdos_graph_x(&v, 200, W) - (10.0 / W)) < 1e-12);
+	// Each at the left edge of its column, so the middle one is x = 0 itself
+	CHECK(fabs(s.y[0] - (-10.0)) < 1e-12);
+	CHECK(fabs(s.y[W - 1] - (10.0 - 20.0 / W)) < 1e-12);
+	CHECK(qdos_graph_x(&v, 200, W) == 0.0);
 }
 
 static void test_a_function_with_no_value_leaves_a_gap(void) {
@@ -544,7 +544,7 @@ static void test_scale_sets_the_ticks(void) {
 	clear();
 	qdos_graph_draw_grid(&AREA, &v);
 	CHECK(ink_at(W / 2 + 100, TOP + (int)lround((PLOT_H - 1) / 4.0)));
-	CHECK(ink_in_plot() == 3 * 5); // x = -10 and 10 are the outer edges of the end columns, off the plot
+	CHECK(ink_in_plot() == 4 * 5); // x = -10 is the first column; 10 is past the last
 }
 
 static bool f_circle(void* user, double t, double* x, double* y) {

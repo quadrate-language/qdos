@@ -48,6 +48,8 @@ fn main() {
 		i 0.0 == if { p m divide } else { 1.0 p i * m divide - ln neg 1.0 i + ln divide } 12.0 divide 2 ui::put
 	}
 
+	want 1 == if { 3 } else { want 2 - } ui::get ui::answer
+
 	0 ui::get -> p
 	3 ui::get -> m
 	2 ui::get 12.0 * -> n

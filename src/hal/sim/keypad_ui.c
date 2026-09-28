@@ -80,8 +80,8 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 				BTN(KEY(QDOS_GLYPH_DOWN, QDOS_KEY_DOWN), NONE, NONE),
 				BTN(KEY(QDOS_GLYPH_RIGHT, QDOS_KEY_RIGHT), NONE, NONE)},
 
-		// The inverses under the trigonometry, e^x for ln, then powers and the
-		// remainder, with control flow printed above
+		// The inverses under the trigonometry, e^x for ln, then powers and
+		// percent, with control flow printed above
 		{BTN(KEY("asin", QDOS_KEY_ASIN), TXT("I", "i"), TXT("f64", "f64")),
 				BTN(KEY("acos", QDOS_KEY_ACOS), TXT("J", "j"), TXT("str", "str")),
 				BTN(KEY("atan", QDOS_KEY_ATAN), TXT("K", "k"), TXT("if", "if ")),
@@ -102,17 +102,18 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 				BTN(KEY("swap", QDOS_KEY_SWAP), TXT("Q", "q"), TXT("->", " -> ")),
 				BTN(KEY("abs", QDOS_KEY_ABS), TXT("R", "r"), KEY("CPLX", QDOS_KEY_COMPLEX)),
 				BTN(KEY("round", QDOS_KEY_ROUND), TXT("S", "s"), KEY("i", QDOS_KEY_I)),
-				BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, TXT("nl", " nl "))},
+				BTN(KEY("DEL", QDOS_KEY_BACKSPACE), NONE, KEY("CLST", QDOS_KEY_CLEAR_STACK))},
 
 		/*
 		 * Five across again, for the numeric block. Entry and editing: ALPHA sits
 		 * beside space, being the other thing you reach for mid-word. DEL is
 		 * above the operator column, where the right hand already is. DEL rather
 		 * than an arrow: the arrows move the cursor, and one glyph cannot mean both.
+		 * EE over the sign, the two keys that shape a number being typed.
 		 */
 		{BTN(TXT(QDOS_PAD_GLYPH_SPACE, " "), NONE, TXT("print", " print ")), MOD(CAP_ALPHA, QDOS_PAD_ALPHA),
-				BTN(KEY(QDOS_GLYPH_PLUSMINUS, QDOS_KEY_NEG), TXT("T", "t"), TXT("[", "[")),
-				BTN(KEY("TAB", QDOS_KEY_TAB), TXT("U", "u"), TXT("]", "]")),
+				BTN(KEY(QDOS_GLYPH_PLUSMINUS, QDOS_KEY_NEG), TXT("T", "t"), KEY("EE", QDOS_KEY_EE)),
+				BTN(KEY("TAB", QDOS_KEY_TAB), TXT("U", "u"), TXT("nl", " nl ")),
 				BTN(KEY(QDOS_GLYPH_DIVIDE, QDOS_KEY_DIV), TXT("V", "v"), TXT("shl", " shl "))},
 
 		/*
@@ -125,13 +126,13 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
 		 * The registers down the left. STO and RCL take the digit after them, and
 		 * that digit is right beside them.
 		 */
-		{BTN(KEY("STO", QDOS_KEY_STO), NONE, NONE), BTN(KEY("7", QDOS_KEY_7), NONE, TXT("and", " and ")),
+		{BTN(KEY("STO", QDOS_KEY_STO), NONE, TXT("[", "[")), BTN(KEY("7", QDOS_KEY_7), NONE, TXT("and", " and ")),
 				BTN(KEY("8", QDOS_KEY_8), NONE, TXT("or", " or ")),
 				BTN(KEY("9", QDOS_KEY_9), NONE, TXT("shr", " shr ")),
 				BTN(KEY(QDOS_GLYPH_TIMES, QDOS_KEY_MUL), TXT("W", "w"), TXT("<", "<"))},
 
 		// Underscore on shift-minus, where both keyboards this reads from put it
-		{BTN(KEY("RCL", QDOS_KEY_RCL), NONE, NONE), BTN(KEY("4", QDOS_KEY_4), NONE, TXT("not", " not ")),
+		{BTN(KEY("RCL", QDOS_KEY_RCL), NONE, TXT("]", "]")), BTN(KEY("4", QDOS_KEY_4), NONE, TXT("not", " not ")),
 				BTN(KEY("5", QDOS_KEY_5), NONE, TXT("==", " == ")), BTN(KEY("6", QDOS_KEY_6), NONE, TXT("!=", " != ")),
 				BTN(KEY("-", QDOS_KEY_SUB), TXT("X", "x"), TXT("_", "_"))},
 

@@ -38,6 +38,8 @@
 /** Maximum characters in a pending numeric entry. */
 #define ENTRY_MAX 64
 
+#define HISTORY_MAX 16
+
 /** Evaluator stack capacity, in elements. */
 #define STACK_SIZE 4096
 
@@ -148,11 +150,19 @@ typedef enum {
 	SETTING_USB,	 ///< Only where the backend has a gadget to offer
 	SETTING_MODULES, ///< Only when something is blocked, there being nothing else to say
 	SETTING_COMPLEX, ///< REAL, a+bi or POLAR
+	SETTING_NOTATION,
 	SETTING__COUNT
 } qdos_setting;
 
 #define DECIMALS_AUTO -1
 #define DECIMALS_MAX 9
+
+enum {
+	NOTATION_NORMAL = 0,
+	NOTATION_SCI,
+	NOTATION_ENG,
+	NOTATION__COUNT
+};
 
 /** @brief As many apps as the card may offer at once */
 #define QDOS_APPS_MAX 32
@@ -219,6 +229,7 @@ typedef enum {
 
 /* Numbers an app keeps for itself, for the words it plots to read */
 #define UI_SLOTS 32
+#define UI_ANSWERS 8
 
 /* As many items as ui::menu offers */
 #define UI_MENU_MAX 16
@@ -279,6 +290,11 @@ struct qdos_shell {
 	size_t entry_len;
 
 	char input[INPUT_MAX]; ///< Line being typed in QDOS_MODE_LINE
+	bool line_minus;	   ///< The last key typed " minus ", which the next may make a sign
+
+	char history[HISTORY_MAX][INPUT_MAX]; ///< Lines entered, oldest first
+	size_t history_count;
+	size_t history_at; ///< The one on the line, or history_count when none is
 
 	qdos_wordlist list;
 	qdos_program_entry apps[QDOS_WORDLIST_MAX];
@@ -293,7 +309,9 @@ struct qdos_shell {
 	 * They are in memory only, so `forget` has nothing to erase for them. */
 	char line_word[QDOS_LINE_WORDS][QDOS_PROGRAM_NAME_MAX];
 	size_t line_word_count;
-	bool list_all; ///< Every word, rather than just the installed programs
+	bool list_all;						///< Every word, rather than just the installed programs
+	size_t list_user;					///< In the catalog, how many at the top are words of your own
+	char list_find[QDOS_WORDLIST_NAME]; ///< What has been typed to find a word by
 	size_t list_sel;
 	size_t list_top;
 	qdos_mode list_from;
@@ -306,10 +324,13 @@ struct qdos_shell {
 
 	size_t setting_sel;
 	int decimals; ///< DECIMALS_AUTO, or how many to show after the point
+	int notation; ///< NOTATION_NORMAL, _SCI or _ENG
 
 	qdos_value undo[QDOS_REGISTER_MAX];
 	size_t undo_depth;
 	bool undo_ready;
+	bool undo_exact;   ///< The snapshot is the whole stack, so a failure can be put back
+	size_t stack_sel;  ///< Level picked out with the arrows, from 1; nought for none
 	bool delete_armed; ///< One press of backspace has already asked
 	bool drop_armed;   ///< One press of ESC has already asked, in the editor
 	bool powering_off; ///< Set by the power key, acted on by the run loop
@@ -328,7 +349,7 @@ struct qdos_shell {
 	size_t input_len;
 	size_t input_cursor;
 
-	char message[MESSAGE_COLS + 1]; ///< Error or status under the stack
+	char message[2 * MESSAGE_COLS + 1]; ///< Error or status under the stack; an error may take two rows
 	bool message_is_error;
 	char status[16]; ///< What the status band last showed, to know when it is stale
 
@@ -392,6 +413,8 @@ struct qdos_shell {
 	size_t menu_custom_count;
 	int menu_pick; ///< What ui::menu came back with, 1 up, 0 for none
 	double ui_slot[UI_SLOTS];
+	qdos_value ui_answer[UI_ANSWERS]; ///< For the calculator's stack when the app ends
+	size_t ui_answer_count;
 
 	menu_id menu;
 	size_t menu_sel;
@@ -525,6 +548,36 @@ static void input_clear(qdos_shell* sh) {
 	sh->input[0] = '\0';
 }
 
+static void history_add(qdos_shell* sh) {
+	if (sh->history_count > 0 && strcmp(sh->history[sh->history_count - 1], sh->input) == 0) {
+		sh->history_at = sh->history_count;
+		return;
+	}
+	if (sh->history_count == HISTORY_MAX) {
+		memmove(sh->history[0], sh->history[1], (HISTORY_MAX - 1) * sizeof(sh->history[0]));
+		sh->history_count--;
+	}
+	snprintf(sh->history[sh->history_count++], INPUT_MAX, "%s", sh->input);
+	sh->history_at = sh->history_count;
+}
+
+/* Up and down through what was entered, as 2nd ENTRY on a TI; past the newest is an empty line */
+static void history_step(qdos_shell* sh, int dir) {
+	if (dir < 0 && sh->history_at > 0) {
+		sh->history_at--;
+	} else if (dir > 0 && sh->history_at < sh->history_count) {
+		sh->history_at++;
+	} else {
+		return;
+	}
+	input_clear(sh);
+	if (sh->history_at < sh->history_count) {
+		snprintf(sh->input, INPUT_MAX, "%s", sh->history[sh->history_at]);
+		sh->input_len = strlen(sh->input);
+		sh->input_cursor = sh->input_len;
+	}
+}
+
 /*
  * Every evaluation goes through here. A type error in lib/rt -- `1.5 2.5 and`,
  * a string where a number was wanted -- is fatal and would end the process, so
@@ -586,11 +639,44 @@ static size_t log_held(const qdos_shell* sh) {
  * Too wide for the row, a number goes to exponent form: there is no end of one
  * that is safe to drop.
  */
+/* Mantissa and exponent, the exponent a multiple of three for ENG; AUTO decimals as few as are exact */
+static void format_exponent(double x, bool eng, int decimals, char* out, size_t cap) {
+	int exponent = (x == 0.0 || !isfinite(x)) ? 0 : (int)floor(log10(fabs(x)));
+	if (eng) {
+		exponent = (int)floor(exponent / 3.0) * 3;
+	}
+	double mantissa = (exponent == 0) ? x : x / pow(10.0, exponent);
+
+	char digits[40];
+	const int shown = (decimals == DECIMALS_AUTO) ? (eng ? 12 : 14) : decimals;
+	snprintf(digits, sizeof(digits), "%.*f", shown, mantissa);
+	// 9.996 to two places is 10.00, which is 1.00 of the next power up
+	if (fabs(strtod(digits, NULL)) >= (eng ? 1000.0 : 10.0)) {
+		exponent += eng ? 3 : 1;
+		mantissa /= eng ? 1000.0 : 10.0;
+	}
+	if (decimals == DECIMALS_AUTO) {
+		snprintf(digits, sizeof(digits), "%.*f", eng ? 12 : 14, mantissa);
+		char* end = digits + strlen(digits);
+		while (end > digits && end[-1] == '0') {
+			*--end = '\0';
+		}
+		if (end > digits && end[-1] == '.') {
+			*--end = '\0';
+		}
+	} else {
+		snprintf(digits, sizeof(digits), "%.*f", decimals, mantissa);
+	}
+	snprintf(out, cap, "%se%d", digits, exponent);
+}
+
 static void format_value(const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap, size_t room) {
 	const bool number = value->type == QD_INTERP_VALUE_INT || value->type == QD_INTERP_VALUE_FLOAT;
 	const double shown = (value->type == QD_INTERP_VALUE_INT) ? (double)value->i : value->f;
 
-	if (sh->decimals == DECIMALS_AUTO || !number) {
+	if (number && sh->notation != NOTATION_NORMAL && isfinite(shown)) {
+		format_exponent(shown, sh->notation == NOTATION_ENG, sh->decimals, out, cap);
+	} else if (sh->decimals == DECIMALS_AUTO || !number) {
 		snprintf(out, cap, "%s", value->text);
 	} else {
 		// A fixed number of decimals is a column to read down, so whole numbers
@@ -703,10 +789,15 @@ static bool format_array(const qdos_shell* sh, size_t index, char* out, size_t c
 }
 
 static void set_message(qdos_shell* sh, const char* text, bool is_error) {
-	snprintf(sh->message, sizeof(sh->message), "%s", text ? text : "");
+	text = text ? text : "";
+	snprintf(sh->message, sizeof(sh->message), "%s", text);
+	if (strlen(text) >= sizeof(sh->message)) {
+		sh->message[sizeof(sh->message) - 2] = QDOS_ELIDED;
+	}
 	sh->message_is_error = is_error;
+	// In full, where LOG can show the end of what the message row could not
 	if (is_error) {
-		log_add(sh, sh->message);
+		log_add(sh, text);
 	}
 }
 
@@ -806,11 +897,11 @@ typedef struct {
 
 static const soft_key SOFT[QDOS_MODE__COUNT][SOFT_KEYS] = {
 		// Turning off is the PWR key's job: the one action on the row that cannot be
-		// undone by pressing it again. The angle is on the settings page.
+		// undone by pressing it again. The angle is the first row of SET.
 		// MODE first in both, so the one key goes there and back. PLOT at the
 		// right, under the GRAPH it leads to. Four letters, like the rest.
 		[QDOS_MODE_CALC] = {{"MODE", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"CAT", QDOS_KEY_CATALOG},
-				{"INFO", QDOS_KEY_ABOUT}, {"PLOT", QDOS_KEY_GRAPH}},
+				{"SET", QDOS_KEY_SETTINGS}, {"PLOT", QDOS_KEY_GRAPH}},
 		[QDOS_MODE_LINE] = {{"MODE", QDOS_KEY_MODE}, {"APPS", QDOS_KEY_LIST}, {"COMP", QDOS_KEY_TAB},
 				{"CAT", QDOS_KEY_CATALOG}, {"ESC", QDOS_KEY_CLEAR}},
 		// No arrows here or below: the keypad has its own
@@ -819,10 +910,11 @@ static const soft_key SOFT[QDOS_MODE__COUNT][SOFT_KEYS] = {
 		// ESC, as everywhere else: DROP is a keypad word that empties the stack
 		[QDOS_MODE_EDIT] = {{"ESC", QDOS_KEY_CLEAR}, {"UNDO", QDOS_KEY_UNDO}, {"CHECK", QDOS_KEY_CHECK},
 				{"RUN", QDOS_KEY_RUN}, {"SAVE", QDOS_KEY_SAVE}},
-		[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"SET", QDOS_KEY_SETTINGS},
-				{"LOG", QDOS_KEY_DEBUG}, {"", QDOS_KEY_NONE}},
-		[QDOS_MODE_SETTINGS] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
-				{"CHG", QDOS_KEY_ENTER}, {"LOG", QDOS_KEY_DEBUG}},
+		// The three pages behind SET keep their keys in the same places
+		[QDOS_MODE_ABOUT] = {{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE},
+				{"LOG", QDOS_KEY_DEBUG}},
+		[QDOS_MODE_SETTINGS] = {{"ESC", QDOS_KEY_CLEAR}, {"INFO", QDOS_KEY_ABOUT}, {"", QDOS_KEY_NONE},
+				{"CHG", QDOS_KEY_RIGHT}, {"LOG", QDOS_KEY_DEBUG}},
 		// FIT and STD are on ZOOM, with the rest of the windows. A five-letter
 		// label fills its slot, so it goes last or beside a short one: TRACE
 		// and GRAPH on the right, where a TI has them.
@@ -857,7 +949,23 @@ static const qdos_native_entry* list_module(const qdos_shell* sh, size_t i);
 static size_t list_count(const qdos_shell* sh);
 static void register_apps(qdos_shell* sh, qd_interp* interp);
 
+/* While a number or a name is being asked for, whatever page it is asked over */
+static const soft_key FIELD_SOFT[SOFT_KEYS] = {
+		{"ESC", QDOS_KEY_CLEAR}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"", QDOS_KEY_NONE}, {"OK", QDOS_KEY_ENTER}};
+
+static const soft_key* soft_row(const qdos_shell* sh) {
+	return (sh->field != FIELD_NONE) ? FIELD_SOFT : SOFT[sh->mode];
+}
+
 static void render_soft(qdos_shell* sh, qdos_console* con) {
+	if (sh->field != FIELD_NONE) {
+		for (int i = 0; i < SOFT_KEYS; i++) {
+			const int width = (int)strlen(FIELD_SOFT[i].label);
+			qdos_console_puts(con, i * SOFT_WIDTH + (SOFT_WIDTH - width) / 2, ROW_SOFT, FIELD_SOFT[i].label);
+		}
+		return;
+	}
+
 	for (int i = 0; i < SOFT_KEYS; i++) {
 		const char* label = SOFT[sh->mode][i].label;
 
@@ -911,34 +1019,68 @@ static void absorb_output(qdos_shell* sh) {
 	}
 }
 
+/* A level of the stack as a value that can be pushed again; false for what cannot */
+static bool value_at(qdos_shell* sh, size_t i, qdos_value* out) {
+	qd_interp_value value;
+	if (!qd_interp_peek(sh->interp, i, &value)) {
+		return false;
+	}
+	memset(out, 0, sizeof(*out));
+	const qd_stack_element_t* element = &qd_interp_context(sh->interp)->st->data[qd_interp_depth(sh->interp) - 1 - i];
+	if (qdos_cpx_of(element, &out->f, &out->im)) {
+		out->type = QDOS_VALUE_COMPLEX;
+	} else if (value.type == QD_INTERP_VALUE_INT) {
+		out->type = QDOS_VALUE_INT;
+		out->i = value.i;
+	} else if (value.type == QD_INTERP_VALUE_FLOAT) {
+		out->type = QDOS_VALUE_FLOAT;
+		out->f = value.f;
+	} else if (value.type == QD_INTERP_VALUE_STR) {
+		const char* text = (element->value.s != NULL) ? qd_string_data(element->value.s) : "";
+		out->type = QDOS_VALUE_STRING;
+		snprintf(out->s, sizeof(out->s), "%s", text);
+		return strlen(text) < sizeof(out->s);
+	} else {
+		return false;
+	}
+	return true;
+}
+
 /* One step back, which is all a calculator ever offers */
 static void undo_snapshot(qdos_shell* sh) {
 	const size_t depth = qd_interp_depth(sh->interp);
 	sh->undo_depth = (depth > QDOS_REGISTER_MAX) ? (size_t)QDOS_REGISTER_MAX : depth;
+	sh->undo_exact = sh->undo_depth == depth;
 
 	for (size_t i = 0; i < sh->undo_depth; i++) {
+		qdos_value* slot = &sh->undo[i];
+		if (value_at(sh, i, slot)) {
+			continue;
+		}
+
+		// An array comes back as its text, so it is not the stack as it was
 		qd_interp_value value;
 		if (!qd_interp_peek(sh->interp, i, &value)) {
 			sh->undo_depth = i;
 			break;
 		}
-
-		qdos_value* slot = &sh->undo[i];
-		const qd_stack* st = qd_interp_context(sh->interp)->st;
-		if (qdos_cpx_of(&st->data[st->size - 1 - i], &slot->f, &slot->im)) {
-			slot->type = QDOS_VALUE_COMPLEX;
-		} else if (value.type == QD_INTERP_VALUE_INT) {
-			slot->type = QDOS_VALUE_INT;
-			slot->i = value.i;
-		} else if (value.type == QD_INTERP_VALUE_FLOAT) {
-			slot->type = QDOS_VALUE_FLOAT;
-			slot->f = value.f;
-		} else {
+		sh->undo_exact = false;
+		if (slot->type != QDOS_VALUE_STRING) {
 			slot->type = QDOS_VALUE_STRING;
 			snprintf(slot->s, sizeof(slot->s), "%s", value.text);
 		}
 	}
 	sh->undo_ready = true;
+}
+
+static void undo_put_back(qdos_shell* sh) {
+	qd_context* ctx = qd_interp_context(sh->interp);
+	qdos_guarded_eval(sh->interp, "clear");
+
+	// Snapshots run top-first, so put them back the other way round
+	for (size_t i = sh->undo_depth; i > 0; i--) {
+		push_value(ctx, &sh->undo[i - 1]);
+	}
 }
 
 static void undo_restore(qdos_shell* sh) {
@@ -947,20 +1089,34 @@ static void undo_restore(qdos_shell* sh) {
 		return;
 	}
 
-	qd_context* ctx = qd_interp_context(sh->interp);
-	qdos_guarded_eval(sh->interp, "clear");
-
-	// Snapshots run top-first, so put them back the other way round
-	for (size_t i = sh->undo_depth; i > 0; i--) {
-		push_value(ctx, &sh->undo[i - 1]);
-	}
-
+	undo_put_back(sh);
 	sh->undo_ready = false;
 	set_message(sh, "UNDONE", false);
 }
 
+/* What failed part-way is not left half done on the stack */
+static void undo_failed(qdos_shell* sh) {
+	if (sh->undo_ready && sh->undo_exact) {
+		undo_put_back(sh);
+	}
+}
+
 static bool infix_operator(char ch) {
 	return ch == '+' || ch == '-' || ch == '*' || ch == '/';
+}
+
+/* An operator as a token of its own, including the words the keypad types */
+static bool infix_operator_token(const char* token, size_t len) {
+	static const char* const WORDS[] = {"plus", "minus", "times", "divide"};
+	if (len == 1) {
+		return infix_operator(token[0]);
+	}
+	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++) {
+		if (strlen(WORDS[i]) == len && strncmp(token, WORDS[i], len) == 0) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /** @brief Is the whole of this the way a number is written? */
@@ -989,8 +1145,12 @@ static bool infix_number(const char* text, size_t len) {
  * @return true when @p out holds what to say instead
  */
 static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
-	const char* token[4];
-	size_t token_len[4];
+	enum {
+		TOKENS = 16
+	};
+
+	const char* token[TOKENS];
+	size_t token_len[TOKENS];
 	size_t count = 0;
 
 	for (size_t i = 0; i < len;) {
@@ -1000,7 +1160,7 @@ static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
 		if (i >= len) {
 			break;
 		}
-		if (count == 4) {
+		if (count == TOKENS) {
 			return false; // more on the line than this mistake is made of
 		}
 		token[count] = line + i;
@@ -1015,14 +1175,23 @@ static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
 	const char* right = NULL;
 	size_t left_len = 0;
 	size_t right_len = 0;
-	char op = 0;
+	const char* op = NULL;
+	size_t op_len = 0;
 
-	if (count == 3 && token_len[1] == 1 && infix_operator(token[1][0])) {
+	// 2 plus 3 times 4, as the keys type 2+3*4: a number between every operator
+	bool alternating = count >= 3 && count % 2 == 1;
+	for (size_t i = 0; alternating && i < count; i++) {
+		alternating =
+				(i % 2 == 0) ? infix_number(token[i], token_len[i]) : infix_operator_token(token[i], token_len[i]);
+	}
+
+	if (alternating) {
 		left = token[0];
 		left_len = token_len[0];
 		right = token[2];
 		right_len = token_len[2];
-		op = token[1][0];
+		op = token[1];
+		op_len = token_len[1];
 	} else if (count == 1) {
 		// Never the first character, which is a sign rather than an operator
 		for (size_t i = 1; i + 1 < token_len[0]; i++) {
@@ -1033,19 +1202,81 @@ static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
 			left_len = i;
 			right = token[0] + i + 1;
 			right_len = token_len[0] - i - 1;
-			op = token[0][i];
+			op = token[0] + i;
+			op_len = 1;
 			break;
 		}
 	}
 
-	if (op == 0 || !infix_number(left, left_len) || !infix_number(right, right_len)) {
+	if (op == NULL || !infix_number(left, left_len) || !infix_number(right, right_len)) {
 		return false;
 	}
 
 	const int shown = 6;
-	snprintf(out, cap, "RPN: TRY %.*s %.*s %c", (int)(left_len < (size_t)shown ? left_len : (size_t)shown), left,
-			(int)(right_len < (size_t)shown ? right_len : (size_t)shown), right, op);
+	snprintf(out, cap, "RPN: TRY %.*s %.*s %.*s", (int)(left_len < (size_t)shown ? left_len : (size_t)shown), left,
+			(int)(right_len < (size_t)shown ? right_len : (size_t)shown), right, (int)op_len, op);
 	return true;
+}
+
+static bool infix_word_char(char ch) {
+	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '.' || ch == '_';
+}
+
+/**
+ * @brief Say how to write, in RPN, a line that failed because it was not
+ *
+ * `sin(x)` and `2+3*4` are what a TI teaches; neither parses as meant here.
+ */
+static bool infix_explain(const char* line, char* out, size_t cap) {
+	// Real Quadrate has brackets of its own, and its errors say more than this would
+	if (strchr(line, '{') != NULL || strchr(line, '"') != NULL || strncmp(line, "fn ", 3) == 0) {
+		return false;
+	}
+
+	const char* open = strchr(line, '(');
+	if (open != NULL) {
+		const char* name = open;
+		while (name > line && infix_word_char(name[-1])) {
+			name--;
+		}
+		const char* close = strchr(open, ')');
+		const size_t arg_len = close ? (size_t)(close - open - 1) : 0;
+		bool simple = close != NULL && arg_len > 0 && name < open;
+		for (size_t i = 0; simple && i < arg_len; i++) {
+			simple = infix_word_char(open[1 + i]) || open[1 + i] == ' ';
+		}
+		if (simple) {
+			snprintf(out, cap, "RPN, NO BRACKETS: TRY %.*s %.*s", (int)arg_len, open + 1, (int)(open - name), name);
+		} else {
+			snprintf(out, cap, "RPN HAS NO BRACKETS: WHAT A WORD TAKES GOES BEFORE IT");
+		}
+		return true;
+	}
+
+	for (const char* p = line; *p; p++) {
+		const bool op = infix_operator(*p) || *p == '^';
+		if (!op || p == line || !infix_word_char(p[-1]) || !infix_word_char(p[1])) {
+			continue;
+		}
+		// 1e-5 is a number, not a subtraction
+		if ((*p == '-' || *p == '+') && (p[-1] == 'e' || p[-1] == 'E') && p - line >= 2 && p[-2] >= '0' &&
+				p[-2] <= '9') {
+			continue;
+		}
+		const char* a = p;
+		while (a > line && infix_word_char(a[-1])) {
+			a--;
+		}
+		const char* b = p + 1;
+		while (infix_word_char(*b)) {
+			b++;
+		}
+		const char* word = (*p == '^') ? "pow" : (*p == '/') ? "divide" : NULL;
+		snprintf(out, cap, "RPN: TRY %.*s %.*s %s%.*s", (int)(p - a), a, (int)(b - p - 1), p + 1, word ? word : "",
+				word ? 0 : 1, p);
+		return true;
+	}
+	return false;
 }
 
 /** @brief Evaluate the input line and report the outcome */
@@ -1055,7 +1286,7 @@ static void submit(qdos_shell* sh) {
 	}
 
 	// Caught before anything on the stack moves
-	char hint[QDOS_COLS + 1];
+	char hint[2 * MESSAGE_COLS + 1];
 	if (infix_hint(sh->input, sh->input_len, hint, sizeof(hint))) {
 		set_message(sh, hint, true);
 		return;
@@ -1065,13 +1296,18 @@ static void submit(qdos_shell* sh) {
 	// left are its business, not ours
 	const qdos_mode before = sh->mode;
 
+	history_add(sh);
 	undo_snapshot(sh);
 	if (qdos_guarded_eval(sh->interp, sh->input)) {
 		if (sh->mode == before) {
 			report_declaration(sh);
 		}
 	} else {
-		set_message(sh, qdos_guarded_error(sh->interp), true);
+		if (!infix_explain(sh->input, hint, sizeof(hint))) {
+			snprintf(hint, sizeof(hint), "%s", qdos_guarded_error(sh->interp));
+		}
+		undo_failed(sh);
+		set_message(sh, hint, true);
 
 		// The line stays, to be corrected rather than typed again
 		if (sh->mode == before) {
@@ -1151,8 +1387,14 @@ static bool entry_commit(qdos_shell* sh) {
 	}
 
 	// Quadrate wants a digit on each side of the point; a keypad does not
-	char text[ENTRY_MAX + 4];
-	const char* p = sh->entry;
+	char mantissa[ENTRY_MAX];
+	snprintf(mantissa, sizeof(mantissa), "%s", sh->entry);
+	char* exponent = strchr(mantissa, 'e');
+	if (exponent != NULL) {
+		*exponent++ = '\0';
+	}
+	char text[ENTRY_MAX + 8];
+	const char* p = mantissa;
 	size_t len = 0;
 	if (*p == '-') {
 		text[len++] = *p++;
@@ -1166,9 +1408,13 @@ static bool entry_commit(qdos_shell* sh) {
 		text[len++] = '0';
 		text[len] = '\0';
 	}
+	// An exponent with no digits yet is none
+	if (exponent != NULL && exponent[strspn(exponent, "-")] != '\0') {
+		len += (size_t)snprintf(text + len, sizeof(text) - len, "e%s", exponent);
+	}
 
 	// A whole number too big for an integer is a float, not the nought Quadrate reads it as
-	if (strchr(text, '.') == NULL) {
+	if (strchr(text, '.') == NULL && strchr(text, 'e') == NULL) {
 		errno = 0;
 		(void)strtoll(text, NULL, 10);
 		if (errno == ERANGE) {
@@ -1185,8 +1431,39 @@ static bool entry_commit(qdos_shell* sh) {
 	return true;
 }
 
+/* EE: the exponent of the number being typed, of 1 when there is none yet */
+static void entry_exponent(qdos_shell* sh) {
+	if (strchr(sh->entry, 'e') != NULL) {
+		return;
+	}
+	if (sh->entry_len == 0 || strcmp(sh->entry, "-") == 0) {
+		entry_append(sh, '1');
+	}
+	entry_append(sh, 'e');
+}
+
+/* An error in the keycap's terms: the + key is 'plus' only to the language */
+static void set_key_error(qdos_shell* sh, const char* error, const char* word, const char* label) {
+	char quoted[40], text[2 * MESSAGE_COLS + 1];
+	snprintf(quoted, sizeof(quoted), "'%s'", word);
+	const size_t word_len = strlen(word);
+	const char* at = strstr(error, quoted);
+
+	if (label == NULL) {
+		set_message(sh, error, true);
+	} else if (at != NULL) {
+		snprintf(text, sizeof(text), "%.*s'%s'%s", (int)(at - error), error, label, at + strlen(quoted));
+		set_message(sh, text, true);
+	} else if (strncmp(error, word, word_len) == 0 && error[word_len] == ':') {
+		snprintf(text, sizeof(text), "%s%s", label, error + word_len);
+		set_message(sh, text, true);
+	} else {
+		set_message(sh, error, true);
+	}
+}
+
 /** @brief Apply a word to the stack, committing any pending number first */
-static void apply_word(qdos_shell* sh, const char* word) {
+static void apply_key_word(qdos_shell* sh, const char* word, const char* label) {
 	if (!entry_commit(sh)) {
 		return;
 	}
@@ -1198,8 +1475,15 @@ static void apply_word(qdos_shell* sh, const char* word) {
 		set_message(sh, "", false);
 		absorb_output(sh);
 	} else {
-		set_message(sh, qdos_guarded_error(sh->interp), true);
+		char error[2 * MESSAGE_COLS + 1];
+		snprintf(error, sizeof(error), "%s", qdos_guarded_error(sh->interp));
+		undo_failed(sh);
+		set_key_error(sh, error, word, label);
 	}
+}
+
+static void apply_word(qdos_shell* sh, const char* word) {
+	apply_key_word(sh, word, NULL);
 }
 
 static void enter_line_mode(qdos_shell* sh) {
@@ -1235,8 +1519,8 @@ static const char* const FUNCTION_WORD[] = {
 		"floor",
 		"ceil",
 		"round",
-		// modulo, as the calculator's key does; Quadrate's own mod truncates
-		"modulo",
+		// A calculator's %: y stays, x becomes that percent of it
+		"percent",
 		"rot",
 		"over",
 };
@@ -1274,12 +1558,15 @@ static void entry_negate(qdos_shell* sh) {
 		return;
 	}
 
-	if (sh->entry[0] == '-') {
-		memmove(sh->entry, sh->entry + 1, sh->entry_len);
+	// After EE the sign is the exponent's, as on an HP
+	char* sign = strchr(sh->entry, 'e');
+	sign = (sign != NULL) ? sign + 1 : sh->entry;
+	if (*sign == '-') {
+		memmove(sign, sign + 1, strlen(sign));
 		sh->entry_len--;
 	} else if (sh->entry_len + 1 < ENTRY_MAX) {
-		memmove(sh->entry + 1, sh->entry, sh->entry_len + 1);
-		sh->entry[0] = '-';
+		memmove(sign + 1, sign, strlen(sign) + 1);
+		*sign = '-';
 		sh->entry_len++;
 	}
 }
@@ -1298,8 +1585,15 @@ static bool register_digit(qdos_shell* sh, const qdos_key_event* ev) {
 		return true;
 	}
 
-	char line[16];
-	snprintf(line, sizeof(line), "%d %s", (int)(ev->key - QDOS_KEY_0), storing ? "sto" : "rcl");
+	if (storing && qd_interp_depth(sh->interp) == 0) {
+		set_message(sh, "NOTHING TO STORE", true);
+		return true;
+	}
+
+	// Stored, and still there to go on with, as an HP-42S leaves it
+	char line[24];
+	snprintf(
+			line, sizeof(line), "%s%d %s", storing ? "dup " : "", (int)(ev->key - QDOS_KEY_0), storing ? "sto" : "rcl");
 
 	undo_snapshot(sh);
 	if (!qdos_guarded_eval(sh->interp, line)) {
@@ -1313,14 +1607,60 @@ static bool register_digit(qdos_shell* sh, const qdos_key_event* ev) {
 	return true;
 }
 
+/* The keycap, where it is not the word itself */
+static const char* key_label(const char* word) {
+	static const char* const LABELS[][2] = {{"percent", "%"}, {"inv", "1/x"}, {"sq", "x^2"}, {"plus", "+"},
+			{"minus", "-"}, {"times", "*"}, {"divide", "/"}};
+	for (size_t i = 0; i < sizeof(LABELS) / sizeof(*LABELS); i++) {
+		if (strcmp(LABELS[i][0], word) == 0) {
+			return LABELS[i][1];
+		}
+	}
+	return NULL;
+}
+
+/* Pick out a level with the arrows, as an HP 48's stack; ENTER copies it to the top */
+static bool stack_select_key(qdos_shell* sh, const qdos_key_event* ev) {
+	const size_t depth = qd_interp_depth(sh->interp);
+	if (ev->key == QDOS_KEY_UP && sh->entry_len == 0) {
+		if (sh->stack_sel < depth) {
+			sh->stack_sel++;
+		}
+		return true;
+	}
+	if (sh->stack_sel == 0) {
+		return false;
+	}
+
+	switch (ev->key) {
+	case QDOS_KEY_DOWN:
+		sh->stack_sel--;
+		return true;
+	case QDOS_KEY_ENTER: {
+		qdos_value value;
+		const size_t level = sh->stack_sel;
+		sh->stack_sel = 0;
+		if (!value_at(sh, level - 1, &value)) {
+			set_message(sh, "CANNOT COPY THAT", true);
+			return true;
+		}
+		undo_snapshot(sh);
+		push_value(qd_interp_context(sh->interp), &value);
+		return true;
+	}
+	default:
+		return false;
+	}
+}
+
 static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
-	if (register_digit(sh, ev)) {
+	if (register_digit(sh, ev) || stack_select_key(sh, ev)) {
 		return;
 	}
 
 	const char* word = function_word(ev->key);
 	if (word != NULL) {
-		apply_word(sh, word);
+		apply_key_word(sh, word, key_label(word));
 		return;
 	}
 
@@ -1360,17 +1700,26 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 
 	case QDOS_KEY_ADD:
-		apply_word(sh, "plus");
+		apply_key_word(sh, "plus", "+");
 		break;
 	case QDOS_KEY_SUB:
-		apply_word(sh, "minus");
+		apply_key_word(sh, "minus", "-");
 		break;
 	case QDOS_KEY_MUL:
-		apply_word(sh, "times");
+		apply_key_word(sh, "times", "*");
 		break;
 	// A calculator divides rather than truncating; the language keeps "/"
 	case QDOS_KEY_DIV:
-		apply_word(sh, "divide");
+		apply_key_word(sh, "divide", "/");
+		break;
+	case QDOS_KEY_EE:
+		entry_exponent(sh);
+		break;
+	case QDOS_KEY_CLEAR_STACK:
+		entry_clear(sh);
+		undo_snapshot(sh);
+		qdos_guarded_eval(sh->interp, "clear");
+		set_message(sh, "STACK CLEARED", false);
 		break;
 	case QDOS_KEY_DUP:
 		apply_word(sh, "dup");
@@ -1409,20 +1758,18 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		}
 		break;
 
+	// With nothing being typed it drops x, as on an HP 48
 	case QDOS_KEY_BACKSPACE:
 		if (sh->entry_len > 0) {
 			sh->entry[--sh->entry_len] = '\0';
+		} else if (qd_interp_depth(sh->interp) > 0) {
+			apply_word(sh, "drop");
 		}
 		break;
 
+	// Never the stack: ESC is pressed out of habit, to back out of anything
 	case QDOS_KEY_CLEAR:
-		if (sh->entry_len > 0) {
-			entry_clear(sh);
-		} else {
-			undo_snapshot(sh);
-			qdos_guarded_eval(sh->interp, "clear");
-			set_message(sh, "STACK CLEARED", false);
-		}
+		entry_clear(sh);
 		break;
 
 	case QDOS_KEY_PI:
@@ -1454,6 +1801,8 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 	case QDOS_KEY_CHAR:
 		if (ev->ch == ':') {
 			enter_line_mode(sh);
+		} else if ((ev->ch == 'e' || ev->ch == 'E') && sh->entry_len > 0) {
+			entry_exponent(sh);
 		} else if (ev->ch != ' ') {
 			set_message(sh, "PRESS MODE TO TYPE A LINE", false);
 		}
@@ -1464,13 +1813,124 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 }
 
+/* Inside a string or a comment, where a key types its character and nothing else */
+static bool line_is_literal(const qdos_shell* sh) {
+	bool string = false, comment = false;
+	for (size_t i = 0; i < sh->input_cursor; i++) {
+		const char ch = sh->input[i];
+		if (comment) {
+			comment = ch != '\n';
+		} else if (string) {
+			if (ch == '\\') {
+				i++;
+			} else {
+				string = ch != '"';
+			}
+		} else if (ch == '"') {
+			string = true;
+		} else if (ch == '/' && i + 1 < sh->input_len && sh->input[i + 1] == '/') {
+			comment = true;
+		}
+	}
+	return string || comment;
+}
+
+static char char_before_cursor(const qdos_shell* sh) {
+	return (sh->input_cursor > 0) ? sh->input[sh->input_cursor - 1] : ' ';
+}
+
+/* A word the key types, a space either side of it but never two */
+static void input_word(qdos_shell* sh, const char* word) {
+	const char before = char_before_cursor(sh);
+	if (before != ' ' && before != '\n') {
+		input_append(sh, " ");
+	}
+	input_append(sh, word);
+	const char after = sh->input[sh->input_cursor];
+	if (after != ' ' && after != '\n') {
+		input_append(sh, " ");
+	} else {
+		sh->input_cursor++;
+	}
+}
+
+/* Straight after the e of a number, where + and - are the exponent's sign */
+static bool after_exponent(const qdos_shell* sh) {
+	const size_t at = sh->input_cursor;
+	return at >= 2 && (sh->input[at - 1] == 'e' || sh->input[at - 1] == 'E') &&
+		   ((sh->input[at - 2] >= '0' && sh->input[at - 2] <= '9') || sh->input[at - 2] == '.');
+}
+
+/*
+ * What an arithmetic key types. A Y= body works in floats, which Quadrate's own
+ * operators do not wrap, so there the symbols are as good and shorter.
+ */
+static const char* op_text(const qdos_shell* sh, const char* word) {
+	static const char* const SYMBOL[][2] = {{"plus", "+"}, {"minus", "-"}, {"times", "*"}};
+	if (sh->mode == QDOS_MODE_PLOT_EDIT) {
+		for (size_t i = 0; i < sizeof(SYMBOL) / sizeof(*SYMBOL); i++) {
+			if (strcmp(SYMBOL[i][0], word) == 0) {
+				return SYMBOL[i][1];
+			}
+		}
+	}
+	return word;
+}
+
+/*
+ * The last key typed minus, and this one says it was a sign or part of
+ * `->` or `--` instead: take it back and type it the way it was meant.
+ */
+static bool line_minus_fixup(qdos_shell* sh, const qdos_key_event* ev) {
+	char typed[8];
+	snprintf(typed, sizeof(typed), "%s ", op_text(sh, "minus"));
+	const size_t n = strlen(typed); // its leading space perhaps the one already there
+	if (sh->input_cursor < n || strncmp(sh->input + sh->input_cursor - n, typed, n) != 0) {
+		return false;
+	}
+
+	const char* text = NULL;
+	char digit[2] = {0};
+	if (ev->key >= QDOS_KEY_0 && ev->key <= QDOS_KEY_9) {
+		digit[0] = (char)('0' + (ev->key - QDOS_KEY_0));
+		text = digit;
+	} else if (ev->key == QDOS_KEY_DOT) {
+		text = ".";
+	} else if (ev->key == QDOS_KEY_SUB) {
+		text = "- ";
+	} else if (ev->key == QDOS_KEY_CHAR && ev->ch == '>') {
+		text = "> ";
+	} else if (ev->key == QDOS_KEY_CHAR && ((ev->ch >= '0' && ev->ch <= '9') || ev->ch == '.')) {
+		digit[0] = ev->ch;
+		text = digit;
+	}
+	if (text == NULL) {
+		return false;
+	}
+
+	for (size_t i = 0; i < n; i++) {
+		input_backspace(sh);
+	}
+	input_append(sh, "-");
+	input_append(sh, text);
+	return true;
+}
+
 /** Keys while whole lines of Quadrate are being typed. */
 static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
+	const bool after_minus = sh->line_minus;
+	sh->line_minus = false;
+	if (after_minus && line_minus_fixup(sh, ev)) {
+		return;
+	}
+
+	if (ev->key != QDOS_KEY_UP && ev->key != QDOS_KEY_DOWN) {
+		sh->history_at = sh->history_count;
+	}
+
 	const char* word = function_word(ev->key);
 	if (word != NULL) {
-		input_append(sh, " ");
-		input_append(sh, word);
-		input_append(sh, " ");
+		input_word(sh, word);
 		return;
 	}
 
@@ -1509,52 +1969,95 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		input_append(sh, ".");
 		break;
 
+	// The calculator's arithmetic, as the keys do it on the stack; Quadrate's own
+	// operators wrap and truncate. Glued to a number, + and - are its exponent's sign.
 	case QDOS_KEY_ADD:
-		input_append(sh, "+");
+		if (line_is_literal(sh) || after_exponent(sh)) {
+			input_append(sh, "+");
+		} else {
+			input_word(sh, op_text(sh, "plus"));
+		}
 		break;
-	case QDOS_KEY_SUB:
-		input_append(sh, "-");
+	// Glued to a number, as 2-3 is typed, it is still minus, or that is 2 and -3;
+	// only at the start of a token can the next key make it a sign
+	case QDOS_KEY_SUB: {
+		const char before = char_before_cursor(sh);
+		if (line_is_literal(sh) || after_exponent(sh)) {
+			input_append(sh, "-");
+		} else {
+			input_word(sh, op_text(sh, "minus"));
+			sh->line_minus = before == ' ' || before == '\n' || before == '(';
+		}
 		break;
+	}
 	case QDOS_KEY_MUL:
-		input_append(sh, "*");
+		if (line_is_literal(sh)) {
+			input_append(sh, "*");
+		} else {
+			input_word(sh, op_text(sh, "times"));
+		}
 		break;
-	// divide, as the calculator's key does; Quadrate's own / truncates
 	case QDOS_KEY_DIV:
-		input_append(sh, " divide ");
+		if (line_is_literal(sh)) {
+			input_append(sh, "/");
+		} else {
+			input_word(sh, "divide");
+		}
+		break;
+	case QDOS_KEY_EE:
+		input_append(sh, "e");
+		break;
+	case QDOS_KEY_CLEAR_STACK:
+		undo_snapshot(sh);
+		qdos_guarded_eval(sh->interp, "clear");
+		set_message(sh, "STACK CLEARED", false);
+		break;
+	case QDOS_KEY_UNDO:
+		undo_restore(sh);
+		break;
+	case QDOS_KEY_UP:
+	case QDOS_KEY_DOWN:
+		if (sh->mode == QDOS_MODE_LINE) {
+			history_step(sh, ev->key == QDOS_KEY_UP ? -1 : 1);
+		}
 		break;
 	case QDOS_KEY_DUP:
-		input_append(sh, " dup ");
+		input_word(sh, "dup");
 		break;
 	case QDOS_KEY_DROP:
-		input_append(sh, " drop ");
+		input_word(sh, "drop");
 		break;
 	case QDOS_KEY_SWAP:
-		input_append(sh, " swap ");
+		input_word(sh, "swap");
 		break;
 	case QDOS_KEY_NEG:
-		input_append(sh, " neg ");
+		input_word(sh, "neg");
 		break;
 	case QDOS_KEY_PI:
-		input_append(sh, " pi ");
+		input_word(sh, "pi");
 		break;
 	case QDOS_KEY_E:
-		input_append(sh, " e ");
+		input_word(sh, "e");
 		break;
 	case QDOS_KEY_I:
-		input_append(sh, " i ");
+		input_word(sh, "i");
 		break;
 	case QDOS_KEY_COMPLEX:
-		input_append(sh, " complex ");
+		input_word(sh, "complex");
 		break;
 
 	case QDOS_KEY_STO:
-		input_append(sh, " sto ");
+		input_word(sh, "sto");
 		break;
 	case QDOS_KEY_RCL:
-		input_append(sh, " rcl ");
+		input_word(sh, "rcl");
 		break;
 
+	// A space where the keys have already left one would only be a second
 	case QDOS_KEY_CHAR:
+		if (ev->ch == ' ' && char_before_cursor(sh) == ' ' && sh->input_cursor > 0 && !line_is_literal(sh)) {
+			break;
+		}
 		if (ev->ch) {
 			const char text[2] = {ev->ch, '\0'};
 			input_append(sh, text);
@@ -1700,15 +2203,46 @@ static bool load_program_anywhere(qdos_shell* sh, const char* name, char* out, s
 	return false;
 }
 
+static bool user_word(qdos_shell* sh, const char* name) {
+	if (declared_here(sh, name)) {
+		return true;
+	}
+	for (size_t i = 0; i < sh->app_count; i++) {
+		if (sh->apps[i].user && strcmp(sh->apps[i].name, name) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Your own words first, as a VAR menu has them, each part in order */
+static void list_user_first(qdos_shell* sh) {
+	static qdos_wordlist sorted;
+	size_t n = 0;
+	for (int pass = 0; pass < 2; pass++) {
+		for (size_t i = 0; i < sh->list.count; i++) {
+			if (user_word(sh, sh->list.name[i]) == (pass == 0)) {
+				memcpy(sorted.name[n++], sh->list.name[i], QDOS_WORDLIST_NAME);
+			}
+		}
+		if (pass == 0) {
+			sh->list_user = n;
+		}
+	}
+	memcpy(sh->list.name, sorted.name, n * QDOS_WORDLIST_NAME);
+}
+
 static void list_load(qdos_shell* sh) {
+	sh->app_count = qdos_programs_gather(sh->hal, sh->apps, QDOS_WORDLIST_MAX);
+	sh->list_user = 0;
 	if (sh->list_all) {
 		qdos_wordlist_gather(sh->interp, &sh->list);
-	} else {
-		sh->app_count = qdos_programs_gather(sh->hal, sh->apps, QDOS_WORDLIST_MAX);
+		list_user_first(sh);
 	}
 
 	sh->list_sel = 0;
 	sh->list_top = 0;
+	sh->list_find[0] = '\0';
 }
 
 static void list_open_scoped(qdos_shell* sh, bool all) {
@@ -2011,6 +2545,9 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 	if (ev->key != QDOS_KEY_BACKSPACE) {
 		sh->delete_armed = false;
 	}
+	if (ev->key != QDOS_KEY_CHAR) {
+		sh->list_find[0] = '\0';
+	}
 
 	switch (ev->key) {
 	case QDOS_KEY_UP:
@@ -2045,23 +2582,47 @@ static void handle_list_key(qdos_shell* sh, const qdos_key_event* ev) {
 		list_load(sh);
 		break;
 
-	// Typing a letter jumps to it, which is how a catalog of 100 is usable
+	// Typing finds the first word that starts that way, which is how a catalog of
+	// hundreds is usable; a letter nothing follows on from starts again
 	case QDOS_KEY_CHAR: {
 		const char want = (ev->ch >= 'A' && ev->ch <= 'Z') ? (char)(ev->ch + 32) : ev->ch;
-		for (size_t i = 0; i < list_count(sh); i++) {
-			if (list_name(sh, i)[0] == want) {
+		for (int attempt = 0; attempt < 2; attempt++) {
+			const size_t len = attempt ? 0 : strlen(sh->list_find);
+			if (len + 1 >= sizeof(sh->list_find)) {
+				continue;
+			}
+			char find[QDOS_WORDLIST_NAME];
+			memcpy(find, sh->list_find, len);
+			find[len] = want;
+			find[len + 1] = '\0';
+
+			size_t i = 0;
+			while (i < list_count(sh) && strncmp(list_name(sh, i), find, len + 1) != 0) {
+				i++;
+			}
+			if (i < list_count(sh)) {
+				memcpy(sh->list_find, find, len + 2);
 				sh->list_sel = i;
 				sh->list_top = i; // the match at the top, with its neighbours under it
 				list_scroll_into_view(sh);
 				break;
 			}
 		}
-		break;
+		return;
 	}
 
 	case QDOS_KEY_ENTER:
 		if (list_count(sh) > 0 && !sh->list_all && list_module(sh, sh->list_sel) == NULL) {
 			list_run(sh, list_name(sh, sh->list_sel));
+			break;
+		}
+
+		// From the calculator a word is a key: it acts on the stack there and then
+		if (sh->list_all && sh->list_from == QDOS_MODE_CALC && list_count(sh) > 0) {
+			char word[QDOS_WORDLIST_NAME];
+			snprintf(word, sizeof(word), "%s", list_name(sh, sh->list_sel));
+			sh->mode = QDOS_MODE_CALC;
+			apply_word(sh, word);
 			break;
 		}
 
@@ -2193,7 +2754,7 @@ static void check_program(qdos_shell* sh) {
 	register_apps(sh, scratch);
 
 	// An app's other files are part of it, and main.qd calls into them
-	char message[80];
+	char message[2 * MESSAGE_COLS + 1];
 	bool bad = qdos_app_exists(sh->hal, sh->ed.name) &&
 			   !load_app_sources(sh, scratch, sh->ed.name, message, sizeof(message));
 	if (bad) {
@@ -2245,6 +2806,7 @@ static int run_app(qd_context* ctx, void* userdata) {
 	}
 
 	qd_interp* outer = sh->app_interp;
+	const size_t answers_before = sh->ui_answer_count;
 	sh->app_interp = app;
 	sh->ui_window_set = false;
 	sh->ui_points = false;
@@ -2252,7 +2814,7 @@ static int run_app(qd_context* ctx, void* userdata) {
 
 	snprintf(sh->app_name, sizeof(sh->app_name), "%s", name);
 
-	char error[QDOS_COLS * 3] = "";
+	char error[2 * MESSAGE_COLS + 1] = "";
 	if (load_app_sources(sh, app, name, error, sizeof(error)) &&
 			(!qdos_guarded_eval(app, source) || !qdos_guarded_eval(app, QDOS_APP_ENTRY))) {
 		snprintf(error, sizeof(error), "%s", qdos_guarded_error(app));
@@ -2264,13 +2826,21 @@ static int run_app(qd_context* ctx, void* userdata) {
 
 	// Stopped rather than finished, so whatever ran the app stops too
 	if (qdos_natives_broken()) {
+		sh->ui_answer_count = answers_before;
 		qd_set_error_msg(ctx, "BREAK");
 		return 1;
 	}
 	if (error[0] != '\0') {
+		sh->ui_answer_count = answers_before;
 		qd_set_error_msg(ctx, error);
 		return 1;
 	}
+
+	// An app run from inside another answers to that one
+	for (size_t i = answers_before; i < sh->ui_answer_count; i++) {
+		push_value(ctx, &sh->ui_answer[i]);
+	}
+	sh->ui_answer_count = answers_before;
 	return 0;
 }
 
@@ -2549,7 +3119,7 @@ static bool expand_soft(qdos_shell* sh, const qdos_key_event* in, qdos_key_event
 		return false;
 	}
 
-	const soft_key* sk = &SOFT[sh->mode][in->key - QDOS_KEY_SOFT1];
+	const soft_key* sk = &soft_row(sh)[in->key - QDOS_KEY_SOFT1];
 	if (sk->key == QDOS_KEY_NONE) {
 		return false;
 	}
@@ -2591,6 +3161,7 @@ static size_t settings_visible(const qdos_shell* sh, qdos_setting* out) {
 	size_t n = 0;
 	out[n++] = SETTING_ANGLE;
 	out[n++] = SETTING_DECIMALS;
+	out[n++] = SETTING_NOTATION;
 	out[n++] = SETTING_AUTO_OFF;
 
 	if (sh->hal->usb_export) {
@@ -2650,6 +3221,7 @@ static void toggle_usb(qdos_shell* sh) {
 #define SETTINGS_KEY_ANGLE "settings.angle"
 #define SETTINGS_KEY_COMPLEX "settings.complex"
 #define SETTINGS_KEY_DECIMALS "settings.decimals"
+#define SETTINGS_KEY_NOTATION "settings.notation"
 #define SETTINGS_KEY_AUTO_OFF "settings.autooff"
 #define SETTINGS_KEY_GRID "settings.grid"
 #define SETTINGS_KEY_AXES "settings.axes"
@@ -2681,6 +3253,7 @@ static void save_settings(qdos_shell* sh) {
 	save_setting(sh, SETTINGS_KEY_ANGLE, qdos_math_degrees() ? 1 : 0);
 	save_setting(sh, SETTINGS_KEY_COMPLEX, (int64_t)qdos_cpx_get_mode());
 	save_setting(sh, SETTINGS_KEY_DECIMALS, sh->decimals);
+	save_setting(sh, SETTINGS_KEY_NOTATION, sh->notation);
 	save_setting(sh, SETTINGS_KEY_AUTO_OFF, (int64_t)sh->auto_off);
 	save_setting(sh, SETTINGS_KEY_GRID, sh->grid_on ? 1 : 0);
 	save_setting(sh, SETTINGS_KEY_AXES, sh->axes_off ? 0 : 1);
@@ -2711,6 +3284,10 @@ static void restore_settings(qdos_shell* sh) {
 	if (decimals >= DECIMALS_AUTO && decimals <= DECIMALS_MAX) {
 		sh->decimals = (int)decimals;
 	}
+
+	int64_t notation = NOTATION_NORMAL;
+	load_setting(sh, SETTINGS_KEY_NOTATION, &notation);
+	sh->notation = (notation >= 0 && notation < NOTATION__COUNT) ? (int)notation : NOTATION_NORMAL;
 
 	int64_t auto_off = (int64_t)sh->auto_off;
 	load_setting(sh, SETTINGS_KEY_AUTO_OFF, &auto_off);
@@ -2762,6 +3339,10 @@ static void setting_step(qdos_shell* sh, int dir) {
 		sh->auto_off = (sh->auto_off + (dir > 0 ? 1 : AUTO_OFF_COUNT - 1)) % AUTO_OFF_COUNT;
 		break;
 
+	case SETTING_NOTATION:
+		sh->notation = (sh->notation + (dir > 0 ? 1 : NOTATION__COUNT - 1)) % NOTATION__COUNT;
+		break;
+
 	default:
 		if (dir > 0) {
 			sh->decimals = (sh->decimals >= DECIMALS_MAX) ? DECIMALS_AUTO : sh->decimals + 1;
@@ -2797,7 +3378,6 @@ static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 		}
 		break;
 
-	case QDOS_KEY_ENTER:
 	case QDOS_KEY_RIGHT:
 		setting_step(sh, +1);
 		break;
@@ -2806,6 +3386,8 @@ static void handle_settings_key(qdos_shell* sh, const qdos_key_event* ev) {
 		setting_step(sh, -1);
 		break;
 
+	// Done, as ENTER is everywhere else: a change is kept the moment it is made
+	case QDOS_KEY_ENTER:
 	case QDOS_KEY_CLEAR:
 		sh->mode = sh->page_from;
 		break;
@@ -3280,7 +3862,7 @@ static void render_graph(qdos_shell* sh, qdos_console* con) {
 		}
 		snprintf(line, sizeof(line), "%s  X %.4g:%.4g  Y %.4g:%.4g", names, v->x0, v->x1, v->y0, v->y1);
 	}
-	if (sh->field == FIELD_NONE) {
+	if (sh->field == FIELD_NONE && !sh->message[0]) {
 		qdos_console_puts_small(con, 0, READOUT_Y, line);
 	}
 }
@@ -3473,6 +4055,13 @@ static void calc_finish(qdos_shell* sh) {
 	double x = sh->graph_x, y = 0.0;
 	double lo = fmin(sh->calc_bound[0], sh->calc_bound[1]), hi = fmax(sh->calc_bound[0], sh->calc_bound[1]);
 	sh->graph_error[0] = '\0';
+
+	// Both bounds on one column: ENTER, ENTER on the answer itself. A column either side.
+	if (lo == hi && sh->calc != CALC_INTEGRAL) {
+		const double column = (sh->graph_view.x1 - sh->graph_view.x0) / QDOS_SCREEN_W;
+		lo -= column;
+		hi += column;
+	}
 
 	switch (sh->calc) {
 	case CALC_ZERO:
@@ -3741,9 +4330,13 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 	sh->graph_result[0] = '\0';
 
 	if (ev->key == QDOS_KEY_CLEAR) {
-		// Asking is backed out of; otherwise ESC leaves, as it always has
+		// Asking is backed out of, then trace, as CLEAR ends trace on a TI; then ESC leaves
 		if (sh->graph_state == GRAPH_ASK) {
 			sh->graph_state = (sh->calc == CALC_BOX) ? GRAPH_PAN : GRAPH_TRACE;
+			return;
+		}
+		if (sh->graph_state == GRAPH_TRACE || sh->graph_state == GRAPH_FREE) {
+			sh->graph_state = GRAPH_PAN;
 			return;
 		}
 		if (sh->graph_return != QDOS_MODE_CALC) {
@@ -3979,14 +4572,15 @@ static void plot_graph(qdos_shell* sh) {
 	sh->graph_return = from;
 }
 
+static void body_shown(const char* body, size_t caret, char* out, size_t cap, size_t* caret_out);
+
 static void render_plot(qdos_shell* sh, qdos_console* con) {
 	qdos_console_puts(con, 0, ROW_HEADER, "Y=");
 	qdos_console_rule(con, ROW_HEADER);
 
-	// The name at reading size, the body small so a whole one fits, and what
-	// it plots as at the end
-	const int body_x = 4 * QDOS_CELL_W;
-	const int body_room = (QDOS_SCREEN_W - body_x - 4 * QDOS_CELL_W) / QDOS_SMALL_FONT_W;
+	// All at reading size, as a TI lists them: the name, the body, cut where it
+	// meets what the slot plots as. EDIT shows a long one whole.
+	const int body_col = 4;
 	for (size_t i = 0; i < PLOT_SLOTS; i++) {
 		const plot_slot* slot = &sh->slots[i];
 		const int row = ROW_CONTENT_FIRST + (int)i;
@@ -3998,23 +4592,68 @@ static void render_plot(qdos_shell* sh, qdos_console* con) {
 		snprintf(label, sizeof(label), "%s%c", name, slot->on ? '=' : ' ');
 		qdos_console_puts(con, 0, row, label);
 
+		const int body_room = QDOS_COLS - body_col - (slot->shape != QDOS_GRAPH_NONE ? 4 : 0);
 		char body[PLOT_BODY_MAX + 1];
-		snprintf(body, sizeof(body), "%s", slot->body);
+		body_shown(slot->body, SIZE_MAX, body, sizeof(body), NULL);
 		if ((int)strlen(body) > body_room) {
 			body[body_room - 1] = QDOS_ELIDED;
 			body[body_room] = '\0';
 		}
-		qdos_console_puts_small(con, body_x, row * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, body);
+		qdos_console_puts(con, body_col, row, body);
 
 		if (slot->shape != QDOS_GRAPH_NONE) {
 			static const char* const SHAPE[] = {"", "2D", "3D", "PAR", "POL"};
-			qdos_console_puts_right(con, row, slot->broken ? "ERR" : SHAPE[slot->shape]);
+			qdos_console_puts_right(con, row, slot->broken ? "ERR" : !slot->on ? "OFF" : SHAPE[slot->shape]);
 		}
 		if (i == sh->slot_sel) {
 			qdos_console_invert(con, 0, row, QDOS_COLS);
 		}
 	}
 	qdos_console_rule(con, ROW_CONTENT_LAST);
+}
+
+/*
+ * A body as its keycaps read: the words with a glyph of their own drawn as it.
+ * What is stored is untouched. A word ending at @p caret is still being typed
+ * and stays as it is; @p caret_out is where the caret lands in the result.
+ */
+static void body_shown(const char* body, size_t caret, char* out, size_t cap, size_t* caret_out) {
+	static const char* const GLYPH[][2] = {
+			{"sqrt", QDOS_GLYPH_SQRT}, {"divide", QDOS_GLYPH_DIVIDE}, {"pi", QDOS_GLYPH_PI}};
+	size_t n = 0;
+	size_t shown_caret = 0;
+	for (size_t i = 0; body[i] != '\0' && n + 1 < cap;) {
+		if (i == caret) {
+			shown_caret = n;
+		}
+		size_t len = 0;
+		while (body[i + len] != '\0' && body[i + len] != ' ') {
+			len++;
+		}
+		const bool word_start = i == 0 || body[i - 1] == ' ';
+		const char* glyph = NULL;
+		for (size_t g = 0; word_start && len > 0 && g < sizeof(GLYPH) / sizeof(*GLYPH); g++) {
+			if (strlen(GLYPH[g][0]) == len && strncmp(body + i, GLYPH[g][0], len) == 0 && i + len != caret) {
+				glyph = GLYPH[g][1];
+			}
+		}
+		if (glyph != NULL) {
+			out[n++] = glyph[0];
+			if (caret > i && caret < i + len) {
+				shown_caret = n;
+			}
+			i += len;
+		} else {
+			out[n++] = body[i++];
+		}
+	}
+	out[n] = '\0';
+	if (caret >= strlen(body)) {
+		shown_caret = n;
+	}
+	if (caret_out != NULL) {
+		*caret_out = shown_caret;
+	}
 }
 
 /* The slot being typed, on the input row, after its name */
@@ -4026,9 +4665,11 @@ static void render_plot_edit(qdos_shell* sh, qdos_console* con) {
 	qdos_console_puts(con, 0, ROW_INPUT, prompt);
 
 	const int room = QDOS_COLS - prompt_len - 1; // a cell for the cursor
-	const size_t caret = sh->input_cursor;
+	char shown[INPUT_MAX];
+	size_t caret;
+	body_shown(sh->input, sh->input_cursor, shown, sizeof(shown), &caret);
 	const size_t start = (caret > (size_t)room) ? caret - (size_t)room : 0;
-	qdos_console_puts(con, prompt_len, ROW_INPUT, sh->input + start);
+	qdos_console_puts(con, prompt_len, ROW_INPUT, shown + start);
 	if (sh->cursor_on) {
 		qdos_console_invert(con, prompt_len + (int)(caret - start), ROW_INPUT, 1);
 	}
@@ -4085,15 +4726,6 @@ static void handle_plot_key(qdos_shell* sh, const qdos_key_event* ev) {
 	}
 }
 
-/* A variable as a word of its own: spaced from what is before it and after */
-static void plot_edit_variable(qdos_shell* sh, const char* name) {
-	if (sh->input_cursor > 0 && sh->input[sh->input_cursor - 1] != ' ') {
-		input_append(sh, " ");
-	}
-	input_append(sh, name);
-	input_append(sh, " ");
-}
-
 /* The body without the spaces round it, which the keys leave behind */
 static void trim(char* text) {
 	size_t len = strlen(text);
@@ -4112,19 +4744,19 @@ static void handle_plot_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 
 	switch (ev->key) {
 	case QDOS_KEY_VAR_X:
-		plot_edit_variable(sh, "x");
+		input_word(sh, "x");
 		break;
 
 	case QDOS_KEY_VAR_Y:
-		plot_edit_variable(sh, "y");
+		input_word(sh, "y");
 		break;
 
 	case QDOS_KEY_VAR_T:
-		plot_edit_variable(sh, "t");
+		input_word(sh, "t");
 		break;
 
 	case QDOS_KEY_VAR_THETA:
-		plot_edit_variable(sh, "theta");
+		input_word(sh, "theta");
 		break;
 
 	case QDOS_KEY_ENTER: {
@@ -5751,6 +6383,12 @@ static void handle_mode_key(qdos_shell* sh, const qdos_key_event* ev) {
 		sh->register_wait = REGISTER_IDLE;
 	}
 
+	// A picked level lasts only while the arrows and ENTER are what is pressed
+	if (sh->mode != QDOS_MODE_CALC || sh->field != FIELD_NONE ||
+			(ev->key != QDOS_KEY_UP && ev->key != QDOS_KEY_DOWN && ev->key != QDOS_KEY_ENTER)) {
+		sh->stack_sel = 0;
+	}
+
 	// A number being typed has every key but the one that turns the machine off
 	if (sh->field != FIELD_NONE && ev->key != QDOS_KEY_POWER) {
 		field_key(sh, ev);
@@ -5958,15 +6596,18 @@ static void render_settings(qdos_shell* sh, qdos_console* con) {
 	snprintf(blocked, sizeof(blocked), "%zu BLOCKED", qdos_natives_blocked_count(&sh->natives));
 
 	static const char* const COMPLEX_MODES[QDOS_CPX__COUNT] = {"REAL", "a+bi", "POLAR"};
-	static const char* const NAMES[SETTING__COUNT] = {"ANGLE", "DECIMALS", "AUTO OFF", "USB", "MODULES", "COMPLEX"};
-	const char* values[SETTING__COUNT] = {
-			angle_text(), value, off, sh->usb_exported ? "SHARED" : "OFF", blocked, COMPLEX_MODES[qdos_cpx_get_mode()]};
+	static const char* const NOTATIONS[NOTATION__COUNT] = {"NORMAL", "SCI", "ENG"};
+	static const char* const NAMES[SETTING__COUNT] = {
+			"ANGLE", "DECIMALS", "AUTO OFF", "USB", "MODULES", "COMPLEX", "NOTATION"};
+	const char* values[SETTING__COUNT] = {angle_text(), value, off, sh->usb_exported ? "SHARED" : "OFF", blocked,
+			COMPLEX_MODES[qdos_cpx_get_mode()], NOTATIONS[sh->notation]};
 
 	qdos_setting shown[SETTING__COUNT];
 	const size_t count = settings_visible(sh, shown);
+	const size_t top = (sh->setting_sel >= (size_t)LIST_ROWS) ? sh->setting_sel - LIST_ROWS + 1 : 0;
 
-	for (size_t i = 0; i < count; i++) {
-		const int row = ROW_CONTENT_FIRST + (int)i;
+	for (size_t i = top; i < count && i < top + LIST_ROWS; i++) {
+		const int row = ROW_CONTENT_FIRST + (int)(i - top);
 		qdos_console_puts(con, 1, row, NAMES[shown[i]]);
 		qdos_console_puts_right(con, row, values[shown[i]]);
 		if (i == sh->setting_sel) {
@@ -6005,7 +6646,9 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 
 	char header[QDOS_COLS + 1];
 	snprintf(header, sizeof(header), "%zu/%zu", total ? sh->list_sel + 1 : 0, total);
-	qdos_console_puts(con, 0, ROW_HEADER, sh->list_all ? "CATALOG" : "APPS");
+	char title[QDOS_COLS + 1];
+	snprintf(title, sizeof(title), "%.12s", sh->list_find[0] ? sh->list_find : sh->list_all ? "CATALOG" : "APPS");
+	qdos_console_puts(con, 0, ROW_HEADER, title);
 	qdos_console_puts_right(con, ROW_HEADER, header);
 	qdos_console_rule(con, ROW_HEADER);
 
@@ -6028,6 +6671,9 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 					module->error[0] ? module->error : origin_text(module->system, module->inbox, module->user));
 		} else {
 			qdos_console_puts(con, 1, row, list_name(sh, item));
+			if (sh->list_all && item < sh->list_user) {
+				qdos_console_puts_right(con, row, "USER");
+			}
 
 			const qdos_program_entry* e = list_program(sh, item);
 			if (e != NULL) {
@@ -6049,24 +6695,52 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 }
 
 /** @brief Whatever the shell last had to say, under the content */
+/* Paper, whatever a page drew there first */
+static void blank_rect(qdos_console* con, int y, int h) {
+	for (int py = y; py < y + h && py < QDOS_SCREEN_H; py++) {
+		memset(con->fb + (size_t)py * QDOS_SCREEN_W, con->paper, QDOS_SCREEN_W);
+	}
+}
+
 static void render_message(qdos_shell* sh, qdos_console* con) {
 	if (!sh->message[0]) {
 		return;
 	}
 
 	if (!sh->message_is_error) {
+		blank_rect(con, ROW_MESSAGE * QDOS_CELL_H, QDOS_CELL_H);
 		qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
 		return;
 	}
 
-	// Centred in the row, on a band the full width of the panel, so an error
-	// reads as one at a glance however short it is
-	const int y = ROW_MESSAGE * QDOS_CELL_H;
+	// On a band the full width of the panel, so an error reads as one at a
+	// glance; one too long for the row takes the row above as well, broken at a space
 	const int len = (int)strlen(sh->message);
-	for (int i = 0; i < len; i++) {
-		qdos_console_putc_small(con, i * QDOS_SMALL_FONT_W, y + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, sh->message[i]);
+	int split = len;
+	if (len > MESSAGE_COLS) {
+		split = MESSAGE_COLS;
+		while (split > MESSAGE_COLS / 2 && sh->message[split] != ' ') {
+			split--;
+		}
+		if (sh->message[split] != ' ') {
+			split = MESSAGE_COLS;
+		}
 	}
-	qdos_console_invert_rect(con, 0, y, QDOS_SCREEN_W, QDOS_CELL_H);
+	const int rows = (len > MESSAGE_COLS) ? 2 : 1;
+	const int y = (ROW_MESSAGE - rows + 1) * QDOS_CELL_H;
+	const int h = rows * QDOS_CELL_H;
+	// The last line where a one-line error would be, the first above it
+	const int top = ROW_MESSAGE * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2 - (rows - 1) * QDOS_SMALL_FONT_H;
+	blank_rect(con, y, h);
+	for (int i = 0; i < split && i < MESSAGE_COLS; i++) {
+		qdos_console_putc_small(con, i * QDOS_SMALL_FONT_W, top, sh->message[i]);
+	}
+	const char* rest = sh->message + split + (sh->message[split] == ' ' ? 1 : 0);
+	for (int i = 0; rows == 2 && rest[i] != '\0' && i < MESSAGE_COLS; i++) {
+		const bool cut = i == MESSAGE_COLS - 1 && rest[i + 1] != '\0';
+		qdos_console_putc_small(con, i * QDOS_SMALL_FONT_W, top + QDOS_SMALL_FONT_H, cut ? QDOS_ELIDED : rest[i]);
+	}
+	qdos_console_invert_rect(con, 0, y, QDOS_SCREEN_W, h);
 }
 
 /** @brief The time and the charge as the band would show them; either may be empty */
@@ -6250,15 +6924,19 @@ static void render(qdos_shell* sh) {
 	const size_t depth = qd_interp_depth(sh->interp);
 
 	// Top of stack nearest the input line; deeper than the rows hold, the top
-	// one says so instead of holding a value.
-	const size_t visible = (depth <= (size_t)STACK_ROWS) ? depth : (size_t)STACK_ROWS - 1;
-	for (size_t i = 0; i < visible; i++) {
+	// one says so instead of holding a value. A level picked out with the
+	// arrows is scrolled into view.
+	const size_t fits = (depth <= (size_t)STACK_ROWS) ? (size_t)STACK_ROWS : (size_t)STACK_ROWS - 1;
+	const size_t first = (sh->stack_sel > fits) ? sh->stack_sel - fits : 0;
+	const size_t visible = (depth - first < fits) ? depth - first : fits;
+	for (size_t k = 0; k < visible; k++) {
+		const size_t i = first + k;
 		qd_interp_value value;
 		if (!qd_interp_peek(sh->interp, i, &value)) {
 			continue;
 		}
 
-		const int row = ROW_CONTENT_LAST - (int)i;
+		const int row = ROW_CONTENT_LAST - (int)k;
 
 		char label[16];
 		snprintf(label, sizeof(label), "%zu:", i + 1);
@@ -6270,12 +6948,15 @@ static void render(qdos_shell* sh) {
 			format_value(sh, &value, shown, sizeof(shown), room);
 		}
 		qdos_console_puts_right_within(con, row, used + 1, shown);
+		if (sh->stack_sel == i + 1) {
+			qdos_console_invert(con, 0, row, QDOS_COLS);
+		}
 	}
 
 	// Its own row: sharing one with a value made the entry look like the marker
-	if (depth > visible) {
+	if (depth > first + visible) {
 		char hidden[QDOS_COLS + 1];
-		snprintf(hidden, sizeof(hidden), "%zu MORE", depth - visible);
+		snprintf(hidden, sizeof(hidden), "%zu MORE", depth - first - visible);
 		qdos_console_puts(con, 0, ROW_STACK_FIRST, hidden);
 	}
 
@@ -7071,6 +7752,19 @@ static bool slot_of(qd_context* ctx, int64_t* slot) {
 	return true;
 }
 
+/** `ui::answer` - ( x -- ) leave x on the calculator's stack when the app ends */
+static int native_answer(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	if (sh->ui_answer_count >= UI_ANSWERS) {
+		return ui_fail(ctx, "answer", "TOO MANY");
+	}
+	if (!pop_value(ctx, &sh->ui_answer[sh->ui_answer_count])) {
+		return ui_fail(ctx, "answer", "NEED A VALUE");
+	}
+	sh->ui_answer_count++;
+	return 0;
+}
+
 /** `ui::put` - ( x:f64 slot:i64 -- ) keep a number for this run, 0 to 31 */
 static int native_put(qd_context* ctx, void* userdata) {
 	qdos_shell* sh = userdata;
@@ -7496,6 +8190,7 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "ui::keyname", "(key:i64 ch:i64 -- s:str)", native_keyname, sh);
 	qd_interp_register(interp, "ui::input", "(prompt:str -- s:str ok:i64)", native_input, sh);
 	qd_interp_register(interp, "ui::put", "(x:f64 slot:i64 -- )", native_put, sh);
+	qd_interp_register(interp, "ui::answer", "(x:f64 -- )", native_answer, sh);
 	qd_interp_register(interp, "ui::get", "(slot:i64 -- x:f64)", native_get, sh);
 	qd_interp_register(interp, "ui::str", "(x:f64 -- s:str)", native_str, sh);
 	qd_interp_register(interp, "ui::cat", "(a:str b:str -- s:str)", native_cat, sh);

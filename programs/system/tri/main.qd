@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Solve a triangle from three of its parts. Angles are in the calculator's
-// angle mode; side a faces angle A.
+// angle mode; side a faces angle A. The three it found are left on the
+// calculator's stack, the first answer where there are two.
 
 fn half( -- h:f64) {
 	-1.0 acos
@@ -21,11 +22,23 @@ fn report(a:f64 b:f64 c:f64 aa:f64 bb:f64 cc:f64 -- ) {
 	"AREA " a b * cc sin * 2.0 divide round4 ui::cat print nl
 }
 
-fn sss(a:f64 b:f64 c:f64 -- ) {
-	a b + c <= a c + b <= or b c + a <= or if { "NO SUCH TRIANGLE" print nl return }
-	b b * c c * + a a * - 2.0 b * c * divide acos -> aa
-	a a * c c * + b b * - 2.0 a * c * divide acos -> bb
+// The angle facing side a
+fn facing(a:f64 b:f64 c:f64 -- aa:f64) {
+	b b * c c * + a a * - 2.0 b * c * divide acos
+}
+
+fn sss(a:f64 b:f64 c:f64 -- ok:i64) {
+	a b + c <= a c + b <= or b c + a <= or if { "NO SUCH TRIANGLE" print nl 0 return }
+	a b c facing -> aa
+	b a c facing -> bb
 	a b c aa bb half aa - bb - report
+	1
+}
+
+fn answer3(x:f64 y:f64 z:f64 -- ) {
+	x ui::answer
+	y ui::answer
+	z ui::answer
 }
 
 fn ask(prompt:str -- x:f64 ok:i64) {
@@ -40,14 +53,18 @@ fn main() {
 		"a?" ask 0 == if { drop return } -> a
 		"b?" ask 0 == if { drop return } -> b
 		"c?" ask 0 == if { drop return } -> c
-		a b c sss
+		a b c sss if {
+			a b c facing -> aa
+			b a c facing -> bb
+			aa bb half aa - bb - answer3
+		}
 	}
 	k 2 == if {
 		"a?" ask 0 == if { drop return } -> a
 		"C?" ask 0 == if { drop return } -> cc
 		"b?" ask 0 == if { drop return } -> b
 		a a * b b * + 2.0 a * b * cc cos * - sqrt -> c
-		a b c sss
+		a b c sss if { c a b c facing b a c facing answer3 }
 	}
 	k 3 == if {
 		"A?" ask 0 == if { drop return } -> aa
@@ -55,7 +72,10 @@ fn main() {
 		"B?" ask 0 == if { drop return } -> bb
 		half aa - bb - -> cc
 		cc 0.0 <= if { "NO SUCH TRIANGLE" print nl } else {
-			c aa sin * cc sin divide c bb sin * cc sin divide c aa bb cc report
+			c aa sin * cc sin divide -> a
+			c bb sin * cc sin divide -> b
+			a b c aa bb cc report
+			a b cc answer3
 		}
 	}
 	k 4 == if {
@@ -67,13 +87,16 @@ fn main() {
 			s asin -> bb
 			half aa - bb - -> cc
 			cc 0.0 > if {
-				a b a cc sin * aa sin divide aa bb cc report
+				a cc sin * aa sin divide -> c
+				a b c aa bb cc report
+				c bb cc answer3
 			}
 			half bb - -> bb2
 			half aa - bb2 - -> cc2
 			cc2 0.0 > bb2 bb != and if {
-				"--- OR ---" print nl
-				a b a cc2 sin * aa sin divide aa bb2 cc2 report
+				a cc2 sin * aa sin divide -> c2
+				cc 0.0 > if { "--- OR ---" print nl } else { c2 bb2 cc2 answer3 }
+				a b c2 aa bb2 cc2 report
 			}
 		}
 	}

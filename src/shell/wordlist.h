@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define QDOS_WORDLIST_MAX 192
+#define QDOS_WORDLIST_MAX 512
 #define QDOS_WORDLIST_NAME 32
 
 typedef struct {

@@ -349,8 +349,22 @@ static int w_divide(qd_context* ctx, void* user) {
 	return qd_push_f(ctx, a / b);
 }
 
+/* The keypad's %, as an HP's: y stays, and x becomes x percent of it */
+static int w_percent(qd_context* ctx, void* user) {
+	(void)user;
+	double x = 0.0, y = 0.0;
+	if (!qdos_peek_number(ctx, 0, &x) || !qdos_peek_number(ctx, 1, &y)) {
+		return qdos_math_error(ctx, "percent", "NEEDS 2 NUMBERS");
+	}
+	const double r = y * x / 100.0;
+	if (g_finite_only && !isfinite(r)) {
+		return qdos_math_error(ctx, "percent", isnan(r) ? "UNDEFINED" : "OVERFLOW");
+	}
+	return replace_top(ctx, r);
+}
+
 /*
- * What the keypad's % does: a calculator's mod, which takes decimals and has
+ * A calculator's mod, which takes decimals and has
  * the sign of the divisor, so `-7 3 modulo` is 2 where Quadrate's mod gives -1.
  * Whole numbers stay whole.
  */
@@ -484,6 +498,7 @@ static const struct {
 		{"fmod", BINARY, w_fmod},
 		{"divide", BINARY, w_divide},
 		{"modulo", BINARY, w_modulo},
+		{"percent", "(y:f64 x:f64 -- y:f64 r:f64)", w_percent},
 		{"plus", BINARY, w_plus},
 		{"minus", BINARY, w_minus},
 		{"times", BINARY, w_times},

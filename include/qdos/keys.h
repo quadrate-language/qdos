@@ -136,6 +136,8 @@ typedef enum {
 	QDOS_KEY_RUN,		 ///< Run the program in the editor
 	QDOS_KEY_COMPLEX,	 ///< Two reals into one complex number, or one back into two
 	QDOS_KEY_I,			 ///< i, the imaginary unit
+	QDOS_KEY_EE,		 ///< The exponent of the number being typed
+	QDOS_KEY_CLEAR_STACK,
 
 	QDOS_KEY__COUNT
 } qdos_key;

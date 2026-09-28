@@ -26,9 +26,13 @@ fn main() {
 	d 0.0 >= if {
 		"X1 = " h r - ui::cat print nl
 		"X2 = " h r + ui::cat print nl
+		h r - ui::answer
+		h r + ui::answer
 	} else {
 		"X1 = " h r complex ui::cat print nl
 		"X2 = " h r neg complex ui::cat print nl
+		h r complex ui::answer
+		h r neg complex ui::answer
 	}
 	"VERTEX X = " h ui::cat print nl
 	"VERTEX Y = " k ui::cat print nl

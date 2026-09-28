@@ -42,7 +42,12 @@ Two modes. **Calculator** (`>`) is RPN: digits build a number, `Enter` pushes it
 an operator applies immediately. **Line** (`:`) takes whole Quadrate — control
 flow, definitions, strings. `MODE`, the leftmost soft key, goes between the two.
 `Escape` empties the line, and takes you back to the calculator once it is
-empty. The `π` key pushes pi, or types it into a line; shifted, it does the same with e.
+empty. In the calculator it throws away what is being typed and never the
+stack, being the key pressed out of habit: `CLST` (shift-DEL) empties the
+stack, and `UNDO` brings it back. `DEL` with nothing typed drops x, as on an
+HP 48. `EE` (shift-±) starts the exponent of the number being typed,
+`6.02 EE 23`, and ± after it is the exponent's sign; a keyboard's `e` does the
+same. The `π` key pushes pi, or types it into a line; shifted, it does the same with e.
 
 ```
 6  Enter  7  *                          ->  42
@@ -50,12 +55,18 @@ MODE  fn sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
       7 sq                              Enter    -> 49
 ```
 
-The `÷` key divides as a calculator does, `7 2 ÷` being 3.5, wherever it is
-pressed: it types `divide` into a line. Quadrate's own `/` keeps its meaning, 3
-for `7 2 /`, so a program behaves on the calculator as it does on a PC.
-The `%` key is `modulo`, a calculator's mod: it takes decimals and has the
-sign of the divisor, `-7 3 %` being 2 where Quadrate's `mod` gives -1.
-Likewise the keypad's `+`, `−` and `×` are `plus`, `minus` and `times`: whole
+The `÷` key divides as a calculator does, `7 2 ÷` being 3.5, and in a line it
+types `divide`; `+`, `−` and `×` likewise type `plus`, `minus` and `times`, so
+a line does what the keys do on the stack. In a string or a comment they type
+themselves, and `−` starting a word and followed by a digit, `>` or another `−`
+is a sign, `->` or `--` rather than `minus`; glued to a number, `2−3`, it is
+`minus`. Each word they type is spaced once, however the line is typed. Quadrate's own `/` keeps its meaning, 3 for `7 2 /`,
+and the editor types the operators as they are, so a program behaves on the
+calculator as it does on a PC.
+The `%` key is percent, as an HP's: `200 ENTER 15 %` leaves 200 and 30.
+`modulo`, a calculator's mod, takes decimals and has the sign of the divisor,
+`-7 3 modulo` being 2 where Quadrate's `mod` gives -1.
+The keypad's `+`, `−` and `×` are `plus`, `minus` and `times`: whole
 numbers stay whole until a result will not fit 64 bits, and then it is a
 float, where Quadrate's own operators wrap as C does. `sq`, `cb`, `abs` and
 `fac` do the same, so `21 fac` is 5.1e19. A number typed on the keypad that is
@@ -88,11 +99,20 @@ work at the prompt is not that, and would otherwise fill the store with every
 `sq` ever tried, each one a row in `APPS`.
 
 `Tab` completes words. F1-F5 are soft keys, labelled on the bottom row of the
-display. The angle mode, degrees or radians, is on the settings page, and the
-status band shows which is in force beside the clock. `STO`
-and `RCL` are keys of their own beside the digits and take the digit after them,
-reaching registers 0 to 9; the other ninety are `n sto` and `n rcl` written
-out. Where the keypad has more than one face, which one is live shows beside
+display, and while a number or a name is being asked for they are `ESC` and
+`OK`. `SET` is the settings page: the angle, decimals, notation (normal, SCI or
+ENG), auto-off and complex mode. The arrows or `CHG` change the selected row,
+and `ENTER` or `ESC` is done; `INFO` there says what firmware this is and `LOG`
+lists what has been said, errors in full. The status band shows the angle
+beside the clock. `STO` and `RCL` are keys of their own beside the digits and
+take the digit after them, reaching registers 0 to 9; `STO` leaves x where it
+was. The other ninety are `n sto` and `n rcl` written out.
+
+Up in the calculator picks out a level of the stack, scrolling to those too
+deep to show, and `ENTER` copies it to the top. In a line, up and down go
+through the lines entered. `CAT` lists every word, your own first; typing
+finds the first that starts that way, and from the calculator `PICK` applies
+it to the stack as a key would, where from a line it types it. Where the keypad has more than one face, which one is live shows beside
 the prompt (`:A `), because a keycap cannot light up.
 
 `APPS` lists installed programs. Enter or `RUN` runs the selection, `NEW` asks
@@ -109,11 +129,14 @@ The stack and the registers survive a power cycle.
 
 `PLOT`, the rightmost soft key, is the Y= page, as on a TI-83: six slots, `Y1` to
 `Y6`, each the body of a function in x typed like any line (`x sin x *`),
-with `x`, `y`, `t` and `theta` on soft keys while it is being typed. A
+with `x`, `y`, `t` and `theta` on soft keys while it is being typed. A body
+works in floats, which Quadrate's own operators do not wrap, so there `+ − ×`
+type `+ - *`; `sqrt`, `divide` and `pi` are drawn as the keys have them, `√`,
+`÷` and `π`, while what is kept is the words. A
 slot is declared as a word of its name, so `2 Y1` works at the prompt too, and
 the slots are kept across a restart. `ON` picks which ones `GRAPH` draws --
 together, solid, dashed and dotted -- and in trace, up and down go from one
-curve to the next. A body that uses `y` is a surface, and `GRAPH` on it draws
+curve to the next; a slot switched off says `OFF`. A body that uses `y` is a surface, and `GRAPH` on it draws
 it in 3D. One that uses `t` is parametric and leaves x and y (`t cos t sin`);
 one that uses `theta` is polar and leaves r. `DEL` empties a slot.
 
@@ -125,12 +148,16 @@ steps of `STEP`; `FORMAT`, the grid and the axes; and `STAT` and `STAT PLOT`.
 On the graph, the arrows pan and `+` and `-` zoom. `ZOOM` offers box, in,
 out, standard, fit, decimal and integer (a column on every 0.05, or every
 whole number, so trace lands on round values), square (a unit as long across
-as down), trig and stat. `TRACE` follows a curve with x and y read out under
-it; a number typed while tracing is where it goes. `CALC` finds a value,
+as down), trig and stat. A column stands for x at its left edge, so the
+standard window's middle one is 0. `TRACE` follows a curve with x and y read
+out under it; a number typed while tracing is where it goes, and `ESC` ends
+it before a second leaves the graph. `CALC` finds a value,
 zero, minimum, maximum, intersection, dy/dx, integral (shaded) or tangent,
 asking for the bounds as a TI does -- move the cursor and press `ENTER`, or
 type the x -- and puts the answer on the calculator's stack: x for a zero, x
 and y for an extremum or intersection, a and b for a tangent y = ax + b.
+Both bounds on the one column, `ENTER` twice on the answer, is a column
+either side of it.
 
 `"f" graph` plots a word that takes x and leaves y, one sample per pixel
 column, with y scaled to fit, in the standard window of -10 to 10. The
@@ -209,7 +236,11 @@ spinning — a key cuts it short and is still there for `ui::key` — and
 `"ESC"`, `"DEL"`, `"7"` or the character typed. `ui::put ( x slot -- )` and
 `ui::get ( slot -- x )` keep 32 numbers for the length of one run, which is how
 a word handed to `ui::plot` or `root` reads what the app worked out, without
-touching the user's registers. `ui::save ( x name )` and `ui::load ( name -- x ok )` keep a value between
+touching the user's registers. `ui::answer ( x -- )` leaves x on the
+calculator's stack when the app ends, so an answer can be gone on with: `quad`
+leaves its roots, `fin` what it solved for, `tri` the three parts it found
+(the first triangle, where there are two), and `units` the conversion picked
+from its list. `ui::save ( x name )` and `ui::load ( name -- x ok )` keep a value between
 runs, as a file in the app's own folder. The language has no string concatenation, so
 `ui::str ( x -- s )` and `ui::cat ( a b -- s )` show numbers as the calculator
 does and join them.
@@ -259,10 +290,13 @@ shared library any program may call, listed as `foo::` — or, if it has a
 
 A line that will not evaluate stays on the input to be corrected rather than
 being thrown away: on a keypad with no letters of its own, retyping it is the
-expensive part. Infix is refused instead of run — `5 - 3` is valid Quadrate that
-pushes 5, subtracts it from whatever the stack was already holding, and pushes
-3, which is a wrong answer with nothing to report it, so the shell says
-`RPN: TRY 5 3 -` and evaluates nothing.
+expensive part. What it did to the stack before it failed is put back. Infix is
+refused instead of run — `5 - 3` is valid Quadrate that pushes 5, subtracts it
+from whatever the stack was already holding, and pushes 3, which is a wrong
+answer with nothing to report it, so the shell says `RPN: TRY 5 3 minus` and
+evaluates nothing. `2+3*4` on the keys is `2 plus 3 times 4`, caught the same
+way, and a line that fails with brackets in it, `sqrt(2)`, is told
+`TRY 2 sqrt`. An error too long for the row takes the row above as well.
 
 ## Native modules
 

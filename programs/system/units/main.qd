@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A value in one unit, shown in every other unit of its kind
+// A value in one unit, shown in every other unit of its kind; the one
+// picked is left on the calculator's stack
 
 fn kinds( -- names:[]str) {
 	["LENGTH" "MASS" "VOLUME" "SPEED" "ENERGY" "TEMPERATURE"]
@@ -46,7 +47,8 @@ fn main() {
 			names from 1 - nth -> unit
 			unit "?" ui::cat ui::ask 0 == if { drop } else {
 				-> v
-				v " " ui::cat unit ui::cat " IS" ui::cat print nl
+				[]str -> shown
+				[]f64 -> values
 				0 names len 1 for i {
 					i from 1 - != if {
 						kind 6 == if {
@@ -55,10 +57,16 @@ fn main() {
 							kind sizes -> k
 							v k from 1 - nth * k i nth divide -> out
 						}
-						"  " out ui::cat " " ui::cat names i nth ui::cat print nl
+						shown out ui::str " " ui::cat names i nth ui::cat append drop
+						values out append drop
 					}
 				}
-				ui::pause
+				// Picking one leaves it on the calculator's stack
+				v " " ui::cat unit ui::cat " IS" ui::cat shown ui::menu -> chosen
+				chosen 0 != if {
+					values chosen 1 - nth ui::answer
+					return
+				}
 			}
 		}
 	}

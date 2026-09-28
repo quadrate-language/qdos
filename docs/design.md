@@ -160,13 +160,37 @@ the stack was already holding, and pushes 3. `5-3` is two numbers. Neither
 reports anything, and the keypad makes both of them the easiest thing to type,
 so the shell recognises the shape — a number, an operator, a number, nothing
 else — and answers with the user's own numbers the right way round rather than
-running it. The check is deliberately narrow: three tokens or one, and every
-other line goes through untouched.
+running it. The check is deliberately narrow: numbers and operators taking
+turns — `2 plus 3 times 4` is what the keys make of `2+3*4` — or one token with
+an operator inside, and every other line goes through untouched. A line that
+fails with brackets or a glued operator in it is told how RPN writes it instead
+of the parser's complaint about `(`.
 
 The other half of that is not throwing the line away. A line that fails to
-evaluate keeps its text, because the stack it half-moved is visible above it and
-the typing is what cost something. `Escape` is the way to be rid of it, and only
-leaves the mode once there is nothing left on the line.
+evaluate keeps its text, because the typing is what cost something, and the
+stack is put back as it was before the line ran, so nothing is left half done.
+`Escape` is the way to be rid of the line, and only leaves the mode once there
+is nothing left on it.
+
+### The keys a TI or HP owner reaches for
+
+The first hour on the machine was spent as someone who knows RPN from an HP and
+graphing from a TI would spend it, and what they reach for by reflex decided
+these:
+
+- **`ESC` never empties the stack.** It is pressed to back out of anything, so
+  it throws away what is being typed and no more. `CLST` is a shift away, and
+  `UNDO` covers it.
+- **`STO` leaves x**, as the HP-42S does, and `DEL` with nothing typed drops it,
+  as the HP 48 does.
+- **`%` is percent**, the one meaning either brand gives it. `modulo` is a word.
+- **`EE` exists.** Without it `6.02e23` could not be typed on the keypad at all,
+  and the `e` of a keyboard was dropped without a word, leaving 6.0223.
+- **A line's `+ − ×` are the keys' `plus minus times`**, as `÷` already typed
+  `divide`: the same keys must not give 1.6e19 on the stack and a wrapped
+  negative number in a line.
+- **`ENTER` on a page is done.** On the settings page it stepped the value, so
+  `CHG` then `ENTER` put it back.
 
 ### Uploaded native code
 

@@ -490,8 +490,9 @@ static void stub_hal(qdos_hal* hal, stub_state* st) {
 /* Settings rows, in the order the page lists them */
 #define ROW_SETTING_ANGLE ROW_CONTENT_FIRST_T
 #define ROW_SETTING_DECIMALS (ROW_CONTENT_FIRST_T + 1)
-#define ROW_SETTING_AUTO_OFF (ROW_CONTENT_FIRST_T + 2)
-#define ROW_SETTING_USB (ROW_CONTENT_FIRST_T + 3)
+#define ROW_SETTING_NOTATION (ROW_CONTENT_FIRST_T + 2)
+#define ROW_SETTING_AUTO_OFF (ROW_CONTENT_FIRST_T + 3)
+#define ROW_SETTING_USB (ROW_CONTENT_FIRST_T + 4)
 
 /* The editor's pane, in the small font between the header's rule and its own */
 #define EDIT_PANE_TOP_T (ROW_CONTENT_FIRST_T * QDOS_CELL_H)
@@ -1532,8 +1533,8 @@ static void test_graph_plots_a_word(void) {
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
 	CHECK(strstr(line, "sq") == line);
 	CHECK(strstr(line, "X -10:10") != NULL);
-	// Fitted to x^2 at the column centres, 0.025 to 9.975 squared, with 5% either side
-	CHECK(strstr(line, "Y -4.974:104.5") != NULL);
+	// Fitted to x^2 at the columns, 0 to 10 squared, with 5% either side
+	CHECK(strstr(line, "Y -5:105") != NULL);
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
@@ -1577,15 +1578,15 @@ static void test_graph_trace_reads_the_curve(void) {
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	// The middle column of -10..10 over 400 is x = 0.025
+	// The middle column of -10..10 over 400 is x = 0, and they go in 0.05s
 	char line[EDIT_COLS_T + 1];
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strcmp(line, "X=0.025  Y=0.05") == 0);
+	CHECK(strcmp(line, "X=0  Y=0") == 0);
 
 	key(script, &n, QDOS_KEY_RIGHT);
 	run_script(script, n, fb);
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strcmp(line, "X=0.075  Y=0.15") == 0);
+	CHECK(strcmp(line, "X=0.05  Y=0.1") == 0);
 }
 
 /** A word that is not there says so and leaves the calculator as it was. */
@@ -1706,11 +1707,18 @@ static void test_graph3_of_the_wrong_shape(void) {
 
 /* A Y= slot's body, read back small from where the page puts it */
 static void read_slot_body(const uint8_t* fb, int slot, char* out, size_t cap) {
-	char line[EDIT_COLS_T + 1];
-	read_small(
-			fb, (ROW_CONTENT_FIRST_T + slot) * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2, line, sizeof(line));
-	// The name is at reading size in the first four cells, eight small ones
-	snprintf(out, cap, "%s", strlen(line) > 8 ? line + 8 : "");
+	char line[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T + slot, line, sizeof(line));
+	// After the name's four cells, and before the tag in the last four when there is one
+	snprintf(out, cap, "%s", strlen(line) > 4 ? line + 4 : "");
+	size_t len = strlen(out);
+	if (strlen(line) == QDOS_COLS) {
+		len = len > 4 ? len - 4 : 0;
+	}
+	while (len > 0 && out[len - 1] == ' ') {
+		len--;
+	}
+	out[len] = '\0';
 }
 
 /* Into Y= from the calculator, onto slot @p slot, and type @p body into it */
@@ -1736,7 +1744,7 @@ static void test_plot_is_the_y_editor(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "PLOT") != NULL && strstr(row, "PLOT") > strstr(row, "INFO"));
+	CHECK(strstr(row, "PLOT") != NULL && strstr(row, "PLOT") > strstr(row, " SET "));
 	CHECK(strstr(row, "INFOPLOT") == NULL);
 
 	key(script, &n, QDOS_KEY_SOFT5);
@@ -1814,15 +1822,16 @@ static void test_graph_draws_every_slot_that_is_on(void) {
 	store_reset();
 	run_script(script, n, fb);
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strstr(line, "Y1 X=0.025  Y=0.024997") == line);
+	CHECK(strstr(line, "Y1 X=0  Y=0") == line);
 
 	key(script, &n, QDOS_KEY_DOWN);
 	store_reset();
 	run_script(script, n, fb);
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strstr(line, "Y2 X=0.025  Y=0.99968") == line);
+	CHECK(strstr(line, "Y2 X=0  Y=1") == line);
 
-	// ESC goes back to Y=, where Y2 is switched off and GRAPH draws Y1 alone
+	// ESC ends trace, the next goes back to Y=, where Y2 is switched off and GRAPH draws Y1 alone
+	key(script, &n, QDOS_KEY_CLEAR);
 	key(script, &n, QDOS_KEY_CLEAR);
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_SOFT3); // ON, off
@@ -1942,9 +1951,46 @@ static void test_x_and_y_are_keys_in_a_slot(void) {
 	run_script(script, n, fb);
 	char body[EDIT_COLS_T + 1];
 	read_slot_body(fb, 0, body, sizeof(body));
-	CHECK(strcmp(body, "x x * y +") == 0); // spaced once, and trimmed
+	CHECK(strcmp(body, "x x * y +") == 0); // symbols, a body being floats; spaced once, and trimmed
 	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
 	CHECK(strstr(row, "3D") != NULL);
+}
+
+static void read_level(const uint8_t* fb, int depth, char* out, size_t cap);
+
+/** A body is drawn in keycaps, sqrt as its root sign, and still runs as typed. */
+static void test_a_slot_reads_in_keycaps(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT5);
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_SOFT2); // x
+	key(script, &n, QDOS_KEY_SQRT);
+	key(script, &n, QDOS_KEY_2);
+	key(script, &n, QDOS_KEY_DIV);
+	key(script, &n, QDOS_KEY_PI);
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Y1= x √ 2 ÷ π +, on the selected row
+	const int row = ROW_CONTENT_FIRST_T;
+	CHECK(cell_is(fb, 6, row, QDOS_GLYPH_SQRT[0], true));
+	CHECK(cell_is(fb, 10, row, QDOS_GLYPH_DIVIDE[0], true));
+	CHECK(cell_is(fb, 12, row, QDOS_GLYPH_PI[0], true));
+	CHECK(cell_is(fb, 14, row, '+', true));
+
+	key(script, &n, QDOS_KEY_CLEAR);
+	type_line(script, &n, "4 Y1");
+	store_reset();
+	run_script(script, n, fb);
+	char level[QDOS_COLS + 1];
+	read_level(fb, 0, level, sizeof(level));
+	CHECK(strstr(level, "4.14159") != NULL);
 }
 
 /** Traced, a square root is a square root: y in full, not in whole steps. */
@@ -1966,7 +2012,7 @@ static void test_a_traced_slot_is_not_rounded(void) {
 
 	char line[EDIT_COLS_T + 1];
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strcmp(line, "X=1.875  Y=1.3693064") == 0);
+	CHECK(strcmp(line, "X=1.85  Y=1.3601471") == 0);
 }
 
 /** Forgetting something that was never declared says so. */
@@ -2330,6 +2376,7 @@ static void test_list_moves_and_picks(void) {
 
 	qdos_key_event script[64];
 	size_t n = 0;
+	key(script, &n, QDOS_KEY_MODE); // from a line: from the calculator a word runs
 	key(script, &n, QDOS_KEY_LIST);
 	key(script, &n, QDOS_KEY_TAB); // no programs installed, so widen to all words
 	key(script, &n, QDOS_KEY_DOWN);
@@ -2711,12 +2758,13 @@ static void test_catalog_opens_directly(void) {
 	CHECK(row[0] != '\0');
 }
 
-/** Picking from the catalog types the word, which is what it is for. */
+/** Picking from the catalog types the word into a line, which is what it is for there. */
 static void test_catalog_pick_types_the_word(void) {
 	store_reset();
 
 	qdos_key_event script[16];
 	size_t n = 0;
+	key(script, &n, QDOS_KEY_MODE);
 	key(script, &n, QDOS_KEY_CATALOG);
 	key(script, &n, QDOS_KEY_ENTER);
 
@@ -2727,6 +2775,43 @@ static void test_catalog_pick_types_the_word(void) {
 	read_row(fb, QDOS_ROWS - 2, row, sizeof(row));
 	CHECK(row[0] == ':');
 	CHECK(strlen(row) > 1); // something was typed
+}
+
+/** From the calculator a picked word acts on the stack, found by typing its start. */
+static void test_catalog_pick_runs_from_the_calculator(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_CATALOG);
+	type_partial(script, &n, "cb");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "27") != NULL);
+}
+
+/** Words of your own are at the top of the catalog, marked as yours. */
+static void test_catalog_lists_your_words_first(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "fn zz() { 1 }");
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CATALOG);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_CONTENT_FIRST_T, row, sizeof(row));
+	CHECK(strstr(row, "zz") != NULL && strstr(row, "USER") != NULL);
 }
 
 /** The maths words reach the stack in calculator mode, not just in a line. */
@@ -2863,7 +2948,7 @@ static void test_about_returns(void) {
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "INFO") != NULL); // the calculator's own soft row
+	CHECK(strstr(row, "SET") != NULL); // the calculator's own soft row
 }
 
 /** Rotate reaches the third entry. Off the keypad now, but still a key. */
@@ -3121,17 +3206,79 @@ static void test_keypad_types_into_the_line(void) {
 	size_t n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
 	digits(script, &n, "1234567890.");
-	key(script, &n, QDOS_KEY_ADD);
-	key(script, &n, QDOS_KEY_SUB);
-	key(script, &n, QDOS_KEY_MUL);
-	key(script, &n, QDOS_KEY_DIV);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
-	CHECK(strstr(row, "1234567890.+-* divide") != NULL);
+	CHECK(strstr(row, "1234567890.") != NULL);
+
+	// The arithmetic is the calculator's, as the keys do it on the stack
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_ADD);
+	key(script, &n, QDOS_KEY_MUL);
+	run_script(script, n, fb);
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, ": 5 plus times") == row);
+
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	key(script, &n, QDOS_KEY_SUB);
+	key(script, &n, QDOS_KEY_DIV);
+	run_script(script, n, fb);
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, ": minus divide") == row);
+}
+
+/**
+ * Minus followed by a digit is a sign, and - is still part of ->, -- and an
+ * exponent. Glued to a number it is minus, and the words the keys type are
+ * spaced once, however they are typed.
+ */
+static void test_minus_key_still_types_signs(void) {
+	static const struct {
+		const char* typed;
+		const char* shown;
+	} CASES[] = {
+			{"5 -3", ": 5 -3"},
+			{"a ->", ": a ->"},
+			{"a --", ": a --"},
+			{"1e-5", ": 1e-5"},
+			{"\"a-b", ": \"a-b"},
+			{"2-3", ": 2 minus 3"},
+			{"5 * 2", ": 5 times 2"},
+			{"x*+", ": x times plus"},
+	};
+
+	for (size_t c = 0; c < sizeof(CASES) / sizeof(*CASES); c++) {
+		store_reset();
+		qdos_key_event script[32];
+		size_t n = 0;
+		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+		for (const char* p = CASES[c].typed; *p; p++) {
+			if (*p == '-') {
+				key(script, &n, QDOS_KEY_SUB);
+			} else if (*p == '*') {
+				key(script, &n, QDOS_KEY_MUL);
+			} else if (*p == '+') {
+				key(script, &n, QDOS_KEY_ADD);
+			} else if (*p >= '0' && *p <= '9') {
+				key(script, &n, (qdos_key)(QDOS_KEY_0 + (*p - '0')));
+			} else {
+				script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
+			}
+		}
+
+		static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+		run_script(script, n, fb);
+
+		char row[QDOS_COLS + 1];
+		read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+		CHECK(strstr(row, CASES[c].shown) == row);
+	}
 }
 
 /** Typed, as on the calculator, the division key divides rather than truncating. */
@@ -3522,6 +3669,7 @@ static void open_usb_setting(qdos_key_event* script, size_t* n) {
 	key(script, n, QDOS_KEY_DOWN);
 	key(script, n, QDOS_KEY_DOWN);
 	key(script, n, QDOS_KEY_DOWN);
+	key(script, n, QDOS_KEY_DOWN);
 }
 
 /** A machine with no gadget does not offer the row at all. */
@@ -3531,12 +3679,12 @@ static void test_usb_is_hidden_without_a_gadget(void) {
 	qdos_key_event script[16];
 	size_t n = 0;
 	open_usb_setting(script, &n);
-	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_RIGHT);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	// COMPLEX moves up into the gap, so Enter stepped that instead
+	// COMPLEX moves up into the gap, so CHG stepped that instead
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_SETTING_USB, row, sizeof(row));
 	CHECK(strstr(row, "USB") == NULL);
@@ -3553,9 +3701,9 @@ static void test_usb_shares_the_card_and_takes_it_back(void) {
 	qdos_key_event script[16];
 	size_t n = 0;
 	open_usb_setting(script, &n);
-	key(script, &n, QDOS_KEY_ENTER); // hand it over
+	key(script, &n, QDOS_KEY_RIGHT); // hand it over
 	const size_t shared_at = n;
-	key(script, &n, QDOS_KEY_ENTER); // and take it back
+	key(script, &n, QDOS_KEY_RIGHT); // and take it back
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	static uint8_t shared[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -3583,8 +3731,8 @@ static void test_taking_the_card_back_declares_what_landed(void) {
 	qdos_key_event script[16];
 	size_t n = 0;
 	open_usb_setting(script, &n);
-	key(script, &n, QDOS_KEY_ENTER);
-	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_RIGHT);
+	key(script, &n, QDOS_KEY_RIGHT);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -3607,8 +3755,8 @@ static void test_taking_the_card_back_keeps_the_stack(void) {
 	digits(script, &n, "2");
 	key(script, &n, QDOS_KEY_ADD);
 	open_usb_setting(script, &n);
-	key(script, &n, QDOS_KEY_ENTER);
-	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_RIGHT);
+	key(script, &n, QDOS_KEY_RIGHT);
 	key(script, &n, QDOS_KEY_CLEAR); // back to the calculator to read the stack
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -3628,7 +3776,7 @@ static void test_a_failed_usb_switch_is_reported(void) {
 	qdos_key_event script[16];
 	size_t n = 0;
 	open_usb_setting(script, &n);
-	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_RIGHT);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -3754,7 +3902,7 @@ static void test_settings_change_angle_mode(void) {
 	qdos_key_event script[64];
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SETTINGS);
-	key(script, &n, QDOS_KEY_ENTER); // ANGLE is the first row
+	key(script, &n, QDOS_KEY_RIGHT); // ANGLE is the first row
 	key(script, &n, QDOS_KEY_CLEAR);
 	digits(script, &n, "30");
 	key(script, &n, QDOS_KEY_ENTER);
@@ -3779,7 +3927,7 @@ static void test_settings_change_decimals(void) {
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
 	for (int i = 0; i < 3; i++) {
-		key(script, &n, QDOS_KEY_ENTER); // AUTO -> 0 -> 1 -> 2
+		key(script, &n, QDOS_KEY_RIGHT); // AUTO -> 0 -> 1 -> 2
 	}
 	key(script, &n, QDOS_KEY_CLEAR);
 	digits(script, &n, "2");
@@ -3913,21 +4061,25 @@ static void test_settings_selection_stops_at_the_ends(void) {
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN); // already at the bottom, with no gadget
-	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_RIGHT);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
 	char row[QDOS_COLS + 1];
 
-	// Neither press moved off the list, so Enter changed the last row and the
+	// Neither press moved off the list, so CHG changed the last row and the
 	// ones above it were left exactly as they were
 	read_row(fb, ROW_SETTING_ANGLE, row, sizeof(row));
 	CHECK(strstr(row, "RAD") != NULL);
 
 	read_row(fb, ROW_SETTING_DECIMALS, row, sizeof(row));
 	CHECK(strstr(row, "AUTO") != NULL);
+
+	read_row(fb, ROW_SETTING_NOTATION, row, sizeof(row));
+	CHECK(strstr(row, "NORMAL") != NULL);
 
 	read_row(fb, ROW_SETTING_AUTO_OFF, row, sizeof(row));
 	CHECK(strstr(row, "10 MIN") != NULL);
@@ -3945,7 +4097,7 @@ static void test_fixed_decimals_apply_to_integers(void) {
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
 	for (int i = 0; i < 3; i++) {
-		key(script, &n, QDOS_KEY_ENTER); // AUTO -> 0 -> 1 -> 2
+		key(script, &n, QDOS_KEY_RIGHT); // AUTO -> 0 -> 1 -> 2
 	}
 	key(script, &n, QDOS_KEY_CLEAR);
 	digits(script, &n, "7");
@@ -4207,7 +4359,33 @@ static void test_the_hint_leaves_real_lines_alone(void) {
 	CHECK(strstr(row, "2") != NULL);
 }
 
-/** Emptying the stack is the largest thing CLR does, so it is undoable. */
+/** ESC is pressed out of habit, so it never empties the stack; CLST does. */
+static void test_escape_keeps_the_stack(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_CLEAR); // the 2 being typed
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL && strstr(row, "1") != NULL);
+
+	key(script, &n, QDOS_KEY_CLEAR_STACK);
+	run_script(script, n, fb);
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	CHECK(strstr(row, "1:") == NULL);
+}
+
+/** Emptying the stack is the largest thing CLST does, so it is undoable. */
 static void test_clearing_the_stack_can_be_undone(void) {
 	store_reset();
 
@@ -4219,7 +4397,7 @@ static void test_clearing_the_stack_can_be_undone(void) {
 	key(script, &n, QDOS_KEY_ENTER);
 	digits(script, &n, "3");
 	key(script, &n, QDOS_KEY_ENTER);
-	key(script, &n, QDOS_KEY_CLEAR); // nothing part-typed, so this is the stack
+	key(script, &n, QDOS_KEY_CLEAR_STACK);
 	key(script, &n, QDOS_KEY_UNDO);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -4519,14 +4697,15 @@ static void test_a_blocked_module_can_be_let_back_in(void) {
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
-	key(script, &n, QDOS_KEY_DOWN); // past angle, decimals, auto off
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN); // past angle, decimals, notation, auto off
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
 	// The row is only there because something is blocked
 	char row[QDOS_COLS + 1];
-	read_row(fb, ROW_CONTENT_FIRST_T + 3, row, sizeof(row));
+	read_row(fb, ROW_CONTENT_FIRST_T + 4, row, sizeof(row));
 	CHECK(strstr(row, "MODULES") != NULL);
 	CHECK(strstr(row, "1 BLOCKED") != NULL);
 
@@ -4536,7 +4715,8 @@ static void test_a_blocked_module_can_be_let_back_in(void) {
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN);
-	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_RIGHT);
 
 	run_script(script, n, fb);
 	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
@@ -5082,7 +5262,9 @@ static void test_settings_survive_a_power_cycle(void) {
 	size_t n = 0;
 	key(first, &n, QDOS_KEY_SETTINGS);
 	key(first, &n, QDOS_KEY_DOWN);
-	key(first, &n, QDOS_KEY_ENTER); // DECIMALS: AUTO -> 0
+	key(first, &n, QDOS_KEY_RIGHT); // DECIMALS: AUTO -> 0
+	key(first, &n, QDOS_KEY_DOWN);
+	key(first, &n, QDOS_KEY_RIGHT); // NOTATION: NORMAL -> SCI
 	key(first, &n, QDOS_KEY_DOWN);
 	key(first, &n, QDOS_KEY_LEFT); // AUTO OFF: 10 MIN -> 5 MIN
 	run_script(first, n, fb);
@@ -5100,6 +5282,9 @@ static void test_settings_survive_a_power_cycle(void) {
 	read_row(fb, ROW_SETTING_DECIMALS, row, sizeof(row));
 	CHECK(strstr(row, "AUTO") == NULL);
 	CHECK(strstr(row, "0") != NULL);
+
+	read_row(fb, ROW_SETTING_NOTATION, row, sizeof(row));
+	CHECK(strstr(row, "SCI") != NULL);
 }
 
 /** A store written by firmware that knew more settings must not be obeyed. */
@@ -5152,6 +5337,7 @@ static void test_auto_off_never_stays_on(void) {
 	size_t n = 0;
 	key(script, &n, QDOS_KEY_SETTINGS);
 	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
 	key(script, &n, QDOS_KEY_DOWN); // AUTO OFF
 	key(script, &n, QDOS_KEY_LEFT); // 10 MIN -> 5 MIN
 	key(script, &n, QDOS_KEY_LEFT); // 5 MIN -> NEVER
@@ -5178,7 +5364,7 @@ static void test_auto_off_waits_for_the_card(void) {
 	qdos_key_event script[16];
 	size_t n = 0;
 	open_usb_setting(script, &n);
-	key(script, &n, QDOS_KEY_ENTER); // hand the inbox over
+	key(script, &n, QDOS_KEY_RIGHT); // hand the inbox over
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	const size_t budget = 60;
@@ -5200,7 +5386,7 @@ static void test_soft_labels_follow_mode(void) {
 	char row[QDOS_COLS + 1];
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
 	CHECK(strstr(row, "APPS") != NULL);
-	CHECK(strstr(row, "INFO") != NULL);
+	CHECK(strstr(row, " SET ") != NULL);
 	CHECK(strstr(row, "OFF") == NULL); // turning off is the PWR key's, not a soft key's
 
 	n = 0;
@@ -5425,7 +5611,7 @@ static void test_f1_is_always_the_way_out(void) {
 	key(script, &n, QDOS_KEY_SOFT1);
 	run_script(script, n, fb);
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "INFO") != NULL);
+	CHECK(strstr(row, " SET ") != NULL);
 
 	// Out of the editor, without saving, and back out of the apps it came from
 	n = 0;
@@ -5435,7 +5621,7 @@ static void test_f1_is_always_the_way_out(void) {
 	key(script, &n, QDOS_KEY_SOFT1);
 	run_script(script, n, fb);
 	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
-	CHECK(strstr(row, "INFO") != NULL);
+	CHECK(strstr(row, " SET ") != NULL);
 
 	// Out of line mode
 	n = 0;
@@ -5658,13 +5844,14 @@ static void test_zoom_decimal(void) {
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
 	CHECK(strcmp(line, "X=0.05  Y=0.0025") == 0);
 
-	// Kept for next time: ESC and GRAPH again draws in the same window
+	// Kept for next time: out of trace, out to Y=, and GRAPH again draws in the same window
+	key(script, &n, QDOS_KEY_CLEAR);
 	key(script, &n, QDOS_KEY_CLEAR);
 	key(script, &n, QDOS_KEY_SOFT5); // GRAPH
 	store_reset();
 	run_script(script, n, fb);
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strstr(line, "X -10.03:9.975") != NULL);
+	CHECK(strstr(line, "X -10:10") != NULL);
 }
 
 /** CALC ZERO asks for the bounds and puts the root on the stack. */
@@ -5697,7 +5884,8 @@ static void test_calc_zero_on_the_graph(void) {
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
 	CHECK(strcmp(line, "ZERO X=1.414213562") == 0);
 
-	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR); // out of trace
+	key(script, &n, QDOS_KEY_CLEAR); // to Y=
 	key(script, &n, QDOS_KEY_CLEAR);
 	store_reset();
 	run_script(script, n, fb);
@@ -5934,6 +6122,7 @@ static void test_calc_value_and_intersect(void) {
 
 	key(script, &n, QDOS_KEY_CLEAR);
 	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
 	store_reset();
 	run_script(script, n, fb);
 	char row[QDOS_COLS + 1];
@@ -5984,7 +6173,7 @@ static void test_zoom_box_and_free_cursor(void) {
 	store_reset();
 	run_script(script, n, fb);
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
-	CHECK(strcmp(line, "X=1.0025  Y=0.5") == 0); // the middle column of 0 to 2
+	CHECK(strcmp(line, "X=1  Y=0.5") == 0); // the middle column of 0 to 2
 }
 
 /** A histogram and a box plot draw from L1. */
@@ -6895,7 +7084,7 @@ static void test_sample_quad(void) {
 	CHECK(output_has(mid, "X2 = -1-2i"));
 }
 
-/** units: a mile is 1.609344 km, and 100 C is 212 F. */
+/** units: a mile is 1.609344 km, and 100 C is 212 F, which picked is left on the stack. */
 static void test_sample_units(void) {
 	store_reset();
 	seed_sample("units");
@@ -6912,22 +7101,28 @@ static void test_sample_units(void) {
 	key(script, &n, QDOS_KEY_1); // C
 	answer(script, &n, "100");
 	const size_t degrees = n;
-	key(script, &n, QDOS_KEY_CLEAR);
-	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_1); // F
 
 	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script_mid(script, n, miles, fb, mid);
-	CHECK(output_has(mid, "1 MI IS"));
+	char row[EDIT_COLS_T + 1];
+	read_row(mid, ROW_HEADER_T, row, sizeof(row));
+	CHECK(strstr(row, "1 MI IS") == row);
 	CHECK(output_has(mid, "1.609344 KM"));
 	CHECK(output_has(mid, "1609.344 M"));
 
+	store_reset(); // the stack the last run left
+	seed_sample("units");
 	run_script_mid(script, n, degrees, fb, mid);
 	CHECK(output_has(mid, "212 F"));
 	CHECK(output_has(mid, "373.15 K"));
 
-	char row[EDIT_COLS_T + 1];
 	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 212") != NULL);
+	read_level(fb, 1, row, sizeof(row));
 	CHECK(row[0] == '\0');
 }
 
@@ -6971,7 +7166,7 @@ static void test_sample_fin(void) {
 	CHECK(row[0] == '\0');
 }
 
-/** tri: 3 4 5 is right-angled with area 6, and SSA can have two answers. */
+/** tri: 3 4 5 is right-angled with area 6, and SSA can have two answers; what it found is left on the stack. */
 static void test_sample_tri(void) {
 	store_reset();
 	seed_sample("tri");
@@ -6992,6 +7187,13 @@ static void test_sample_tri(void) {
 	CHECK(output_has(mid, "c 5  C 1.5708")); // radians, the default
 	CHECK(output_has(mid, "AREA 6"));
 
+	// A, B and C, with C on top
+	char level[QDOS_COLS + 1];
+	read_level(fb, 0, level, sizeof(level));
+	CHECK(strstr(level, "1.5707963") != NULL);
+	read_level(fb, 2, level, sizeof(level));
+	CHECK(strstr(level, "0.6435011") != NULL);
+
 	// 30 degrees in radians, typed as the calculator would take it
 	store_reset();
 	seed_sample("tri");
@@ -7011,8 +7213,16 @@ static void test_sample_tri(void) {
 	run_script_mid(script, n, ssa, fb, mid);
 	CHECK(output_has(mid, "c 11.4003  C 1.8883"));
 	CHECK(output_has(mid, "--- OR ---"));
+	store_reset(); // the stack the last run left
+	seed_sample("tri");
 	run_script_mid(script, n, scrolled, fb, mid);
 	CHECK(output_has(mid, "c 2.4561  C 0.2061"));
+
+	// The first of the two answers: c, B and C
+	read_level(fb, 2, level, sizeof(level));
+	CHECK(strstr(level, "11.400339") != NULL);
+	read_level(fb, 3, level, sizeof(level));
+	CHECK(level[0] == '\0');
 
 	char row[EDIT_COLS_T + 1];
 	read_error(fb, row, sizeof(row));
@@ -7357,8 +7567,9 @@ static void test_a_blind_loop_in_an_app_is_stopped(void) {
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
+	// Too long for one row, so it starts on the row above
 	char row[EDIT_COLS_T + 1];
-	read_error(fb, row, sizeof(row));
+	read_small(fb, ERROR_Y0_T - QDOS_SMALL_FONT_H, row, sizeof(row));
 	CHECK(strstr(row, "execution limit") != NULL);
 }
 
@@ -7598,6 +7809,347 @@ static void test_randseed_and_save_outside_an_app(void) {
 	CHECK(strstr(row, "ONLY INSIDE AN APP") != NULL);
 }
 
+/* --- Found by using it as a TI or HP owner would ----------------------- */
+
+/** EE types an exponent, and after it the sign key is the exponent's. */
+static void test_ee_types_an_exponent(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "6.02");
+	key(script, &n, QDOS_KEY_EE);
+	digits(script, &n, "23");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_EE);
+	key(script, &n, QDOS_KEY_NEG);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "0.001") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "6.02e+23") != NULL);
+}
+
+/** % is a calculator's percent: y stays, x becomes that percent of it. */
+static void test_percent_key(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	digits(script, &n, "200");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "15");
+	key(script, &n, QDOS_KEY_MOD);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 30") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "200") != NULL);
+}
+
+/** STO leaves x to go on with; DEL with nothing typed drops it. */
+static void test_sto_keeps_x_and_del_drops_it(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	digits(script, &n, "7");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "42");
+	key(script, &n, QDOS_KEY_STO);
+	key(script, &n, QDOS_KEY_1);
+	const size_t stored = n;
+	key(script, &n, QDOS_KEY_BACKSPACE);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, stored, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_level(mid, 0, row, sizeof(row));
+	CHECK(strstr(row, "42") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 7") != NULL);
+}
+
+/** An error names the key pressed, not the word behind it. */
+static void test_an_error_names_the_keycap(void) {
+	store_reset();
+
+	qdos_key_event script[8];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_ADD);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "'+' needs 2") == row);
+}
+
+/** Typed with the keys, a line's arithmetic is the keypad's, so it does not wrap. */
+static void test_line_arithmetic_does_not_wrap(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	type_partial(script, &n, "4000000000 4000000000");
+	key(script, &n, QDOS_KEY_MUL);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1.6e+19") != NULL);
+}
+
+/** A line that fails part-way leaves the stack as it found it. */
+static void test_a_failed_line_leaves_the_stack(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "1 2 0 divide");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL && strstr(row, " 5") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** Written the way a TI takes it, a line gets told how RPN writes it. */
+static void test_infix_gets_an_rpn_hint(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "sqrt(2)");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "TRY 2 sqrt") != NULL);
+
+	// 2+3*4 on the keys is 2 plus 3 times 4, which RPN would take and get wrong
+	n = 0;
+	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ADD);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_MUL);
+	digits(script, &n, "4");
+	key(script, &n, QDOS_KEY_ENTER);
+	store_reset();
+	run_script(script, n, fb);
+	read_error(fb, row, sizeof(row));
+	CHECK(strcmp(row, "RPN: TRY 2 3 plus") == 0);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** Up brings back the lines entered, newest first; down past the newest is empty. */
+static void test_up_recalls_lines(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "3 4");
+	type_more(script, &n, "5");
+	key(script, &n, QDOS_KEY_UP);
+	key(script, &n, QDOS_KEY_UP);
+	const size_t recalled = n;
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, recalled, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_row(mid, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strcmp(row, ": 3 4") == 0);
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strcmp(row, ":") == 0);
+}
+
+/** Up picks out a level of the stack, as an HP 48 has it; ENTER copies it to the top. */
+static void test_arrows_pick_a_level(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	for (int i = 1; i <= 9; i++) {
+		key(script, &n, (qdos_key)(QDOS_KEY_0 + i));
+		key(script, &n, QDOS_KEY_ENTER);
+	}
+	for (int i = 0; i < 9; i++) {
+		key(script, &n, QDOS_KEY_UP); // to the bottom of the stack, scrolled into view
+	}
+	const size_t deepest = n;
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, deepest, fb, mid);
+
+	CHECK(page_has(mid, "9:"));
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL && strstr(row, " 1") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 9") != NULL);
+}
+
+/** ENTER on the settings page is done, not another change. */
+static void test_settings_enter_is_done(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SOFT4); // SET
+	key(script, &n, QDOS_KEY_SOFT4); // CHG: ANGLE to DEG
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	CHECK(qdos_math_degrees());
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "MODE") != NULL);
+	qdos_math_set_degrees(false);
+}
+
+/** SCI and ENG, as a TI's MODE page offers them. */
+static void test_scientific_and_engineering_notation(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_DOWN);
+	key(script, &n, QDOS_KEY_RIGHT); // SCI
+	key(script, &n, QDOS_KEY_CLEAR);
+	digits(script, &n, "12345");
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 1.2345e4") != NULL);
+
+	key(script, &n, QDOS_KEY_SETTINGS);
+	key(script, &n, QDOS_KEY_RIGHT); // ENG
+	key(script, &n, QDOS_KEY_CLEAR);
+	store_reset();
+	run_script(script, n, fb);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 12.345e3") != NULL);
+}
+
+/** Both bounds on one column, ENTER ENTER on the answer, still finds it. */
+static void test_calc_zero_with_both_bounds_on_it(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	graph_slot(script, &n, "x");
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_2);	 // ZERO
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strcmp(line, "ZERO X=0") == 0);
+}
+
+/** A message over the graph's readout is the message alone, not the two run together. */
+static void test_a_graph_message_hides_the_readout(void) {
+	store_reset();
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	graph_slot(script, &n, "x x * 1 plus");
+	key(script, &n, QDOS_KEY_SOFT3); // CALC
+	key(script, &n, QDOS_KEY_2);	 // ZERO
+	key(script, &n, QDOS_KEY_ENTER);
+	key(script, &n, QDOS_KEY_ENTER);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strcmp(row, "NO ANSWER IN BOUNDS") == 0);
+}
+
+/** While an app asks, the soft row offers what works there, not the calculator's. */
+static void test_a_prompt_has_its_own_soft_keys(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { \"X?\" ui::ask drop drop }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "g");
+	const size_t asked = n;
+	key(script, &n, QDOS_KEY_SOFT1);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, asked, fb, mid);
+
+	char row[QDOS_COLS + 1];
+	read_row(mid, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "ESC") != NULL && strstr(row, "OK") != NULL);
+	CHECK(strstr(row, "APPS") == NULL);
+}
+
+/** What an app answers with is on the calculator's stack when it ends. */
+static void test_an_app_answers_onto_the_stack(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "g", "fn main( -- ) { 1 2 + ui::answer 4.5 ui::answer }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	type_line(script, &n, "g");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "4.5") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -7632,6 +8184,7 @@ int main(void) {
 	test_a_broken_slot();
 	test_del_empties_a_slot();
 	test_x_and_y_are_keys_in_a_slot();
+	test_a_slot_reads_in_keycaps();
 	test_a_traced_slot_is_not_rounded();
 	test_calc_words();
 	test_stat_words();
@@ -7752,6 +8305,9 @@ int main(void) {
 	test_catalog_letter_jump();
 	test_catalog_hides_edit();
 	test_catalog_pick_types_the_word();
+	test_catalog_pick_runs_from_the_calculator();
+	test_minus_key_still_types_signs();
+	test_catalog_lists_your_words_first();
 	test_function_keys_apply();
 	test_function_key_commits_entry();
 	test_neg_signs_the_entry();
@@ -7788,6 +8344,7 @@ int main(void) {
 	test_infix_is_refused_with_the_postfix();
 	test_unspaced_infix_is_refused();
 	test_the_hint_leaves_real_lines_alone();
+	test_escape_keeps_the_stack();
 	test_clearing_the_stack_can_be_undone();
 	test_a_wide_number_keeps_its_magnitude();
 	test_a_wide_string_is_marked_where_it_was_cut();
@@ -7868,5 +8425,20 @@ int main(void) {
 	test_sample_sudoku_rules();
 	test_sample_sudoku_play();
 	test_randseed_and_save_outside_an_app();
+	test_ee_types_an_exponent();
+	test_percent_key();
+	test_sto_keeps_x_and_del_drops_it();
+	test_an_error_names_the_keycap();
+	test_line_arithmetic_does_not_wrap();
+	test_a_failed_line_leaves_the_stack();
+	test_infix_gets_an_rpn_hint();
+	test_up_recalls_lines();
+	test_arrows_pick_a_level();
+	test_settings_enter_is_done();
+	test_scientific_and_engineering_notation();
+	test_calc_zero_with_both_bounds_on_it();
+	test_a_graph_message_hides_the_readout();
+	test_a_prompt_has_its_own_soft_keys();
+	test_an_app_answers_onto_the_stack();
 	return check_report("shell");
 }

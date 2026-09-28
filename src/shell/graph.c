@@ -51,7 +51,7 @@ void qdos_graph_standard(qdos_graph_view* view) {
 
 /*
  * To a millionth of a pixel, so a window laid out on round steps reads round:
- * -10.025 plus 200.5 steps of 0.05 is 1.8e-15 in doubles, not nought
+ * steps of 0.05 from -10 drift off round numbers in doubles
  */
 static double snap(double v, double step) {
 	const double q = step * 1e-6;
@@ -60,7 +60,7 @@ static double snap(double v, double step) {
 
 double qdos_graph_x(const qdos_graph_view* view, int col, int columns) {
 	const double step = (view->x1 - view->x0) / (double)columns;
-	return snap(view->x0 + ((double)col + 0.5) * step, step);
+	return snap(view->x0 + (double)col * step, step);
 }
 
 double qdos_graph_y(const qdos_graph_view* view, int row, int rows) {
@@ -69,7 +69,7 @@ double qdos_graph_y(const qdos_graph_view* view, int row, int rows) {
 }
 
 int qdos_graph_col(const qdos_graph_view* view, double x, int columns) {
-	const double c = (x - view->x0) / (view->x1 - view->x0) * (double)columns - 0.5;
+	const double c = (x - view->x0) / (view->x1 - view->x0) * (double)columns;
 	if (!(c > -1e6)) {
 		return -1000000;
 	}
@@ -175,7 +175,7 @@ void qdos_graph_zoom(qdos_graph_view* view, double cx, double cy, double factor)
 
 /* x0 and x1 so the middle column stands for @p centre, @p step apart */
 static void columns_about(qdos_graph_view* view, double centre, double step, int columns) {
-	view->x0 = centre - ((double)(columns / 2) + 0.5) * step;
+	view->x0 = centre - (double)(columns / 2) * step;
 	view->x1 = view->x0 + (double)columns * step;
 }
 
@@ -294,7 +294,7 @@ static void line(const qdos_graph_area* a, int x0, int y0, int x1, int y1, qdos_
 
 /* Screen position of a point on the plane, unclamped */
 static double col_of(const qdos_graph_area* a, const qdos_graph_view* v, double x) {
-	return a->left + (x - v->x0) / (v->x1 - v->x0) * a->width - 0.5;
+	return a->left + (x - v->x0) / (v->x1 - v->x0) * a->width;
 }
 
 static double row_of(const qdos_graph_area* a, const qdos_graph_view* v, double y) {
