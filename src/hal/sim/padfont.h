@@ -33,6 +33,7 @@ extern "C" {
  */
 #define QDOS_PAD_GLYPH_SQUARED "\x10"
 #define QDOS_PAD_GLYPH_SPACE "\x11"
+#define QDOS_PAD_GLYPH_SUPER_X "\x12"
 
 /**
  * @brief Which of the two faces

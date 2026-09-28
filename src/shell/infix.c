@@ -43,6 +43,7 @@ static const word_effect EFFECTS[] = {
 		{"log2", 1, 1},
 		{"exp", 1, 1},
 		{"exp2", 1, 1},
+		{"alog", 1, 1},
 		{"sqrt", 1, 1},
 		{"cbrt", 1, 1},
 		{"sq", 1, 1},
@@ -84,6 +85,23 @@ static const word_effect EFFECTS[] = {
 		{"over", 2, 3},
 		{"rot", 3, 3},
 		{"nip", 2, 1},
+		{"dup2", 2, 4},
+		{"percent", 2, 2},
+		{"lastx", 0, 1},
+		{"print", 1, 0},
+		{"nl", 0, 0},
+		{"within", 3, 1},
+		{"inc", 1, 1},
+		{"dec", 1, 1},
+		{"<", 2, 1},
+		{">", 2, 1},
+		{"<=", 2, 1},
+		{">=", 2, 1},
+		{"==", 2, 1},
+		{"!=", 2, 1},
+		{"and", 2, 1},
+		{"or", 2, 1},
+		{"not", 1, 1},
 };
 
 static const word_effect* effect_of(const char* name, size_t len) {
@@ -93,6 +111,16 @@ static const word_effect* effect_of(const char* name, size_t len) {
 		}
 	}
 	return NULL;
+}
+
+bool qdos_word_effect(const char* name, int* takes, int* leaves) {
+	const word_effect* effect = effect_of(name, strlen(name));
+	if (effect == NULL) {
+		return false;
+	}
+	*takes = effect->takes;
+	*leaves = effect->leaves;
+	return true;
 }
 
 static bool name_start(char ch) {

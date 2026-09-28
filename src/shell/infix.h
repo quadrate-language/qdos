@@ -33,6 +33,13 @@ extern "C" {
 int qdos_rpn_results(const char* body);
 
 /**
+ * @brief What a word takes off the stack and leaves on it, where that is known
+ *
+ * x, y, t and theta are among them, as a Y= slot has them: one value each.
+ */
+bool qdos_word_effect(const char* name, int* takes, int* leaves);
+
+/**
  * @brief Write a formula out as RPN
  *
  * Precedence as on a TI: `^` binds tightest and to the right, then unary

@@ -172,6 +172,16 @@ static int w_inv(qd_context* ctx, void* user) {
 	return replace_top(ctx, 1.0 / x);
 }
 
+/* 10^x, which a calculator has on shift-log */
+static int w_alog(qd_context* ctx, void* user) {
+	(void)user;
+	double x = 0.0;
+	if (!qdos_peek_number(ctx, 0, &x)) {
+		return qdos_math_error(ctx, "alog", "NEEDS A NUMBER");
+	}
+	return replace_top(ctx, pow(10.0, x));
+}
+
 /** @brief Keeps the value it picked, so an integer stays one */
 static int pick_of_two(qd_context* ctx, const char* word, bool want_greater) {
 	double b = 0.0, a = 0.0;
@@ -262,20 +272,29 @@ typedef enum {
 	TRIG_TAN
 } trig_kind;
 
-/* Degrees in, radians on to lib/math; a whole quarter turn is exact, as a calculator's is */
+/*
+ * Degrees in, radians on to lib/math; a whole quarter turn is exact, as a
+ * calculator's is. In radians that is a multiple of the double nearest pi/2,
+ * so `pi sin` is 0 rather than the 1.2e-16 the rounding of pi leaves.
+ */
 static int trig_in(qd_context* ctx, trig_kind kind, int (*op)(qd_context*)) {
 	double x = 0.0;
-	if (!g_degrees || !qdos_peek_number(ctx, 0, &x)) {
+	if (!qdos_peek_number(ctx, 0, &x)) {
 		return op(ctx);
 	}
-	if (isfinite(x) && fmod(x, 90.0) == 0.0) {
+	const double quarter = g_degrees ? 90.0 : QDOS_PI / 2.0;
+	const bool whole = g_degrees ? fmod(x, 90.0) == 0.0 : fabs(x) < 1e6 && x == quarter * nearbyint(x / quarter);
+	if (isfinite(x) && whole) {
 		static const double SIN[4] = {0.0, 1.0, 0.0, -1.0};
-		const int q = (int)fmod(fmod(x / 90.0, 4.0) + 4.0, 4.0);
+		const int q = (int)fmod(fmod(nearbyint(x / quarter), 4.0) + 4.0, 4.0);
 		if (kind == TRIG_TAN && q % 2 == 1) {
 			return qdos_math_error(ctx, "tan", "UNDEFINED");
 		}
 		const double r = (kind == TRIG_SIN) ? SIN[q] : (kind == TRIG_COS) ? SIN[(q + 1) % 4] : 0.0;
 		return replace_top(ctx, r);
+	}
+	if (!g_degrees) {
+		return op(ctx);
 	}
 	// Within one turn first, or 390 loses digits that 30 keeps
 	const double turn = fmod(fmod(x, 360.0) + 360.0, 360.0);
@@ -497,6 +516,7 @@ static const struct {
 		// What a calculator means by log, so the cap can say it
 		{"log", UNARY, w_log},
 		{"log2", UNARY, w_log2},
+		{"alog", UNARY, w_alog},
 		{"acosh", UNARY, w_acosh},
 		{"atanh", UNARY, w_atanh},
 		{"inv", UNARY, w_inv},

@@ -44,13 +44,13 @@ flow, definitions, strings. The leftmost soft key goes between the two,
 labelled for where it goes: `LINE` in the calculator, `RPN` in a line. Typing
 a letter in the calculator opens a line with it, as an HP 48 opens its command
 line, and once that line has run you are back on the stack; a line that fails
-stays to be put right. `Escape` empties the line, and takes you back to the
+stays to be put right, in sight under the reason it failed. `Escape` empties the line, and takes you back to the
 calculator once it is empty; the soft `CLR` only ever empties it. In the
 calculator `Escape` throws away what is being typed and never the stack, being
 the key pressed out of habit: `CLST` (shift-DEL) empties the stack, and `UNDO`
 brings it back. A key that fails changes nothing, so `UNDO` still takes back
 the one before it. `DEL` with nothing typed drops x, as on an HP 48.
-`EE` (shift-±) starts the exponent of the number being typed, `6.02 EE 23`,
+`EE` (beside ±, as an HP 42S has E) starts the exponent of the number being typed, `6.02 EE 23`,
 and ± after it is the exponent's sign; a keyboard's `e` does the same. A
 second point is ignored, and a number past the largest a double holds is
 refused as `OVERFLOW`. The `π` key pushes pi, or types it into a line;
@@ -69,8 +69,9 @@ themselves, and `−` starting a word and followed by a digit, `>` or another `�
 is a sign, `->` or `--` rather than `minus`; glued to a number, `2−3`, it is
 `minus`. Each word they type is spaced once, however the line is typed. Those
 are the keypad's keys: `+ - * /` typed on a keyboard are Quadrate's own, so
-`7 2 /` is 3, and the editor types the operators as they are, so a program
-behaves on the calculator as it does on a PC.
+`7 2 /` is 3. The editor types the keypad's operators the same way, so a
+program does what the same keys do on the stack; a keyboard's are themselves
+there too.
 The `%` key is percent, as an HP's: `200 ENTER 15 %` leaves 200 and 30. Of a
 number alone it is a TI's, `15 %` being 0.15.
 `modulo`, a calculator's mod, takes decimals and has the sign of the divisor,
@@ -81,8 +82,15 @@ float, where Quadrate's own operators wrap as C does. `sq`, `cb`, `abs` and
 `fac` do the same, so `21 fac` is 5.1e19. A number typed on the keypad that is
 too big for an integer is a float too. From the keypad, a result with no
 finite value is refused as `OVERFLOW` or `UNDEFINED` and what it was worked
-out from stays on the stack. In degrees, whole quarter turns are exact:
-`180 sin` is 0 and `90 tan` is `UNDEFINED`.
+out from stays on the stack. Whole quarter turns are exact: in degrees
+`180 sin` is 0 and `90 tan` is `UNDEFINED`, and in radians `π sin` is 0
+rather than the 1.2e-16 the rounding of pi would leave.
+
+Shift on a function is its inverse, where a TI and an HP put it: `eˣ` over
+`ln`, `10ˣ` over `log` (the word `alog`), `asin`, `acos` and `atan` over the
+trigonometry. Beside the stack keys are the HP's others: `yˣ`, `x!`, `R↓`
+(`rolld`) and `lastx`. Each key's letter is printed at its top right, in
+ALPHA's colour, with its shift function at the left.
 
 Complex numbers work the way a TI-83 has them, entered the way an HP-42S does.
 `COMPLEX` in settings is `REAL`, `a+bi` or `POLAR`: in `REAL`, `-4 sqrt` is an
@@ -122,7 +130,8 @@ deep to show; `ENTER` copies it to the top and `DEL` drops it. `lastx` brings
 back what x was before the last function on the keys, and `rolld` and `rollu`
 turn the whole stack, x to the bottom or the bottom to x, as an HP's R↓ and
 R↑. In a line, up and down go through the lines entered. `CAT` lists every
-word, your own first; typing finds the first that starts that way, a letter
+word, your own first, with a line under the list on what the one picked out
+takes, leaves and does (`x -- x!: factorial`); typing finds the first that starts that way, a letter
 that nothing follows on from is refused and said so, and `DEL` takes one back.
 From the calculator `PICK` applies the word to the stack as a key would, where
 from a line it types it. Where the keypad has more than one face, which one is live shows beside
@@ -135,6 +144,9 @@ loose program's own name inside it. Only your own copy can be renamed or
 deleted; deleting one that covers a shipped or uploaded program reverts to it.
 In the editor `RUN` saves and runs without leaving, `SAVE` stays, `UNDO` swaps
 back the last run of edits, `CHECK` goes to the line it complains about, and
+compares a word's signature with what its body does to the stack where that
+can be counted -- `fn hyp( -- ) { sq swap sq plus sqrt }` is told it takes 2
+and leaves 1 and to write `stack fn hyp(f64 f64 -- r:f64)` -- and
 Enter keeps the indent. At the prompt, `edit` opens a program, `forget` removes
 one. Programs load from three scopes — system, inbox
 (uploaded over USB or on the card), user — and a user copy shadows the others.
@@ -169,7 +181,8 @@ has the rest: `WINDOW` types its edges, tick spacing and the t and theta
 ranges; `ZOOM`; `TABLE`, the functions down a column of x from `START` in
 steps of `STEP`; `FORMAT`, the grid and the axes; and `STAT` and `STAT PLOT`.
 
-On the graph, the arrows pan and `+` and `-` zoom. `ZOOM` offers box, in,
+On the graph, the arrows move a cursor, as on a TI, with its x and y read
+out; pushed past an edge it moves the window. `+` and `-` zoom. `ZOOM` offers box, in,
 out, standard, fit, decimal and integer (a column on every 0.05, or every
 whole number, so trace lands on round values), square (a unit as long across
 as down), trig and stat. A column stands for x at its left edge, so the
@@ -328,7 +341,7 @@ refused instead of run — `5 - 3` is valid Quadrate that pushes 5, subtracts it
 from whatever the stack was already holding, and pushes 3, which is a wrong
 answer with nothing to report it, so the shell says `RPN: TRY 5 3 minus` and
 evaluates nothing. `2+3*4` on the keys is `2 plus 3 times 4`, caught the same
-way, and a line that fails with brackets in it, `sqrt(2)`, is told
+way and answered in full, `TRY 2 3 4 times plus`, and a line that fails with brackets in it, `sqrt(2)`, is told
 `TRY 2 sqrt`. An error too long for the row takes the row above as well.
 
 ## Native modules

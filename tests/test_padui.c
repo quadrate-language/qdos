@@ -633,6 +633,25 @@ static void test_shift_layer(void) {
  * operators down the right, and enter at the head of the left column -- all of
  * it at the bottom of the pad, with nothing below the numpad.
  */
+/** Shift on a function is its inverse, where a TI and an HP both put it. */
+static void test_shift_is_the_inverse_function(void) {
+	static const qdos_key PAIRS[][2] = {{QDOS_KEY_LN, QDOS_KEY_EXP}, {QDOS_KEY_LOG, QDOS_KEY_ALOG},
+			{QDOS_KEY_SIN, QDOS_KEY_ASIN}, {QDOS_KEY_COS, QDOS_KEY_ACOS}, {QDOS_KEY_TAN, QDOS_KEY_ATAN}};
+	for (size_t i = 0; i < sizeof(PAIRS) / sizeof(*PAIRS); i++) {
+		int found = 0;
+		for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+			for (int col = 0; col < qdos_pad_row_cols(row); col++) {
+				const qdos_pad_button* b = qdos_pad_button_at(col, row);
+				if (b->plain.key == PAIRS[i][0]) {
+					found++;
+					CHECK(b->symbol.key == PAIRS[i][1]);
+				}
+			}
+		}
+		CHECK(found == 1);
+	}
+}
+
 static void test_numeric_block(void) {
 	static const qdos_key DIGITS[3][3] = {
 			{QDOS_KEY_7, QDOS_KEY_8, QDOS_KEY_9},
@@ -1062,6 +1081,7 @@ int main(int argc, char** argv) {
 	test_frame_paints_only_the_border();
 	test_shift_layer();
 	test_numeric_block();
+	test_shift_is_the_inverse_function();
 	test_the_arrows_are_an_inverted_t();
 	test_digits_survive_every_layer();
 	test_the_alphabet_is_complete();

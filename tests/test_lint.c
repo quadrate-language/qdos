@@ -134,7 +134,7 @@ static void test_a_program_can_declare_its_own_helper(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(!lint(interp, "fn outer() { inner }\nfn inner() { 1 }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn outer() { inner }\nfn inner( -- r:i64) { 1 }", message, sizeof(message)));
 
 	qd_interp_destroy(interp);
 }
@@ -155,7 +155,7 @@ static void test_a_signature_is_not_read_as_words(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(!lint(interp, "fn t(alpha:i64 beta:str -- gamma:i64) { drop drop 0 }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn t(alpha:i64 beta:str -- gamma:i64) { alpha }", message, sizeof(message)));
 
 	qd_interp_destroy(interp);
 }
@@ -274,8 +274,50 @@ static void test_the_empty_cases(void) {
 	qd_interp_destroy(interp);
 }
 
+/** A body that reads its caller's stack is told how to say so. */
+static void test_a_body_that_takes_more_than_its_signature(void) {
+	qd_interp* interp = fresh();
+	char message[160];
+
+	CHECK(lint(interp, "fn hyp( -- ) { dup * swap dup * + }", message, sizeof(message)));
+	CHECK_STR(message, "L1: 'hyp' TAKES 2, LEAVES 1: stack fn hyp(f64 f64 -- r:f64)");
+	CHECK(lint(interp, "stack fn t(i64 -- r:i64) { * }", message, sizeof(message)));
+	CHECK_STR(message, "L1: 't' TAKES 2, ITS SIGNATURE GIVES IT 1");
+
+	qd_interp_destroy(interp);
+}
+
+/** Leaving more or less than the signature says is found too. */
+static void test_a_body_that_leaves_the_wrong_count(void) {
+	qd_interp* interp = fresh();
+	char message[160];
+
+	CHECK(lint(interp, "fn t(a:i64 -- r:i64 s:i64) { a }", message, sizeof(message)));
+	CHECK_STR(message, "L1: 't' LEAVES 1, ITS SIGNATURE SAYS 2");
+	CHECK(lint(interp, "fn t2( -- ) {\n\t2\n}", message, sizeof(message)));
+	CHECK_STR(message, "L1: 't2' LEAVES 1, ITS SIGNATURE SAYS 0");
+
+	qd_interp_destroy(interp);
+}
+
+/** Only what can be counted is judged: a call, a branch or a loop and it says nothing. */
+static void test_a_body_that_matches_or_cannot_be_counted(void) {
+	qd_interp* interp = fresh();
+	char message[160];
+
+	CHECK(!lint(interp, "stack fn twice(i64 -- r:i64) { 2 * }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn t( -- r:i64) { 1 -> a a a + }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn t( -- ) { isqrt }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn t(c:i64 -- ) { c if { 1 } }", message, sizeof(message)));
+
+	qd_interp_destroy(interp);
+}
+
 int main(void) {
 	test_the_shipped_programs_are_clean();
+	test_a_body_that_takes_more_than_its_signature();
+	test_a_body_that_leaves_the_wrong_count();
+	test_a_body_that_matches_or_cannot_be_counted();
 	test_an_undefined_word_in_a_body_is_found();
 	test_the_message_matches_what_running_says();
 	test_it_stops_at_the_first_find();

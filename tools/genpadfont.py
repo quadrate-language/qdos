@@ -41,6 +41,7 @@ SYMBOLS = {
     # blank glyph inside the range the shell scans would match every blank cell.
     0x10: ("squared", "²"),
     0x11: ("space", "␣"),
+    0x12: ("superscript x", "ˣ"),
 }
 
 PAD = 8  # room around the pen position while measuring

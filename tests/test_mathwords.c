@@ -331,6 +331,27 @@ static void test_degree_trig_is_exact(void) {
 	CHECK(!refuses("90 tan")); // radians: 90 is nowhere near a pole
 }
 
+/** In radians too: a multiple of the double nearest pi/2 is a whole quarter turn. */
+static void test_radian_quarter_turns_are_exact(void) {
+	bool ok;
+	qdos_math_set_degrees(false);
+	CHECK(value_of("pi sin", &ok) == 0.0);
+	CHECK(value_of("pi 2.0 divide cos", &ok) == 0.0);
+	CHECK(value_of("pi neg 2.0 divide sin", &ok) == -1.0);
+	CHECK(value_of("pi 2.0 times cos", &ok) == 1.0);
+	CHECK(value_of("pi tan", &ok) == 0.0);
+	CHECK(refuses("pi 2.0 divide tan"));
+	CHECK(fabs(value_of("1.0 sin", &ok) - sin(1.0)) < 1e-15);
+}
+
+/** 10^x, the key a calculator puts over log. */
+static void test_alog(void) {
+	bool ok;
+	CHECK(value_of("3 alog", &ok) == 1000.0);
+	CHECK(value_of("-2 alog", &ok) == 0.01);
+	CHECK(value_of("2 log alog", &ok) == 2.0);
+}
+
 /** From the keypad a result with no finite value is refused and the arguments kept. */
 static void test_finite_only_refuses_and_restores(void) {
 	qd_interp* interp = fresh();
@@ -358,6 +379,8 @@ int main(void) {
 	test_overflow_becomes_a_float();
 	test_modulo();
 	test_degree_trig_is_exact();
+	test_radian_quarter_turns_are_exact();
+	test_alog();
 	test_finite_only_refuses_and_restores();
 	test_domains_are_errors();
 	test_plain_words();

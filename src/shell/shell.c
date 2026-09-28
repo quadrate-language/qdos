@@ -25,6 +25,7 @@
 
 #include "qdos_version.h"
 #include "storage.h"
+#include "wordhelp.h"
 #include "wordlist.h"
 
 #include <errno.h>
@@ -346,6 +347,7 @@ struct qdos_shell {
 	bool has_last_x;
 	bool delete_armed; ///< One press of backspace has already asked
 	bool drop_armed;   ///< One press of ESC has already asked, in the editor
+	bool edit_minus;   ///< The editor's last key typed "minus ", which a digit next makes a sign
 	bool powering_off; ///< Set by the power key, acted on by the run loop
 	bool usb_exported; ///< The inbox is currently a PC's to write to
 
@@ -1189,6 +1191,45 @@ static bool infix_number(const char* text, size_t len) {
 }
 
 /**
+ * @brief The whole of an infix line as RPN, in the words the keys type
+ *
+ * The Y= translator does the reading, so `2+3*4` comes out `2 3 4 times plus`
+ * and not only its first operation. Its floats are written back as they were
+ * typed, and its operators as the keypad's, which are what can be pressed.
+ */
+static bool rpn_hint(const char* line, size_t len, char* out, size_t cap) {
+	char text[2 * MESSAGE_COLS + 1];
+	char rpn[2 * MESSAGE_COLS + 1];
+	char error[MESSAGE_COLS + 1];
+	int results;
+	if (len >= sizeof(text)) {
+		return false;
+	}
+	memcpy(text, line, len);
+	text[len] = '\0';
+	if (!qdos_infix_to_rpn(text, rpn, sizeof(rpn), &results, error, sizeof(error)) || results != 1) {
+		return false;
+	}
+
+	static const char* const OPS[][2] = {{"+", "plus"}, {"-", "minus"}, {"*", "times"}};
+	size_t used = (size_t)snprintf(out, cap, "RPN: TRY");
+	for (char* token = strtok(rpn, " "); token != NULL && used < cap; token = strtok(NULL, " ")) {
+		const char* shown = token;
+		for (size_t i = 0; i < sizeof(OPS) / sizeof(*OPS); i++) {
+			if (strcmp(token, OPS[i][0]) == 0) {
+				shown = OPS[i][1];
+			}
+		}
+		const size_t n = strlen(token);
+		if (n > 2 && strcmp(token + n - 2, ".0") == 0 && token[0] >= '0' && token[0] <= '9') {
+			token[n - 2] = '\0';
+		}
+		used += (size_t)snprintf(out + used, cap - used, " %s", shown);
+	}
+	return used < cap;
+}
+
+/**
  * @brief Catch a line written the way it is said aloud
  *
  * `5 - 3` and `5-3` are both valid Quadrate and neither is two. See
@@ -1264,6 +1305,9 @@ static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
 		return false;
 	}
 
+	if (rpn_hint(line, len, out, cap)) {
+		return true;
+	}
 	const int shown = 6;
 	snprintf(out, cap, "RPN: TRY %.*s %.*s %.*s", (int)(left_len < (size_t)shown ? left_len : (size_t)shown), left,
 			(int)(right_len < (size_t)shown ? right_len : (size_t)shown), right, (int)op_len, op);
@@ -1297,7 +1341,10 @@ static bool infix_explain(const char* line, char* out, size_t cap) {
 		for (size_t i = 0; simple && i < arg_len; i++) {
 			simple = infix_word_char(open[1 + i]) || open[1 + i] == ' ';
 		}
-		if (simple) {
+		char whole[2 * MESSAGE_COLS + 1];
+		if (rpn_hint(line, strlen(line), whole, sizeof(whole))) {
+			snprintf(out, cap, "RPN, NO BRACKETS: %s", whole + strlen("RPN: "));
+		} else if (simple) {
 			snprintf(out, cap, "RPN, NO BRACKETS: TRY %.*s %.*s", (int)arg_len, open + 1, (int)(open - name), name);
 		} else {
 			snprintf(out, cap, "RPN HAS NO BRACKETS: WHAT A WORD TAKES GOES BEFORE IT");
@@ -1322,6 +1369,9 @@ static bool infix_explain(const char* line, char* out, size_t cap) {
 		const char* b = p + 1;
 		while (infix_word_char(*b)) {
 			b++;
+		}
+		if (rpn_hint(line, strlen(line), out, cap)) {
+			return true;
 		}
 		const char* word = (*p == '^') ? "pow" : (*p == '/') ? "divide" : NULL;
 		snprintf(out, cap, "RPN: TRY %.*s %.*s %s%.*s", (int)(p - a), a, (int)(b - p - 1), p + 1, word ? word : "",
@@ -1622,12 +1672,23 @@ static const char* const FUNCTION_WORD2[] = {
 		"exp",
 };
 
+/* In QDOS_KEY_FN3_FIRST..QDOS_KEY_FN3_LAST order */
+static const char* const FUNCTION_WORD3[] = {
+		"alog",
+		"fac",
+		"rolld",
+		"lastx",
+};
+
 static const char* function_word(qdos_key key) {
 	if (key >= QDOS_KEY_FN_FIRST && key <= QDOS_KEY_FN_LAST) {
 		return FUNCTION_WORD[key - QDOS_KEY_FN_FIRST];
 	}
 	if (key >= QDOS_KEY_FN2_FIRST && key <= QDOS_KEY_FN2_LAST) {
 		return FUNCTION_WORD2[key - QDOS_KEY_FN2_FIRST];
+	}
+	if (key >= QDOS_KEY_FN3_FIRST && key <= QDOS_KEY_FN3_LAST) {
+		return FUNCTION_WORD3[key - QDOS_KEY_FN3_FIRST];
 	}
 	return NULL;
 }
@@ -1932,10 +1993,10 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 }
 
 /* Inside a string or a comment, where a key types its character and nothing else */
-static bool line_is_literal(const qdos_shell* sh) {
+static bool text_is_literal(const char* text, size_t len, size_t cursor) {
 	bool string = false, comment = false;
-	for (size_t i = 0; i < sh->input_cursor; i++) {
-		const char ch = sh->input[i];
+	for (size_t i = 0; i < cursor; i++) {
+		const char ch = text[i];
 		if (comment) {
 			comment = ch != '\n';
 		} else if (string) {
@@ -1946,11 +2007,15 @@ static bool line_is_literal(const qdos_shell* sh) {
 			}
 		} else if (ch == '"') {
 			string = true;
-		} else if (ch == '/' && i + 1 < sh->input_len && sh->input[i + 1] == '/') {
+		} else if (ch == '/' && i + 1 < len && text[i + 1] == '/') {
 			comment = true;
 		}
 	}
 	return string || comment;
+}
+
+static bool line_is_literal(const qdos_shell* sh) {
+	return text_is_literal(sh->input, sh->input_len, sh->input_cursor);
 }
 
 static char char_before_cursor(const qdos_shell* sh) {
@@ -3036,13 +3101,60 @@ static void register_apps(qdos_shell* sh, qd_interp* interp) {
 	}
 }
 
+/* A word a key types, a space either side of it but never two */
 static void edit_insert_word(qdos_shell* sh, const char* word) {
-	qdos_editor_insert(&sh->ed, ' ');
+	const qdos_editor* ed = &sh->ed;
+	const char before = (ed->cursor > 0) ? ed->text[ed->cursor - 1] : '\n';
+	if (before != ' ' && before != '\n' && before != '\t') {
+		qdos_editor_insert(&sh->ed, ' ');
+	}
 	for (const char* c = word; *c; c++) {
 		qdos_editor_insert(&sh->ed, *c);
 	}
-	qdos_editor_insert(&sh->ed, ' ');
+	if (ed->cursor < ed->len && ed->text[ed->cursor] == ' ') {
+		qdos_editor_move(&sh->ed, 1, 0);
+	} else {
+		qdos_editor_insert(&sh->ed, ' ');
+	}
 	edit_scroll_into_view(sh);
+}
+
+/*
+ * The keypad's operators are the calculator's here too, so a program does
+ * what the same keys do on the stack: 7 2 ÷ is 3.5 in both. In a string or a
+ * comment, or typed on a keyboard, they are themselves.
+ */
+static void edit_operator(qdos_shell* sh, const qdos_key_event* ev, char symbol, const char* word) {
+	const qdos_editor* ed = &sh->ed;
+	if (ev->ch != 0 || text_is_literal(ed->text, ed->len, ed->cursor)) {
+		qdos_editor_insert(&sh->ed, symbol);
+		return;
+	}
+	const char before = (ed->cursor > 0) ? ed->text[ed->cursor - 1] : '\n';
+	const bool starts = before == ' ' || before == '\n' || before == '\t';
+	const bool spaced = ed->cursor < ed->len && ed->text[ed->cursor] == ' ';
+	edit_insert_word(sh, word);
+	sh->edit_minus = symbol == '-' && starts && !spaced;
+}
+
+/* Minus and then a digit was a sign: -3, not minus 3 */
+static bool edit_minus_fixup(qdos_shell* sh, const qdos_key_event* ev) {
+	char digit = 0;
+	if (ev->key >= QDOS_KEY_0 && ev->key <= QDOS_KEY_9) {
+		digit = (char)('0' + (ev->key - QDOS_KEY_0));
+	} else if (ev->key == QDOS_KEY_DOT) {
+		digit = '.';
+	}
+	if (digit == 0) {
+		return false;
+	}
+	for (size_t i = 0; i < strlen("minus "); i++) {
+		qdos_editor_backspace(&sh->ed);
+	}
+	qdos_editor_insert(&sh->ed, '-');
+	qdos_editor_insert(&sh->ed, digit);
+	edit_scroll_into_view(sh);
+	return true;
 }
 
 static void edit_leave(qdos_shell* sh, const char* message) {
@@ -3123,6 +3235,11 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 	if (ev->key != QDOS_KEY_CLEAR) {
 		sh->drop_armed = false;
 	}
+	const bool after_minus = sh->edit_minus;
+	sh->edit_minus = false;
+	if (after_minus && edit_minus_fixup(sh, ev)) {
+		return;
+	}
 
 	const char* word = function_word(ev->key);
 	if (word != NULL) {
@@ -3162,7 +3279,6 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 	}
 
-	// The keypad types what its keys say. Division is Quadrate's own here, as on a PC.
 	static const char DIGITS[] = "0123456789";
 	if (ev->key >= QDOS_KEY_0 && ev->key <= QDOS_KEY_9) {
 		qdos_editor_insert(&sh->ed, DIGITS[ev->key - QDOS_KEY_0]);
@@ -3175,16 +3291,16 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 		qdos_editor_insert(&sh->ed, '.');
 		break;
 	case QDOS_KEY_ADD:
-		qdos_editor_insert(&sh->ed, '+');
+		edit_operator(sh, ev, '+', "plus");
 		break;
 	case QDOS_KEY_SUB:
-		qdos_editor_insert(&sh->ed, '-');
+		edit_operator(sh, ev, '-', "minus");
 		break;
 	case QDOS_KEY_MUL:
-		qdos_editor_insert(&sh->ed, '*');
+		edit_operator(sh, ev, '*', "times");
 		break;
 	case QDOS_KEY_DIV:
-		qdos_editor_insert(&sh->ed, '/');
+		edit_operator(sh, ev, '/', "divide");
 		break;
 
 	case QDOS_KEY_UP:
@@ -3208,9 +3324,7 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 		break;
 
 	case QDOS_KEY_NEG:
-		for (const char* c = " neg "; *c; c++) {
-			qdos_editor_insert(&sh->ed, *c);
-		}
+		edit_insert_word(sh, "neg");
 		break;
 
 	case QDOS_KEY_BACKSPACE:
@@ -4585,6 +4699,30 @@ static void graph_zoom(qdos_shell* sh, zoom_kind kind) {
 	}
 }
 
+/*
+ * An arrow on a plot is a cursor, as on a TI: the first press puts one in the
+ * middle, and the window moves only when the cursor is pushed past an edge.
+ * Steps of a few pixels, since the panel has four for each of a TI's.
+ */
+#define GRAPH_FREE_STEP 4
+
+static void free_move(qdos_shell* sh, int dx, int dy) {
+	if (sh->graph_state != GRAPH_FREE) {
+		sh->graph_state = GRAPH_FREE;
+		sh->graph_free_col = QDOS_SCREEN_W / 2;
+		sh->graph_free_row = GRAPH_HEIGHT / 2;
+	}
+	const int col = sh->graph_free_col + dx * GRAPH_FREE_STEP;
+	const int row = sh->graph_free_row + dy * GRAPH_FREE_STEP;
+	sh->graph_free_col = (col < 0) ? 0 : (col >= QDOS_SCREEN_W) ? QDOS_SCREEN_W - 1 : col;
+	sh->graph_free_row = (row < 0) ? 0 : (row >= GRAPH_HEIGHT) ? GRAPH_HEIGHT - 1 : row;
+	if (col != sh->graph_free_col || row != sh->graph_free_row) {
+		qdos_graph_pan(&sh->graph_view, (double)(col - sh->graph_free_col) / QDOS_SCREEN_W,
+				(double)(sh->graph_free_row - row) / GRAPH_HEIGHT);
+		graph_moved(sh);
+	}
+}
+
 static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 	qdos_graph_view* v = &sh->graph_view;
 
@@ -4658,11 +4796,8 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 		const int dir = (ev->key == QDOS_KEY_RIGHT) ? 1 : -1;
 		if (sh->graph_state == GRAPH_TRACE) {
 			trace_step(sh, dir);
-		} else if (sh->graph_state == GRAPH_FREE) {
-			sh->graph_free_col = (sh->graph_free_col + dir + QDOS_SCREEN_W) % QDOS_SCREEN_W;
 		} else {
-			qdos_graph_pan(v, dir * GRAPH_PAN, 0.0);
-			graph_moved(sh);
+			free_move(sh, dir, 0);
 		}
 		break;
 	}
@@ -4675,12 +4810,7 @@ static void handle_graph_key(qdos_shell* sh, const qdos_key_event* ev) {
 			curve_step(sh, ev->key == QDOS_KEY_DOWN ? 1 : -1, false);
 			break;
 		}
-		if (sh->graph_state == GRAPH_FREE) {
-			const int dir = (ev->key == QDOS_KEY_DOWN) ? 1 : -1;
-			sh->graph_free_row = (sh->graph_free_row + dir + GRAPH_HEIGHT) % GRAPH_HEIGHT;
-			break;
-		}
-		qdos_graph_pan(v, 0.0, (ev->key == QDOS_KEY_UP) ? GRAPH_PAN : -GRAPH_PAN);
+		free_move(sh, 0, (ev->key == QDOS_KEY_DOWN) ? 1 : -1);
 		break;
 
 	case QDOS_KEY_ADD:
@@ -7014,6 +7144,21 @@ static void render_list(qdos_shell* sh, qdos_console* con) {
 	}
 
 	qdos_console_rule(con, ROW_CONTENT_LAST);
+
+	// What the word picked out takes, leaves and does, so choosing from two
+	// hundred names does not mean trying them
+	if (sh->list_all && total > 0 && list_module(sh, sh->list_sel) == NULL) {
+		const char* help = qdos_word_help(list_name(sh, sh->list_sel));
+		if (help == NULL) {
+			help = (list_program(sh, sh->list_sel) != NULL) ? "A PROGRAM: PICK RUNS IT"
+				   : (sh->list_sel < sh->list_user)			? "YOUR OWN WORD"
+															: NULL;
+		}
+		const int top = ROW_INPUT * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2;
+		for (int i = 0; help != NULL && help[i] != '\0' && i < MESSAGE_COLS; i++) {
+			qdos_console_putc_small(con, i * QDOS_SMALL_FONT_W, top, help[i]);
+		}
+	}
 }
 
 /** @brief Whatever the shell last had to say, under the content */
@@ -7024,14 +7169,15 @@ static void blank_rect(qdos_console* con, int y, int h) {
 	}
 }
 
-static void render_message(qdos_shell* sh, qdos_console* con) {
+/* The message with its last row on @p row */
+static void render_message_at(qdos_shell* sh, qdos_console* con, int row) {
 	if (!sh->message[0]) {
 		return;
 	}
 
 	if (!sh->message_is_error) {
-		blank_rect(con, ROW_MESSAGE * QDOS_CELL_H, QDOS_CELL_H);
-		qdos_console_puts(con, 0, ROW_MESSAGE, sh->message);
+		blank_rect(con, row * QDOS_CELL_H, QDOS_CELL_H);
+		qdos_console_puts(con, 0, row, sh->message);
 		return;
 	}
 
@@ -7049,10 +7195,10 @@ static void render_message(qdos_shell* sh, qdos_console* con) {
 		}
 	}
 	const int rows = (len > MESSAGE_COLS) ? 2 : 1;
-	const int y = (ROW_MESSAGE - rows + 1) * QDOS_CELL_H;
+	const int y = (row - rows + 1) * QDOS_CELL_H;
 	const int h = rows * QDOS_CELL_H;
 	// The last line where a one-line error would be, the first above it
-	const int top = ROW_MESSAGE * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2 - (rows - 1) * QDOS_SMALL_FONT_H;
+	const int top = row * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2 - (rows - 1) * QDOS_SMALL_FONT_H;
 	blank_rect(con, y, h);
 	for (int i = 0; i < split && i < MESSAGE_COLS; i++) {
 		qdos_console_putc_small(con, i * QDOS_SMALL_FONT_W, top, sh->message[i]);
@@ -7063,6 +7209,10 @@ static void render_message(qdos_shell* sh, qdos_console* con) {
 		qdos_console_putc_small(con, i * QDOS_SMALL_FONT_W, top + QDOS_SMALL_FONT_H, cut ? QDOS_ELIDED : rest[i]);
 	}
 	qdos_console_invert_rect(con, 0, y, QDOS_SCREEN_W, h);
+}
+
+static void render_message(qdos_shell* sh, qdos_console* con) {
+	render_message_at(sh, con, ROW_MESSAGE);
 }
 
 /** @brief The time and the charge as the band would show them; either may be empty */
@@ -7287,10 +7437,16 @@ static void render(qdos_shell* sh) {
 
 	// The message and the input line are the same row, so only one is on it.
 	// What was typed is still there underneath, and the next key brings it back.
+	// A line kept after it failed is the exception: it is there to be put
+	// right, so it stays in sight with the reason above it, or the next key
+	// would be typed onto the end of text nobody can see.
 	if (sh->message[0]) {
-		render_message(sh, con);
-		sh->hal->present(sh->hal, con->fb);
-		return;
+		if (sh->mode != QDOS_MODE_LINE || sh->input_len == 0 || !sh->message_is_error) {
+			render_message(sh, con);
+			sh->hal->present(sh->hal, con->fb);
+			return;
+		}
+		render_message_at(sh, con, ROW_MESSAGE - 1);
 	}
 
 	// A program asking for a number

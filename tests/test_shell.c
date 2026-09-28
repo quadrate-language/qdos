@@ -708,12 +708,22 @@ static void read_edit_line(const uint8_t* fb, int line, char* out, size_t cap) {
 /* An error is small, centred in the message line */
 #define ERROR_Y0_T (ROW_MESSAGE_LINE * QDOS_CELL_H + (QDOS_CELL_H - QDOS_SMALL_FONT_H) / 2)
 
+/* A line kept after it failed stays on its row, and the error band is the one above */
+static int error_y0(const uint8_t* fb) {
+	const size_t right = QDOS_SCREEN_W - 1;
+	const int y = ROW_MESSAGE_LINE * QDOS_CELL_H;
+	const bool here = fb[(size_t)y * QDOS_SCREEN_W] < 0x80 && fb[(size_t)y * QDOS_SCREEN_W + right] < 0x80;
+	const bool above = fb[(size_t)(y - QDOS_CELL_H) * QDOS_SCREEN_W] < 0x80 &&
+					   fb[(size_t)(y - QDOS_CELL_H) * QDOS_SCREEN_W + right] < 0x80;
+	return (!here && above) ? ERROR_Y0_T - QDOS_CELL_H : ERROR_Y0_T;
+}
+
 static void read_error(const uint8_t* fb, char* out, size_t cap) {
-	read_small(fb, ERROR_Y0_T, out, cap);
+	read_small(fb, error_y0(fb), out, cap);
 }
 
 static bool error_cell_is(const uint8_t* fb, int col, char ch, bool inverted) {
-	return small_cell_is(fb, col, ERROR_Y0_T, ch, inverted);
+	return small_cell_is(fb, col, error_y0(fb), ch, inverted);
 }
 
 /* The band's text, small and centred in the top row */
@@ -2558,7 +2568,7 @@ static void test_edit_check_reports_ok(void) {
 	qdos_key_event script[200];
 	size_t n = 0;
 	type_line(script, &n, "\"two\" edit");
-	type_partial(script, &n, "2");
+	type_partial(script, &n, "2 drop");
 	key(script, &n, QDOS_KEY_CHECK);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2629,7 +2639,7 @@ static void test_edit_check_accepts_a_known_word(void) {
 	qdos_key_event script[200];
 	size_t n = 0;
 	type_line(script, &n, "\"fine\" edit");
-	type_partial(script, &n, "1 dup +");
+	type_partial(script, &n, "1 dup + drop");
 	key(script, &n, QDOS_KEY_CHECK);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -4334,7 +4344,7 @@ static void test_infix_is_refused_with_the_postfix(void) {
 
 	char row[QDOS_COLS + 1];
 	read_error(fb, row, sizeof(row));
-	CHECK(strstr(row, "5 3 -") != NULL);
+	CHECK(strstr(row, "5 3 minus") != NULL);
 
 	// Nothing was evaluated, so nothing reached the stack
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
@@ -4354,7 +4364,7 @@ static void test_unspaced_infix_is_refused(void) {
 
 	char row[QDOS_COLS + 1];
 	read_error(fb, row, sizeof(row));
-	CHECK(strstr(row, "5 3 -") != NULL);
+	CHECK(strstr(row, "5 3 minus") != NULL);
 }
 
 /** Postfix, and a negative number, go through untouched. */
@@ -6470,6 +6480,12 @@ static void test_rename_a_program(void) {
 
 	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "not defined") != NULL);
+
+	// The error covers level 1 until the next key
+	store_reset();
+	seed_scope(QDOS_SCOPE_USER, "old", "fn old( -- r:i64) { 7 }");
+	key(script, &n, QDOS_KEY_LEFT);
+	run_script(script, n, fb);
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
 	CHECK(strstr(row, "7") != NULL);
 }
@@ -6638,7 +6654,7 @@ static void test_the_keypad_types_in_the_editor(void) {
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
 
-	CHECK(edit_pane_has(fb, "4.5+/ dup"));
+	CHECK(edit_pane_has(fb, "4.5 plus divide dup"));
 }
 
 /** RUN saves and runs, and the editor stays open with the answer shown. */
@@ -7620,7 +7636,7 @@ static void test_a_blind_loop_in_an_app_is_stopped(void) {
 
 	// Too long for one row, so it starts on the row above
 	char row[EDIT_COLS_T + 1];
-	read_small(fb, ERROR_Y0_T - QDOS_SMALL_FONT_H, row, sizeof(row));
+	read_small(fb, error_y0(fb) - QDOS_SMALL_FONT_H, row, sizeof(row));
 	CHECK(strstr(row, "execution limit") != NULL);
 }
 
@@ -7978,6 +7994,7 @@ static void test_a_failed_line_leaves_the_stack(void) {
 	digits(script, &n, "5");
 	key(script, &n, QDOS_KEY_ENTER);
 	type_line(script, &n, "1 2 0 divide");
+	key(script, &n, QDOS_KEY_LEFT); // the error covers level 1 until a key
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
 	run_script(script, n, fb);
@@ -8016,7 +8033,7 @@ static void test_infix_gets_an_rpn_hint(void) {
 	store_reset();
 	run_script(script, n, fb);
 	read_error(fb, row, sizeof(row));
-	CHECK(strcmp(row, "RPN: TRY 2 3 plus") == 0);
+	CHECK(strcmp(row, "RPN: TRY 2 3 4 times plus") == 0);
 	read_level(fb, 0, row, sizeof(row));
 	CHECK(row[0] == '\0');
 }
@@ -8621,7 +8638,10 @@ static void test_an_area_survives_zooming(void) {
 	key(script, &n, QDOS_KEY_CLEAR); // out of trace
 	key(script, &n, QDOS_KEY_SOFT2); // ZOOM
 	key(script, &n, QDOS_KEY_3);	 // OUT
-	key(script, &n, QDOS_KEY_UP);	 // and a pan
+	for (int i = 0; i < 40; i++) {
+		key(script, &n, QDOS_KEY_UP); // the cursor, pushed past the top: a pan
+	}
+	key(script, &n, QDOS_KEY_CLEAR); // the cursor away
 	key(script, &n, QDOS_KEY_CLEAR); // to Y=
 	key(script, &n, QDOS_KEY_SOFT5); // and back
 
@@ -8639,6 +8659,86 @@ static void test_an_area_survives_zooming(void) {
 	run_script(script, n, fb);
 	read_small(fb, READOUT_Y0_T, line, sizeof(line));
 	CHECK(strstr(line, "AREA") == NULL);
+}
+
+/** A line kept after it failed is in sight under the reason, not hidden by it. */
+static void test_a_failed_line_stays_in_sight(void) {
+	store_reset();
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	type_line(script, &n, "2+3*4");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
+	CHECK(strstr(row, "2+3*4") != NULL);
+	read_error(fb, row, sizeof(row));
+	CHECK(strcmp(row, "RPN: TRY 2 3 4 times plus") == 0); // the whole of it, not 2 3 plus
+}
+
+/** The catalog says what the word picked out takes, leaves and does. */
+static void test_catalog_says_what_a_word_does(void) {
+	store_reset();
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	key(script, &n, QDOS_KEY_CATALOG);
+	type_partial(script, &n, "fac");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_small(fb, ERROR_Y0_T, row, sizeof(row));
+	CHECK_STR(row, "x -- x!: factorial");
+}
+
+/** In the editor minus then a digit is a sign, and no word the keys type is spaced twice. */
+static void test_the_editor_spaces_words_once(void) {
+	store_reset();
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "\"k\" edit");
+	type_partial(script, &n, "x");
+	key(script, &n, QDOS_KEY_NEG);
+	key(script, &n, QDOS_KEY_SUB);
+	key(script, &n, QDOS_KEY_3);
+	key(script, &n, QDOS_KEY_SUB);
+	key(script, &n, QDOS_KEY_DUP);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	CHECK(edit_pane_has(fb, "x neg -3 minus dup"));
+}
+
+/** An arrow on a graph is a cursor, as on a TI, and the window moves only past an edge. */
+static void test_graph_arrows_move_a_cursor(void) {
+	store_reset();
+
+	qdos_key_event script[160];
+	size_t n = 0;
+	type_line(script, &n, "fn twice(x:f64 -- y:f64) { x 2 * }");
+	type_more(script, &n, "\"twice\" graph");
+	key(script, &n, QDOS_KEY_RIGHT);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Four pixels right of the middle of -10..10 over 400
+	char line[EDIT_COLS_T + 1];
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strncmp(line, "X=0.2  Y=", 9) == 0);
+
+	for (int i = 0; i < 100; i++) {
+		key(script, &n, QDOS_KEY_RIGHT);
+	}
+	run_script(script, n, fb);
+	read_small(fb, READOUT_Y0_T, line, sizeof(line));
+	CHECK(line[0] == 'X' && strtod(line + 2, NULL) > 10.0);
 }
 
 int main(void) {
@@ -8949,5 +9049,9 @@ int main(void) {
 	test_calc_area_between_two_curves();
 	test_area_word_counts_both_sides();
 	test_an_area_survives_zooming();
+	test_a_failed_line_stays_in_sight();
+	test_catalog_says_what_a_word_does();
+	test_the_editor_spaces_words_once();
+	test_graph_arrows_move_a_cursor();
 	return check_report("shell");
 }

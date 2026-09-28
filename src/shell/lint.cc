@@ -8,6 +8,8 @@
 
 #include "lint.h"
 
+#include "infix.h"
+
 #include <quadrate/qc/ast.h>
 #include <quadrate/qc/ast_node_for.h>
 #include <quadrate/qc/ast_node_function.h>
@@ -100,6 +102,120 @@ namespace {
 		out.found = true;
 	}
 
+	/** @brief What a straight run of words does to the stack, counted from nothing */
+	struct effect {
+		int takes = 0; ///< How far below where it started it reaches
+		int depth = 0; ///< Where it ends, from where it started
+		bool known = true;
+	};
+
+	/*
+	 * Only a body with nothing in it whose effect is in doubt: literals, the
+	 * body's own names, and words infix.c knows. A branch, a loop or a call
+	 * to a program's word and it says nothing, rather than guess.
+	 */
+	void count(const Qd::IAstNode* node, names& bound, effect& out) {
+		if (!out.known) {
+			return;
+		}
+		int takes = 0, leaves = 0;
+		switch (node->type()) {
+		case Type::COMMENT:
+			return;
+		case Type::BLOCK:
+			for (size_t i = 0; i < node->childCount(); i++) {
+				count(node->child(i), bound, out);
+			}
+			return;
+		case Type::LITERAL:
+			leaves = 1;
+			break;
+		case Type::LOCAL:
+			for (const auto& local : static_cast<const Qd::AstNodeLocal*>(node)->names()) {
+				bound.insert(local);
+				takes++;
+			}
+			break;
+		case Type::INSTRUCTION:
+		case Type::IDENTIFIER: {
+			const std::string& name = (node->type() == Type::INSTRUCTION)
+											  ? static_cast<const Qd::AstNodeInstruction*>(node)->name()
+											  : static_cast<const Qd::AstNodeIdentifier*>(node)->name();
+			if (bound.count(name) != 0) {
+				leaves = 1;
+			} else if (!qdos_word_effect(name.c_str(), &takes, &leaves)) {
+				out.known = false;
+				return;
+			}
+			break;
+		}
+		default:
+			out.known = false;
+			return;
+		}
+		out.depth -= takes;
+		if (-out.depth > out.takes) {
+			out.takes = -out.depth;
+		}
+		out.depth += leaves;
+	}
+
+	/*
+	 * The signature against the body. The interpreter never compares them, so
+	 * `fn hyp( -- ) { sq swap sq + sqrt }` runs here, reading its caller's
+	 * stack, and is refused by the compiler on a PC.
+	 */
+	void check_effect(const Qd::AstNodeFunctionDeclaration* function, const names& scope, finding& out) {
+		const Qd::IAstNode* body = nullptr;
+		for (size_t i = 0; i < function->childCount(); i++) {
+			if (function->child(i)->type() == Type::BLOCK) {
+				body = function->child(i);
+			}
+		}
+		if (body == nullptr || function->hasReceiver()) {
+			return;
+		}
+
+		effect e;
+		names bound = scope;
+		count(body, bound, e);
+		if (!e.known) {
+			return;
+		}
+
+		// A stack fn has its inputs on the stack; any other has them as names
+		const int inputs = static_cast<int>(function->inputParameters().size());
+		const int outputs = static_cast<int>(function->outputParameters().size());
+		const int given = function->isStack() ? inputs : 0;
+		const std::string& name = function->name();
+		char text[160];
+
+		if (e.takes > given && !function->isStack() && inputs == 0) {
+			// Written as an RPN program is: say how to declare it that way
+			const int leaves = e.takes + e.depth;
+			std::string in, results;
+			for (int i = 0; i < e.takes; i++) {
+				in += (i ? " f64" : "f64");
+			}
+			for (int i = 0; i < leaves; i++) {
+				results += (i ? " r" : "r") + (leaves > 1 ? std::to_string(i + 1) : std::string()) + ":f64";
+			}
+			std::snprintf(text, sizeof(text), "L%zu: '%.12s' TAKES %d, LEAVES %d: stack fn %.12s(%s --%s%s)",
+					function->line(), name.c_str(), e.takes, leaves, name.c_str(), in.c_str(), leaves ? " " : "",
+					results.c_str());
+		} else if (e.takes > given) {
+			std::snprintf(text, sizeof(text), "L%zu: '%.12s' TAKES %d, ITS SIGNATURE GIVES IT %d", function->line(),
+					name.c_str(), e.takes, given);
+		} else if (given + e.depth != outputs) {
+			std::snprintf(text, sizeof(text), "L%zu: '%.12s' LEAVES %d, ITS SIGNATURE SAYS %d", function->line(),
+					name.c_str(), given + e.depth, outputs);
+		} else {
+			return;
+		}
+		out.message = text;
+		out.found = true;
+	}
+
 	/** One switch per node type, following evalNode in the interpreter */
 	void walk(const Qd::IAstNode* node, const vocabulary& known, names& bound, finding& out) {
 		if (node == nullptr || out.found) {
@@ -171,10 +287,14 @@ namespace {
 				}
 			}
 
+			const names parameters = scope;
 			for (size_t i = 0; i < node->childCount(); i++) {
 				if (node->child(i)->type() == Type::BLOCK) {
 					walk(node->child(i), known, scope, out);
 				}
+			}
+			if (!out.found) {
+				check_effect(function, parameters, out);
 			}
 			return;
 		}

@@ -139,6 +139,14 @@ typedef enum {
 	QDOS_KEY_EE,		 ///< The exponent of the number being typed
 	QDOS_KEY_CLEAR_STACK,
 
+	/* A third run of words with keys, the ones a TI or HP has and this lacked */
+	QDOS_KEY_ALOG,	///< 10^x
+	QDOS_KEY_FACT,	///< x!
+	QDOS_KEY_ROLLD, ///< R-down, the whole stack turned x to the bottom
+	QDOS_KEY_LASTX,
+#define QDOS_KEY_FN3_FIRST QDOS_KEY_ALOG
+#define QDOS_KEY_FN3_LAST QDOS_KEY_LASTX
+
 	QDOS_KEY__COUNT
 } qdos_key;
 
