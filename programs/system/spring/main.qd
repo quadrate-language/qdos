@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// A damped spring in real time: the mass bounces on the left, and its height
+// is drawn against time on the right as it happens, a sine that flattens out.
+// ENTER plucks it again, ESC leaves.
+
+// Time across the trace in seconds, height from rest
+fn scene() {
+	-1.25 5.0 -1.6 1.6 ui::view
+}
+
+fn frame(t:f64 y:f64 -- ) {
+	ui::cls
+	0 8 70 2 1 ui::box
+	0.0 0.0 ui::at 5.0 0.0 ui::at ui::line
+	0.0 -1.5 ui::at 0.0 1.5 ui::at ui::line
+	t 5.0 < if { t y ui::at ui::trace }
+
+	// The spring from the ceiling to the mass hanging on it
+	0.0 y ui::at -> my drop
+	40 10 40 my 10 - 12 20 ui::spring
+	40 my 10 1 ui::circle
+	8 222 "ENTER PLUCK  ESC LEAVE" ui::small
+	ui::show
+}
+
+fn main() {
+	scene
+	0.0 -> t
+	1.0 -> y
+	0.0 -> v
+	loop {
+		30 ui::frame -> dt
+		ui::pressed -> key
+		key "ESC" == if { return }
+		key "ENTER" == if {
+			0.0 -> t
+			1.0 -> y
+			0.0 -> v
+			ui::trace_clear
+		}
+
+		// The spring's pull and the damping, a step at a time
+		36.0 y * 0.7 v * + neg dt * v + -> v
+		v dt * y + -> y
+		t dt + -> t
+		t y frame
+	}
+}

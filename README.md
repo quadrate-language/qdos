@@ -295,9 +295,24 @@ Drawing goes straight onto the panel's buffer and is seen at `ui::show`:
 `ui::cls`, `ui::text ( col row s )` on the 25 by 10 grid, `ui::small ( x y s )`
 at a pixel, `ui::big ( row s scale )` centred and scaled 1 to 4,
 `ui::write ( x y s scale )` for the reading font at a pixel,
-`ui::pixel ( x y on )`, `ui::line ( x0 y0 x1 y1 )` and
+`ui::pixel ( x y on )`, `ui::line ( x0 y0 x1 y1 )`,
+`ui::spring ( x0 y0 x1 y1 coils width )`, a zigzag between two points at any
+angle with a straight lead at each end, which keeps its coils as it stretches, and
 `ui::box ( x y w h fill )`, where fill is 0 for an outline, 1 filled, 2 cleared
-and -1 inverted. The screen is 400 by 240.
+and -1 inverted, `ui::circle ( x y r fill )` with the same fills, and
+`ui::arrow ( x0 y0 x1 y1 )` with its head at the second end. The screen is 400
+by 240.
+
+For a simulation, `ui::view ( x0 x1 y0 y1 )` names the region of the plane the
+screen shows, y upwards, and `ui::at ( x y -- px py )` turns a point of it into
+the pixel to draw at; with no view, it hands pixels back as they are.
+`ui::trace ( x y )` adds a point to a curve and draws the whole of it, so one
+drawn as time passes survives `ui::cls` each frame, keeping the last 1024 points
+until `ui::trace_clear`. `ui::frame ( fps -- dt )` waits for the next frame and
+says how many seconds the last one took, to step by: 0 the first time, and no
+more than a quarter of a second, so a pause is not one huge step.
+`ui::pressed ( -- name )` is the next key's name, as `ui::keyname` has it, or
+`""` at once when there is none. `programs/system/spring` uses all of them.
 
 ```
 fn f(x:f64 -- y:f64) { x sin x * }

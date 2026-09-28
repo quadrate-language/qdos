@@ -8741,6 +8741,108 @@ static void test_graph_arrows_move_a_cursor(void) {
 	CHECK(line[0] == 'X' && strtod(line + 2, NULL) > 10.0);
 }
 
+/** ui::spring is a zigzag between its two ends, half its width either side of the line joining them. */
+static void test_ui_spring_draws_a_zigzag(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "sp", "fn main( -- ) { ui::cls 40 20 40 120 4 20 ui::spring ui::show ui::wait drop drop }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	type_line(script, &n, "sp");
+	const size_t started = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H], mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, started, fb, mid);
+
+	// The ends and the leads on the axis, the first coil to one side and the next to the other
+	CHECK(mid[20 * QDOS_SCREEN_W + 40] < 0x80);
+	CHECK(mid[30 * QDOS_SCREEN_W + 40] < 0x80);
+	CHECK(mid[35 * QDOS_SCREEN_W + 30] < 0x80);
+	CHECK(mid[45 * QDOS_SCREEN_W + 50] < 0x80);
+	CHECK(mid[110 * QDOS_SCREEN_W + 40] < 0x80);
+	CHECK(mid[120 * QDOS_SCREEN_W + 40] < 0x80);
+	CHECK(mid[70 * QDOS_SCREEN_W + 60] >= 0x80); // nothing past the width
+}
+
+/** ui::circle, ui::arrow and ui::trace draw where they are told. */
+static void test_ui_shapes_and_trace(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "sh",
+			"fn main( -- ) { ui::cls 200 10 ui::trace 250 60 ui::trace ui::cls 300 60 ui::trace "
+			"100 100 20 0 ui::circle 300 100 10 1 ui::circle 20 200 80 200 ui::arrow ui::show ui::wait drop drop }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	type_line(script, &n, "sh");
+	const size_t started = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H], mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, started, fb, mid);
+
+#define INK(x, y) (mid[(y) * QDOS_SCREEN_W + (x)] < 0x80)
+	// An outline is its edge and not its middle; a filled one is both
+	CHECK(INK(120, 100) && INK(100, 80) && INK(80, 100) && !INK(100, 100));
+	CHECK(INK(300, 100) && INK(305, 100) && INK(310, 100) && !INK(312, 100));
+	// The shaft, and a head folded back from the point on both sides
+	CHECK(INK(50, 200) && INK(80, 200) && INK(74, 197) && INK(74, 203) && !INK(74, 190));
+	// The trace outlives ui::cls: all three points joined, drawn again with the third
+	CHECK(INK(200, 10) && INK(225, 35) && INK(275, 60) && INK(300, 60));
+#undef INK
+}
+
+/** ui::view and ui::at: a plane with y upwards, onto the screen's pixels. */
+static void test_ui_view_maps_points(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "vw",
+			"fn main( -- ) { 7.0 8.0 ui::at ui::answer ui::answer 0.0 10.0 -1.0 1.0 ui::view "
+			"0.0 1.0 ui::at ui::answer ui::answer 10.0 -1.0 ui::at ui::answer ui::answer }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	type_line(script, &n, "vw");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// Last answered on top: the far corner, the near one, then pixels as they were
+	char row[QDOS_COLS + 1];
+	static const char* const WANT[] = {"399", "239", "0", "0", "7", "8"};
+	for (size_t i = 0; i < sizeof(WANT) / sizeof(*WANT); i++) {
+		read_level(fb, i, row, sizeof(row));
+		CHECK(strlen(row) > strlen(WANT[i]) && strcmp(row + strlen(row) - strlen(WANT[i]), WANT[i]) == 0);
+	}
+}
+
+/** ui::pressed names a key without waiting, and ui::frame paces the loop in seconds. */
+static void test_ui_pressed_and_frame(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "pk",
+			"fn main( -- ) { 30 ui::frame ui::answer 30 ui::frame ui::answer loop { ui::pressed -> k k \"\" != if { "
+			"k print return } } }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	type_line(script, &n, "pk");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_idling(script, n, 10, 20, fb, NULL);
+
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_MESSAGE_LINE, row, sizeof(row));
+	CHECK(strstr(row, "ESC") != NULL);
+
+	// The first frame starts the clock; the next waited at least a thirtieth of a second
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 0") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	const char* colon = strchr(row, ':');
+	const double dt = colon ? strtod(colon + 1, NULL) : -1.0;
+	CHECK(dt >= 1.0 / 30.0 - 0.001 && dt <= 0.25);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -9053,5 +9155,9 @@ int main(void) {
 	test_catalog_says_what_a_word_does();
 	test_the_editor_spaces_words_once();
 	test_graph_arrows_move_a_cursor();
+	test_ui_spring_draws_a_zigzag();
+	test_ui_shapes_and_trace();
+	test_ui_view_maps_points();
+	test_ui_pressed_and_frame();
 	return check_report("shell");
 }

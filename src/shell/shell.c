@@ -238,6 +238,9 @@ typedef enum {
 /* As many items as ui::menu offers */
 #define UI_MENU_MAX 16
 
+/* The points ui::trace keeps; past this the oldest go */
+#define UI_TRACE_MAX 1024
+
 /* What a name typed on APPS is for */
 typedef enum {
 	NAME_NEW = 0,
@@ -423,6 +426,13 @@ struct qdos_shell {
 	bool ui_window_set;
 	bool ui_points;			   ///< The next plot shows L1 against L2 as well
 	qdos_graph_view ui_window; ///< What ui::window asked the next plot for
+	bool ui_view_set;
+	double ui_view[4]; ///< ui::view's x0 x1 y0 y1, which ui::at maps onto the screen
+	bool ui_frame_started;
+	uint32_t ui_frame_last; ///< When the last ui::frame returned
+	int ui_trace_count;
+	int ui_trace_first; ///< The oldest point, once the ring has wrapped
+	int16_t ui_trace[UI_TRACE_MAX][2];
 	double ask_value;
 	bool ask_done;
 	bool field_fresh; ///< Holds an answer offered, which the first key typed replaces
@@ -3029,6 +3039,10 @@ static int run_app(qd_context* ctx, void* userdata) {
 	sh->app_interp = app;
 	sh->ui_window_set = false;
 	sh->ui_points = false;
+	sh->ui_view_set = false;
+	sh->ui_frame_started = false;
+	sh->ui_trace_count = 0;
+	sh->ui_trace_first = 0;
 	memset(sh->ui_slot, 0, sizeof(sh->ui_slot));
 
 	snprintf(sh->app_name, sizeof(sh->app_name), "%s", name);
@@ -8472,20 +8486,13 @@ static int native_pixel(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
-/** `ui::line` - ( x0:i64 y0:i64 x1:i64 y1:i64 -- ) */
-static int native_line(qd_context* ctx, void* userdata) {
-	double p[4];
-	if (!pop_reals(ctx, p, 4)) {
-		return ui_fail(ctx, "line", "NEED X0 Y0 X1 Y1");
-	}
-
-	int x = (int)p[0], y = (int)p[1];
-	const int x1 = (int)p[2], y1 = (int)p[3];
+/* A line of pixels, Bresenham's */
+static void ui_segment(qdos_shell* sh, int x, int y, int x1, int y1) {
 	const int dx = abs(x1 - x), dy = -abs(y1 - y);
 	const int sx = (x < x1) ? 1 : -1, sy = (y < y1) ? 1 : -1;
 	int err = dx + dy;
 	for (;;) {
-		ui_dot((qdos_shell*)userdata, x, y, true);
+		ui_dot(sh, x, y, true);
 		if (x == x1 && y == y1) {
 			break;
 		}
@@ -8499,7 +8506,206 @@ static int native_line(qd_context* ctx, void* userdata) {
 			y += sy;
 		}
 	}
+}
+
+/** `ui::line` - ( x0:i64 y0:i64 x1:i64 y1:i64 -- ) */
+static int native_line(qd_context* ctx, void* userdata) {
+	double p[4];
+	if (!pop_reals(ctx, p, 4)) {
+		return ui_fail(ctx, "line", "NEED X0 Y0 X1 Y1");
+	}
+
+	ui_segment((qdos_shell*)userdata, (int)p[0], (int)p[1], (int)p[2], (int)p[3]);
 	return 0;
+}
+
+/* More coils than this cannot be told apart on 400 pixels */
+#define UI_SPRING_COILS_MAX 100
+
+/**
+ * `ui::spring` - ( x0:f64 y0:f64 x1:f64 y1:f64 coils:i64 width:f64 -- )
+ *
+ * A zigzag from one end to the other at any angle, a straight lead at each
+ * end, so a spring is drawn by where it is fixed and where its load is. It
+ * stretches and squashes with them: the coils keep their count, not their pitch.
+ */
+static int native_spring(qd_context* ctx, void* userdata) {
+	double p[6];
+	if (!pop_reals(ctx, p, 6)) {
+		return ui_fail(ctx, "spring", "NEED X0 Y0 X1 Y1 COILS WIDTH");
+	}
+	const double coils = floor(p[4]);
+	if (!(coils >= 1.0 && coils <= UI_SPRING_COILS_MAX)) {
+		return ui_fail(ctx, "spring", "COILS 1 TO 100");
+	}
+
+	qdos_shell* sh = (qdos_shell*)userdata;
+	const double x0 = p[0], y0 = p[1], dx = p[2] - p[0], dy = p[3] - p[1];
+	const double length = hypot(dx, dy);
+	if (length == 0.0) {
+		ui_dot(sh, (int)lround(x0), (int)lround(y0), true);
+		return 0;
+	}
+
+	// Across the spring, half the width either side of the line between the ends
+	const double nx = -dy / length * p[5] / 2.0, ny = dx / length * p[5] / 2.0;
+	const double lead = 0.1;
+	const int turns = 2 * (int)coils;
+	int px = (int)lround(x0), py = (int)lround(y0);
+	for (int i = 0; i <= turns + 2; i++) {
+		// The near lead, a point every half coil on one side and the other, back
+		// to the axis, and the far lead
+		double along = lead + (1.0 - 2.0 * lead) * (i - 0.5) / turns, side = (i % 2) ? 1.0 : -1.0;
+		if (i == 0 || i >= turns + 1) {
+			along = (i == 0) ? lead : (i == turns + 1) ? 1.0 - lead : 1.0;
+			side = 0.0;
+		}
+		const int x = (int)lround(x0 + dx * along + nx * side), y = (int)lround(y0 + dy * along + ny * side);
+		ui_segment(sh, px, py, x, y);
+		px = x;
+		py = y;
+	}
+	return 0;
+}
+
+/* A pixel as fill has it: 1 ink, 2 paper, anything below 0 the other of what is there */
+static void ui_fill_dot(qdos_shell* sh, int x, int y, double fill) {
+	if (fill < 0) {
+		if (x >= 0 && y >= 0 && x < QDOS_SCREEN_W && y < QDOS_SCREEN_H) {
+			uint8_t* p = &sh->con.fb[(size_t)y * QDOS_SCREEN_W + (size_t)x];
+			*p = (*p == sh->con.ink) ? sh->con.paper : sh->con.ink;
+		}
+		return;
+	}
+	ui_dot(sh, x, y, fill != 2);
+}
+
+/** `ui::circle` - ( x:f64 y:f64 r:f64 fill:i64 -- ) fill as ui::box has it */
+static int native_circle(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double p[4];
+	if (!pop_reals(ctx, p, 4) || !(p[2] >= 0 && p[2] <= 2 * QDOS_SCREEN_W)) {
+		return ui_fail(ctx, "circle", "NEED X Y R FILL");
+	}
+
+	// Within half a pixel of the radius is the edge; nearer the middle is filled
+	const int cx = (int)lround(p[0]), cy = (int)lround(p[1]), r = (int)lround(p[2]);
+	const double outer = (r + 0.5) * (r + 0.5), inner = (r - 0.5) * (r - 0.5);
+	for (int dy = -r; dy <= r; dy++) {
+		for (int dx = -r; dx <= r; dx++) {
+			const double d = (double)dx * dx + (double)dy * dy;
+			if (d <= outer && (p[3] != 0 || d > inner)) {
+				ui_fill_dot(sh, cx + dx, cy + dy, p[3] == 0 ? 1 : p[3]);
+			}
+		}
+	}
+	return 0;
+}
+
+/**
+ * `ui::arrow` - ( x0:f64 y0:f64 x1:f64 y1:f64 -- ) a line with a head at the second end
+ *
+ * The head is a third of the arrow, and 8 pixels at most, so a short vector
+ * is still an arrow and a long one is not all head.
+ */
+static int native_arrow(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double p[4];
+	if (!pop_reals(ctx, p, 4)) {
+		return ui_fail(ctx, "arrow", "NEED X0 Y0 X1 Y1");
+	}
+
+	const int x1 = (int)lround(p[2]), y1 = (int)lround(p[3]);
+	ui_segment(sh, (int)lround(p[0]), (int)lround(p[1]), x1, y1);
+	const double dx = p[2] - p[0], dy = p[3] - p[1], length = hypot(dx, dy);
+	if (length == 0.0) {
+		return 0;
+	}
+	const double head = (length / 3.0 < 8.0) ? length / 3.0 : 8.0;
+	const double back = atan2(-dy, -dx), spread = 0.45;
+	for (int side = -1; side <= 1; side += 2) {
+		const double a = back + side * spread;
+		ui_segment(sh, x1, y1, (int)lround(p[2] + head * cos(a)), (int)lround(p[3] + head * sin(a)));
+	}
+	return 0;
+}
+
+/**
+ * `ui::trace` - ( x:f64 y:f64 -- ) one more point on a curve drawn as it goes
+ *
+ * The points are kept, and the whole curve drawn each time, so a program that
+ * clears the screen every frame still sees its history: a chart recorder.
+ */
+static int native_trace(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double p[2];
+	if (!pop_reals(ctx, p, 2)) {
+		return ui_fail(ctx, "trace", "NEED X Y");
+	}
+
+	// Kept as pixels, within what an int16 holds, so a point far off screen stays off it
+	int16_t* slot;
+	if (sh->ui_trace_count < UI_TRACE_MAX) {
+		slot = sh->ui_trace[(sh->ui_trace_first + sh->ui_trace_count++) % UI_TRACE_MAX];
+	} else {
+		slot = sh->ui_trace[sh->ui_trace_first];
+		sh->ui_trace_first = (sh->ui_trace_first + 1) % UI_TRACE_MAX;
+	}
+	for (int i = 0; i < 2; i++) {
+		const double v = round(p[i]);
+		slot[i] = (int16_t)(v < -30000 ? -30000 : v > 30000 ? 30000 : v);
+	}
+
+	const int16_t* prev = sh->ui_trace[sh->ui_trace_first];
+	ui_dot(sh, prev[0], prev[1], true);
+	for (int i = 1; i < sh->ui_trace_count; i++) {
+		const int16_t* next = sh->ui_trace[(sh->ui_trace_first + i) % UI_TRACE_MAX];
+		ui_segment(sh, prev[0], prev[1], next[0], next[1]);
+		prev = next;
+	}
+	return 0;
+}
+
+/** `ui::trace_clear` - ( -- ) start ui::trace's curve afresh */
+static int native_trace_clear(qd_context* ctx, void* userdata) {
+	(void)ctx;
+	qdos_shell* sh = userdata;
+	sh->ui_trace_count = 0;
+	sh->ui_trace_first = 0;
+	return 0;
+}
+
+/**
+ * `ui::view` - ( x0:f64 x1:f64 y0:f64 y1:f64 -- ) the region of the plane ui::at maps onto the screen
+ *
+ * y upwards, as on a graph: y1 is the top row and y0 the bottom one.
+ */
+static int native_view(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double p[4];
+	if (!pop_reals(ctx, p, 4) || !isfinite(p[0] + p[1] + p[2] + p[3]) || p[0] == p[1] || p[2] == p[3]) {
+		return ui_fail(ctx, "view", "NEED X0 X1 Y0 Y1, NOT EQUAL");
+	}
+	memcpy(sh->ui_view, p, sizeof(p));
+	sh->ui_view_set = true;
+	return 0;
+}
+
+/** `ui::at` - ( x:f64 y:f64 -- px:f64 py:f64 ) a point of ui::view's plane, as the pixel it falls on */
+static int native_at(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double p[2];
+	if (!pop_reals(ctx, p, 2)) {
+		return ui_fail(ctx, "at", "NEED X Y");
+	}
+	// With no view, pixels are what was meant
+	if (!sh->ui_view_set) {
+		qd_push_f(ctx, p[0]);
+		return qd_push_f(ctx, p[1]);
+	}
+	const double* v = sh->ui_view;
+	qd_push_f(ctx, (p[0] - v[0]) / (v[1] - v[0]) * (QDOS_SCREEN_W - 1));
+	return qd_push_f(ctx, (v[3] - p[1]) / (v[3] - v[2]) * (QDOS_SCREEN_H - 1));
 }
 
 /** `ui::box` - ( x:i64 y:i64 w:i64 h:i64 fill:i64 -- ) fill 0 outlines, 1 fills, 2 clears, -1 inverts */
@@ -8553,14 +8759,8 @@ static int native_sleep(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
-/** `ui::keyname` - ( key:i64 ch:i64 -- s:str ) what ui::key and ui::wait gave, as a name */
-static int native_keyname(qd_context* ctx, void* userdata) {
-	(void)userdata;
-	double code[2];
-	if (!pop_reals(ctx, code, 2)) {
-		return ui_fail(ctx, "keyname", "NEED KEY AND CH");
-	}
-
+/* A key as ui::keyname and ui::pressed name it; empty for one with no name */
+static void key_name(qdos_key key, double ch, char* name, size_t cap) {
 	static const struct {
 		qdos_key key;
 		const char* name;
@@ -8586,22 +8786,95 @@ static int native_keyname(qd_context* ctx, void* userdata) {
 			{QDOS_KEY_SOFT5, "F5"},
 	};
 
-	const qdos_key key = (qdos_key)(int)code[0];
-	char name[8] = "";
+	name[0] = '\0';
 	if (key >= QDOS_KEY_0 && key <= QDOS_KEY_9) {
-		name[0] = (char)('0' + (key - QDOS_KEY_0));
-	} else if (key == QDOS_KEY_CHAR && code[1] > ' ' && code[1] < 0x7F) {
-		name[0] = (char)code[1];
-	} else if (key == QDOS_KEY_CHAR && code[1] == ' ') {
-		snprintf(name, sizeof(name), "SPACE");
+		snprintf(name, cap, "%c", (char)('0' + (key - QDOS_KEY_0)));
+	} else if (key == QDOS_KEY_CHAR && ch > ' ' && ch < 0x7F) {
+		snprintf(name, cap, "%c", (char)ch);
+	} else if (key == QDOS_KEY_CHAR && ch == ' ') {
+		snprintf(name, cap, "SPACE");
 	} else {
 		for (size_t i = 0; i < sizeof(NAMES) / sizeof(*NAMES); i++) {
 			if (NAMES[i].key == key) {
-				snprintf(name, sizeof(name), "%s", NAMES[i].name);
+				snprintf(name, cap, "%s", NAMES[i].name);
 			}
 		}
 	}
+}
+
+/** `ui::keyname` - ( key:i64 ch:i64 -- s:str ) what ui::key and ui::wait gave, as a name */
+static int native_keyname(qd_context* ctx, void* userdata) {
+	(void)userdata;
+	double code[2];
+	if (!pop_reals(ctx, code, 2)) {
+		return ui_fail(ctx, "keyname", "NEED KEY AND CH");
+	}
+
+	char name[8];
+	key_name((qdos_key)(int)code[0], code[1], name, sizeof(name));
 	return qd_push_s(ctx, name);
+}
+
+/** `ui::pressed` - ( -- name:str ) the next key's name, or "" at once when there is none */
+static int native_pressed(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	ui_alive(sh);
+
+	qdos_key_event event;
+	char name[8] = "";
+	if (qdos_natives_key(sh->hal, &event)) {
+		key_name(event.key, event.ch, name, sizeof(name));
+	} else if (qdos_natives_broken()) {
+		qd_set_error_msg(ctx, "BREAK");
+		return 1;
+	}
+	return qd_push_s(ctx, name);
+}
+
+/* A frame that took longer than this is taken as this, so a pause is not one huge step */
+#define UI_FRAME_DT_MAX 0.25
+
+/**
+ * `ui::frame` - ( fps:i64 -- dt:f64 ) wait for the next frame, and say how long the last one was
+ *
+ * In seconds, for a simulation to step by: the time really taken, so it keeps
+ * pace when a frame runs long. The first is 0, the clock starting there.
+ */
+static int native_frame(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double fps;
+	if (!pop_real(ctx, &fps) || !(fps >= 1 && fps <= 100)) {
+		return ui_fail(ctx, "frame", "NEED FRAMES A SECOND, 1 TO 100");
+	}
+
+	if (!sh->ui_frame_started) {
+		sh->ui_frame_started = true;
+		sh->ui_frame_last = sh->hal->ticks_ms(sh->hal);
+		ui_alive(sh);
+		return qd_push_f(ctx, 0.0);
+	}
+
+	// A key waiting ends a wait early, so wait again for what is left; a clock
+	// that did not move in a wait never will, and is not waited on
+	const uint32_t period = (uint32_t)(1000.0 / fps);
+	uint32_t now = sh->hal->ticks_ms(sh->hal);
+	while (now - sh->ui_frame_last < period && sh->hal->running(sh->hal)) {
+		const uint32_t before = now;
+		sh->hal->wait(sh->hal, (int)(period - (now - sh->ui_frame_last)));
+		now = sh->hal->ticks_ms(sh->hal);
+		if (qdos_natives_broken()) {
+			qd_set_error_msg(ctx, "BREAK");
+			return 1;
+		}
+		if (now == before) {
+			break;
+		}
+	}
+	ui_alive(sh);
+
+	const double dt = (now - sh->ui_frame_last) / 1000.0;
+	sh->ui_frame_last = now;
+	return qd_push_f(ctx, dt < UI_FRAME_DT_MAX ? dt : UI_FRAME_DT_MAX);
 }
 
 /** `ui::menu` - ( title:str items:[]str -- i:i64 ) the item picked, from 1, or 0 for ESC */
@@ -8754,7 +9027,17 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "ui::save", "(x:f64 name:str -- )", native_save, sh);
 	qd_interp_register(interp, "ui::load", "(name:str -- x:f64 ok:i64)", native_load, sh);
 	qd_interp_register(interp, "ui::line", "(x0:i64 y0:i64 x1:i64 y1:i64 -- )", native_line, sh);
+	qd_interp_register(
+			interp, "ui::spring", "(x0:f64 y0:f64 x1:f64 y1:f64 coils:i64 width:f64 -- )", native_spring, sh);
 	qd_interp_register(interp, "ui::box", "(x:i64 y:i64 w:i64 h:i64 fill:i64 -- )", native_box, sh);
+	qd_interp_register(interp, "ui::circle", "(x:f64 y:f64 r:f64 fill:i64 -- )", native_circle, sh);
+	qd_interp_register(interp, "ui::arrow", "(x0:f64 y0:f64 x1:f64 y1:f64 -- )", native_arrow, sh);
+	qd_interp_register(interp, "ui::trace", "(x:f64 y:f64 -- )", native_trace, sh);
+	qd_interp_register(interp, "ui::trace_clear", "( -- )", native_trace_clear, sh);
+	qd_interp_register(interp, "ui::view", "(x0:f64 x1:f64 y0:f64 y1:f64 -- )", native_view, sh);
+	qd_interp_register(interp, "ui::at", "(x:f64 y:f64 -- px:f64 py:f64)", native_at, sh);
+	qd_interp_register(interp, "ui::frame", "(fps:i64 -- dt:f64)", native_frame, sh);
+	qd_interp_register(interp, "ui::pressed", "( -- name:str)", native_pressed, sh);
 	qdos_register_math(interp);
 	qdos_register_complex(interp);
 }
