@@ -177,6 +177,33 @@ void qdos_pad_key_rect(const qdos_pad_button* b, int* x, int* y, int* w, int* h)
  */
 const qdos_pad_action* qdos_pad_action_for(const qdos_pad_button* b, qdos_pad_layer layer);
 
+/** @brief Which face is showing, and which one a one-press face hands back to */
+typedef struct {
+	qdos_pad_layer layer;
+	qdos_pad_layer locked;
+} qdos_pad_face;
+
+/**
+ * @brief Press @p b with the pad showing @p face
+ *
+ * Shared by every backend that reads the pad by position -- the simulator's
+ * mouse, a real key matrix -- so the faces behave the same on both. ALPHA locks
+ * until it is pressed again; SYMBOL lasts one press.
+ *
+ * @return What the press sends, or NULL for a modifier, which only changes
+ *         @p face, and for a key that does nothing on the face it met
+ */
+const qdos_pad_action* qdos_pad_press(qdos_pad_face* face, const qdos_pad_button* b);
+
+/**
+ * @brief A character typed on a keyboard, as the key it stands for
+ *
+ * For the backends that take a keyboard beside the pad -- the simulator's, a
+ * serial console. Digits and operators are their keys, so a calculator typed
+ * at behaves as one; anything else arrives as QDOS_KEY_CHAR.
+ */
+void qdos_pad_typed(char ch, qdos_key_event* out);
+
 #ifdef __cplusplus
 }
 #endif

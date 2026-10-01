@@ -16,6 +16,11 @@ than a working machine. What is still open is listed at the end.
 | **Zero W** (default) | BCM2835, ARM1176JZF-S at 1 GHz, 512 MB | ARMv6 | `armv6` |
 | Zero 2 W (second target) | BCM2710A1, quad Cortex-A53 | ARMv8 | `aarch64` |
 
+An **ESP32-S3** with 8 MB of octal PSRAM (an N8R8 or N16R8 module) is a third
+target, outside `QDOS_BOARD`: it is an ESP-IDF project of its own, takes the same
+panel and pad wired straight to its GPIOs with no expander, and is described in
+[esp32/README.md](../esp32/README.md).
+
 `QDOS_BOARD` picks the target throughout and defaults to `zerow`. **The Zero W
 is the machine** — reaffirmed 2026-09-19. The Zero 2 W stays supported for one
 reason: it is the only one QEMU can boot, so it is where the software path gets

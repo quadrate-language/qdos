@@ -1,0 +1,12 @@
+# The shell's static buffers -- the splash console, the sort and cell tables --
+# live in PSRAM. Internal RAM is wanted for the shell's stack, and nothing here
+# is touched from an interrupt or while the flash cache is off.
+[scheme:qdos_extram_bss]
+entries:
+    bss -> extern_ram
+    common -> extern_ram
+
+[mapping:qdos_core]
+archive: libqdos_core.a
+entries:
+    * (qdos_extram_bss)

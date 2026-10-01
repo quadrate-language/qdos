@@ -10,7 +10,31 @@
 
 #include <quadrate/rt/runtime.h>
 
+#ifdef QDOS_NO_DLOPEN
+/*
+ * No dynamic linker, as on a microcontroller. Such a backend has no store_path
+ * either, so the module walk stops before any of these is reached; they are
+ * here so the rest of the file need not know.
+ */
+#define RTLD_NOW 0
+#define RTLD_LOCAL 0
+static void* dlopen(const char* path, int flags) {
+	(void)path;
+	(void)flags;
+	return NULL;
+}
+static void* dlsym(void* handle, const char* name) {
+	(void)handle;
+	(void)name;
+	return NULL;
+}
+static int dlclose(void* handle) {
+	(void)handle;
+	return 0;
+}
+#else
 #include <dlfcn.h>
+#endif
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -369,7 +393,7 @@ static bool accept(const qdos_native_module* module, char* error, size_t cap) {
 		return false;
 	}
 	if (module->abi != QDOS_NATIVE_ABI) {
-		snprintf(error, cap, "ABI %u, WANTED %u", module->abi, QDOS_NATIVE_ABI);
+		snprintf(error, cap, "ABI %u, WANTED %u", (unsigned)module->abi, (unsigned)QDOS_NATIVE_ABI);
 		return false;
 	}
 	if (module->arch == NULL || strcmp(module->arch, QDOS_NATIVE_ARCH) != 0) {

@@ -8,6 +8,7 @@
 
 #include "device_linux.h"
 
+#include "../filestore.h"
 #include "../wallclock.h"
 #include "framebuffer.h"
 #include "keypad.h"
@@ -44,9 +45,7 @@ typedef struct {
 	uint32_t fb_bpp;   ///< Bits per pixel
 	uint32_t fb_pitch; ///< Bytes per scanline
 	bool running;
-	const char* store_dir;
-	const char* system_dir;
-	const char* inbox_dir;
+	qdos_filestore fs;
 	int tty_fd; ///< The VT whose text output is suspended while we draw
 	bool first_paint;
 
@@ -63,16 +62,6 @@ static const char* env_or(const char* name, const char* fallback) {
 	return (value && *value) ? value : fallback;
 }
 
-static bool is_dir(const char* dir, const char* name) {
-	char path[512];
-	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path)) {
-		return false;
-	}
-
-	struct stat sb;
-	return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
-}
-
 /**
  * The messy part of sharing the inbox -- unmounting it, binding the gadget,
  * putting it back -- lives in a script, where it can be read and fixed on the
@@ -87,15 +76,15 @@ static void device_watch_inbox(device_state* st);
 static int device_init(qdos_hal* hal) {
 	device_state* st = (device_state*)hal->impl;
 
-	st->store_dir = env_or("QDOS_STORE", "/var/lib/qdos");
-	st->system_dir = env_or("QDOS_SYSTEM_STORE", "/usr/share/qdos/programs");
-	st->inbox_dir = env_or("QDOS_INBOX", "/mnt/inbox");
+	st->fs.store_dir = env_or("QDOS_STORE", "/var/lib/qdos");
+	st->fs.system_dir = env_or("QDOS_SYSTEM_STORE", "/usr/share/qdos/programs");
+	st->fs.inbox_dir = env_or("QDOS_INBOX", "/mnt/inbox");
 
 	// The rootfs is read-only and init starts the shell at '/', so a program
 	// writing beside itself writes nowhere. The store's paths are absolute, so
 	// nothing else moves.
-	if (chdir(st->store_dir) != 0) {
-		fprintf(stderr, "qdos: cannot work from %s\n", st->store_dir);
+	if (chdir(st->fs.store_dir) != 0) {
+		fprintf(stderr, "qdos: cannot work from %s\n", st->fs.store_dir);
 	}
 
 	// Only offer USB where the helper is installed, so a machine without one
@@ -163,7 +152,7 @@ static int device_init(qdos_hal* hal) {
 	// Watching rather than looking; see hal->store_changed
 	st->watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (st->watch_fd < 0) {
-		fprintf(stderr, "qdos: cannot watch %s: %s\n", st->inbox_dir, strerror(errno));
+		fprintf(stderr, "qdos: cannot watch %s: %s\n", st->fs.inbox_dir, strerror(errno));
 	} else {
 		device_watch_inbox(st);
 	}
@@ -274,22 +263,22 @@ static void device_watch_inbox(device_state* st) {
 	}
 	st->sub_count = 0;
 
-	st->watch_id = inotify_add_watch(st->watch_fd, st->inbox_dir, WATCH_EVENTS);
+	st->watch_id = inotify_add_watch(st->watch_fd, st->fs.inbox_dir, WATCH_EVENTS);
 
 	// A file dropped inside an app folder is an upload like any other
-	DIR* dir = opendir(st->inbox_dir);
+	DIR* dir = opendir(st->fs.inbox_dir);
 	if (dir == NULL) {
 		return;
 	}
 
 	const struct dirent* ent;
 	while ((ent = readdir(dir)) != NULL && st->sub_count < QDOS_WATCH_SUBS) {
-		if (ent->d_name[0] == '.' || !is_dir(st->inbox_dir, ent->d_name)) {
+		if (ent->d_name[0] == '.' || !qdos_filestore_is_dir(st->fs.inbox_dir, ent->d_name)) {
 			continue;
 		}
 
 		char path[512];
-		if (snprintf(path, sizeof(path), "%s/%s", st->inbox_dir, ent->d_name) >= (int)sizeof(path)) {
+		if (snprintf(path, sizeof(path), "%s/%s", st->fs.inbox_dir, ent->d_name) >= (int)sizeof(path)) {
 			continue;
 		}
 
@@ -322,139 +311,26 @@ static bool device_store_changed(qdos_hal* hal) {
 	return changed;
 }
 
-static const char* dir_for(device_state* st, qdos_store_scope scope) {
-	switch (scope) {
-	case QDOS_SCOPE_SYSTEM:
-		return st->system_dir;
-	case QDOS_SCOPE_INBOX:
-		return st->inbox_dir;
-	default:
-		return st->store_dir;
-	}
-}
-
-static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
-	if (!qdos_store_name_ok(name)) {
-		return false;
-	}
-
-	const int written = snprintf(buf, cap, "%s/%s", dir, name);
-	return written > 0 && (size_t)written < cap;
-}
-
 static qdos_store_result device_store_read(
 		qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
-	device_state* st = (device_state*)hal->impl;
-
-	char path[512];
-	if (!store_path(dir_for(st, scope), name, path, sizeof(path))) {
-		return QDOS_STORE_IO_ERROR;
-	}
-
-	FILE* f = fopen(path, "rb");
-	if (!f) {
-		return QDOS_STORE_NOT_FOUND;
-	}
-
-	const size_t got = fread(buf, 1, cap, f);
-	const bool overflowed = (got == cap) && (fgetc(f) != EOF);
-	fclose(f);
-
-	if (overflowed) {
-		return QDOS_STORE_TOO_BIG;
-	}
-	if (len) {
-		*len = got;
-	}
-	return QDOS_STORE_OK;
+	return qdos_filestore_read(&((device_state*)hal->impl)->fs, scope, name, buf, cap, len);
 }
 
 static qdos_store_result device_store_write(qdos_hal* hal, const char* name, const void* buf, size_t len) {
-	device_state* st = (device_state*)hal->impl;
-
-	char path[512];
-	if (!store_path(st->store_dir, name, path, sizeof(path))) {
-		return QDOS_STORE_IO_ERROR;
-	}
-
-	mkdir(st->store_dir, 0755);
-
-	// An app is written into a folder of its own, which may not be there yet
-	char* slash = strrchr(path, '/');
-	if (slash != NULL && strchr(name, '/') != NULL) {
-		*slash = '\0';
-		mkdir(path, 0755);
-		*slash = '/';
-	}
-
-	FILE* f = fopen(path, "wb");
-	if (!f) {
-		return QDOS_STORE_IO_ERROR;
-	}
-
-	const size_t written = fwrite(buf, 1, len, f);
-	// fsync before reporting success: power can vanish mid-write.
-	fflush(f);
-	fsync(fileno(f));
-	const bool ok = (fclose(f) == 0) && (written == len);
-	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
+	return qdos_filestore_write(&((device_state*)hal->impl)->fs, name, buf, len);
 }
 
 static qdos_store_result device_store_remove(qdos_hal* hal, const char* name) {
-	device_state* st = (device_state*)hal->impl;
-
-	char path[512];
-	if (!store_path(st->store_dir, name, path, sizeof(path))) {
-		return QDOS_STORE_IO_ERROR;
-	}
-
-	if (remove(path) == 0) {
-		return QDOS_STORE_OK;
-	}
-	return (errno == ENOENT) ? QDOS_STORE_NOT_FOUND : QDOS_STORE_IO_ERROR;
+	return qdos_filestore_remove(&((device_state*)hal->impl)->fs, name);
 }
 
 static bool device_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
-	device_state* st = (device_state*)hal->impl;
-	return store_path(dir_for(st, scope), name, buf, cap);
+	return qdos_filestore_path(&((device_state*)hal->impl)->fs, scope, name, buf, cap);
 }
 
 static qdos_store_result device_store_list(
 		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
-	device_state* st = (device_state*)hal->impl;
-
-	char root[512];
-	if (folder == NULL || *folder == '\0') {
-		snprintf(root, sizeof(root), "%s", dir_for(st, scope));
-	} else if (!store_path(dir_for(st, scope), folder, root, sizeof(root))) {
-		return QDOS_STORE_IO_ERROR;
-	}
-
-	DIR* dir = opendir(root);
-	if (!dir) {
-		return QDOS_STORE_NOT_FOUND;
-	}
-
-	const struct dirent* ent;
-	while ((ent = readdir(dir)) != NULL) {
-		if (ent->d_name[0] == '.') {
-			continue;
-		}
-
-		// A folder is listed with the mark on it, being an app and not a file
-		char name[288];
-		const int written = snprintf(name, sizeof(name), "%s%s", ent->d_name, is_dir(root, ent->d_name) ? "/" : "");
-		if (written <= 0 || (size_t)written >= sizeof(name)) {
-			continue;
-		}
-
-		if (!visit(name, user)) {
-			break;
-		}
-	}
-
-	closedir(dir);
-	return QDOS_STORE_OK;
+	return qdos_filestore_list(&((device_state*)hal->impl)->fs, scope, folder, visit, user);
 }
 
 /** Hand the inbox partition to a host, or take it back. */

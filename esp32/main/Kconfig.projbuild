@@ -1,0 +1,75 @@
+menu "QDOS"
+
+	config QDOS_SHELL_STACK_KB
+		int "Shell task stack, in KB"
+		default 224
+		range 64 320
+		help
+			The shell and the interpreter run on this stack. It is internal
+			RAM, not PSRAM, because the store is on flash and a task whose
+			stack is in PSRAM cannot reach flash. Measured under QEMU, the
+			shell takes 42 KB and each Quadrate call level about 1.25 KB
+			more -- 165 KB at 99 levels -- so this and QDOS_CALL_DEPTH go up
+			and down together.
+
+	config QDOS_CALL_DEPTH
+		int "Deepest Quadrate call nesting"
+		default 100
+		range 16 200
+		help
+			Past this, a call is refused with an error rather than running
+			off the end of the stack. The Pi allows 256.
+
+	config QDOS_SERIAL_STACK
+		bool "Echo the stack on the serial console"
+		default n
+		help
+			Every change to the top of the stack is logged, with how much of
+			the shell's stack has been used so far. For bring-up before the
+			panel is wired, and for running under QEMU, which has no panel.
+
+	config QDOS_LCD
+		bool "Drive the Sharp panel"
+		default y
+		help
+			Off for a board with nothing on the SPI pins, and for QEMU,
+			which does not emulate the S3's general-purpose SPI.
+
+	menu "Display (Sharp LS027B7DH01)"
+		depends on QDOS_LCD
+		config QDOS_LCD_SCLK
+			int "SCLK GPIO"
+			default 39
+		config QDOS_LCD_MOSI
+			int "MOSI (DI) GPIO"
+			default 40
+		config QDOS_LCD_CS
+			int "CS GPIO (active high)"
+			default 41
+		config QDOS_LCD_DISP
+			int "DISP GPIO, or -1 where the breakout's pull-up is left to it"
+			default -1
+		config QDOS_LCD_HZ
+			int "SPI clock, Hz"
+			default 2000000
+			help
+				The panel's ceiling is 2 MHz.
+	endmenu
+
+	menu "Keypad matrix"
+		config QDOS_KEY_ROW_PINS
+			string "Row GPIOs, top row first"
+			default "8,9,10,11,12,13,14,15,16,17"
+			help
+				Ten rows, driven open-drain. Each is held low through deep
+				sleep so a press can wake the machine.
+		config QDOS_KEY_COL_PINS
+			string "Column GPIOs, left column first"
+			default "1,2,4,5,6,7"
+			help
+				Six columns, read with pull-ups. They must be RTC GPIOs
+				(0 to 21 on the S3): they are what wakes the chip from deep
+				sleep.
+	endmenu
+
+endmenu

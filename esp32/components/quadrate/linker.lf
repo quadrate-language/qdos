@@ -1,0 +1,6 @@
+# The runtime's static tables live in PSRAM, beside the shell's; see
+# components/qdos_core/linker.lf, which defines the scheme.
+[mapping:quadrate]
+archive: libquadrate.a
+entries:
+    * (qdos_extram_bss)

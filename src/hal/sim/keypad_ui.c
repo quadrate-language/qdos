@@ -292,6 +292,67 @@ const qdos_pad_action* qdos_pad_action_for(const qdos_pad_button* b, qdos_pad_la
 	return b->plain.label != NULL ? &b->plain : NULL;
 }
 
+const qdos_pad_action* qdos_pad_press(qdos_pad_face* face, const qdos_pad_button* b) {
+	if (b == NULL) {
+		return NULL;
+	}
+
+	qdos_pad_layer selects;
+	if (qdos_pad_modifier(b, &selects)) {
+		if (face->layer == selects) {
+			face->layer = QDOS_PAD_PLAIN;
+			face->locked = QDOS_PAD_PLAIN;
+		} else {
+			face->layer = selects;
+			// Letters lock, since a name is more than one press; symbols do
+			// not, and hand back to what was showing
+			if (selects == QDOS_PAD_ALPHA) {
+				face->locked = QDOS_PAD_ALPHA;
+			}
+		}
+		return NULL;
+	}
+
+	const qdos_pad_action* a = qdos_pad_action_for(b, face->layer);
+	face->layer = face->locked;
+	return a;
+}
+
+void qdos_pad_typed(char ch, qdos_key_event* out) {
+	out->ch = 0;
+
+	if (ch >= '0' && ch <= '9') {
+		out->key = (qdos_key)(QDOS_KEY_0 + (ch - '0'));
+		return;
+	}
+
+	switch (ch) {
+	case '.':
+		out->key = QDOS_KEY_DOT;
+		return;
+	case '+':
+		out->key = QDOS_KEY_ADD;
+		out->ch = ch; // typed, so a line takes the character and not the key's word
+		return;
+	case '-':
+		out->key = QDOS_KEY_SUB;
+		out->ch = ch;
+		return;
+	case '*':
+		out->key = QDOS_KEY_MUL;
+		out->ch = ch;
+		return;
+	case '/':
+		out->key = QDOS_KEY_DIV;
+		out->ch = ch;
+		return;
+	default:
+		out->key = QDOS_KEY_CHAR;
+		out->ch = ch;
+		return;
+	}
+}
+
 /** @brief What this button shows on @p layer, and whether it does anything there */
 static const qdos_pad_action* face_of(const qdos_pad_button* b, qdos_pad_layer layer) {
 	qdos_pad_layer ignored;

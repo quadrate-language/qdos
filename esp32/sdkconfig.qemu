@@ -1,0 +1,9 @@
+# Overrides for running under Espressif's QEMU (9.2.2 or later, for the S3's
+# octal PSRAM), which emulates the UART but not the USB Serial/JTAG port. Build with:
+#   idf.py -B build-qemu -D SDKCONFIG=build-qemu/sdkconfig \
+#          -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.qemu" build
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
+CONFIG_QDOS_SERIAL_STACK=y
+# No panel, and no general-purpose SPI to drive one with
+CONFIG_QDOS_LCD=n

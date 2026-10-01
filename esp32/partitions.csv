@@ -1,0 +1,10 @@
+# Sized for 8 MB of flash, so an N8R8 module and an N16R8 both take it.
+# Name,   Type, SubType,  Offset,  Size
+nvs,      data, nvs,      0x9000,  24K
+phy_init, data, phy,      ,        4K
+factory,  app,  factory,  0x10000, 3M
+# The programs shipped with the firmware: a read-only FAT image built from
+# programs/system, and replaced whole by flashing
+system,   data, fat,      ,        512K
+# Everything QDOS writes, and the inbox: wear-levelled FAT
+data,     data, fat,      ,        4M

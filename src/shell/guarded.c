@@ -3,6 +3,11 @@
  * @brief Evaluation that survives a fatal runtime error
  */
 
+// fopencookie, where stdout is captured that way
+#ifdef QDOS_CAPTURE_STDIO
+#define _GNU_SOURCE
+#endif
+
 #include "guarded.h"
 
 #include <quadrate/rt/runtime.h>
@@ -19,16 +24,89 @@ static char g_output[OUTPUT_MAX];
 
 static bool g_recovered;
 
-/* stdout on a pipe for the duration of one evaluation, then read back */
-static int g_pipe[2] = {-1, -1};
-static int g_stdout = -1;
-
 /*
  * Evaluation nests: `forget` restores a shipped program by evaluating it from
  * inside the native word, which is already inside an evaluation. The outer
  * frame owns the recovery buffer and the capture both -- see qdos_guarded_eval.
  */
 static bool g_evaluating;
+
+#ifdef QDOS_CAPTURE_STDIO
+/*
+ * No pipe and no dup2, as on ESP-IDF. newlib keeps a stdout per task, so this
+ * one task's stdout is pointed at a buffer instead, which behaves as the pipe
+ * does: it holds so much, the rest is dropped, and reading takes what it reads.
+ */
+#define CAPTURE_MAX 4096
+
+static char g_captured[CAPTURE_MAX];
+static size_t g_captured_len;
+static FILE* g_capture;
+static FILE* g_stdout;
+
+static ssize_t capture_write(void* cookie, const char* buf, size_t len) {
+	(void)cookie;
+	const size_t room = CAPTURE_MAX - g_captured_len;
+	const size_t kept = len < room ? len : room;
+	memcpy(g_captured + g_captured_len, buf, kept);
+	g_captured_len += kept;
+	return (ssize_t)len;
+}
+
+/* Up to @p cap - 1 bytes of what is held, taken out of it */
+static size_t capture_read(char* out, size_t cap) {
+	const size_t got = g_captured_len < cap - 1 ? g_captured_len : cap - 1;
+	memcpy(out, g_captured, got);
+	out[got] = '\0';
+	memmove(g_captured, g_captured + got, g_captured_len - got);
+	g_captured_len -= got;
+	return got;
+}
+
+static void capture_begin(void) {
+	g_output[0] = '\0';
+	g_captured_len = 0;
+	fflush(stdout);
+
+	const cookie_io_functions_t io = {.write = capture_write};
+	g_capture = fopencookie(NULL, "w", io);
+	if (g_capture == NULL) {
+		return;
+	}
+	setvbuf(g_capture, NULL, _IONBF, 0);
+	g_stdout = stdout;
+	stdout = g_capture;
+}
+
+static void capture_end(void) {
+	if (g_capture == NULL) {
+		return;
+	}
+
+	stdout = g_stdout;
+	fclose(g_capture);
+	g_capture = NULL;
+	capture_read(g_output, sizeof(g_output));
+}
+
+const char* qdos_guarded_output(void) {
+	return g_output;
+}
+
+size_t qdos_guarded_take(char* out, size_t cap) {
+	if (cap == 0) {
+		return 0;
+	}
+	out[0] = '\0';
+	if (g_capture == NULL) {
+		return 0;
+	}
+	return capture_read(out, cap);
+}
+#else
+/* stdout on a pipe for the duration of one evaluation, then read back */
+static int g_pipe[2] = {-1, -1};
+static int g_stdout = -1;
 
 static void capture_begin(void) {
 	g_output[0] = '\0';
@@ -84,6 +162,8 @@ size_t qdos_guarded_take(char* out, size_t cap) {
 	out[(got > 0) ? (size_t)got : 0] = '\0';
 	return (got > 0) ? (size_t)got : 0;
 }
+
+#endif
 
 bool qdos_guarded_eval(qd_interp* interp, const char* source) {
 	qd_context* ctx = qd_interp_context(interp);

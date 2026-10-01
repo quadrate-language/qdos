@@ -28,3 +28,8 @@ CLAUDE.md
 
 # Python bytecode from the font tools
 __pycache__/
+
+# ESP-IDF: the QEMU build, and the sdkconfig idf.py writes beside the defaults
+esp32/build-qemu/
+esp32/sdkconfig
+esp32/sdkconfig.old

@@ -4,7 +4,8 @@ An operating system for a homebuilt calculator, shipped as firmware. The OS is C
 — bar one file that reads Quadrate's syntax tree, which has no C interface — and
 the shell is [Quadrate](https://github.com/quadrate-language/quadrate).
 
-Target: **Raspberry Pi Zero W**, 400x240 Sharp Memory LCD, 54-key keypad.
+Target: **Raspberry Pi Zero W**, 400x240 Sharp Memory LCD, 54-key keypad. An
+**ESP32-S3** with 8 MB of PSRAM is a second target; see [esp32/README.md](./esp32/README.md).
 See [docs/design.md](./docs/design.md) for why it is built this way, and
 [docs/hardware.md](./docs/hardware.md) for the parts it is built from.
 
@@ -506,10 +507,21 @@ device controller and so needs the board. The simulator has the other half: shar
 QDOS stop reading `qdos-inbox/` and hands it to you, and taking it back reads
 it afresh, which is the whole of what the shell has to cope with either way.
 
+### ESP32-S3
+
+```bash
+cd esp32 && idf.py build flash monitor
+```
+
+No Linux underneath: the same shell over a backend of its own, with the panel
+on SPI, the keypad as a GPIO matrix and deep sleep for off. No native modules
+and no USB drive yet. See [esp32/README.md](./esp32/README.md).
+
 ## Status
 
 Early. The simulator runs; it cross-compiles to ARMv6 and ARM64 and passes its
-suite under emulation. It has never run on a Pi.
+suite under emulation. It has never run on a Pi. The ESP32-S3 build runs under
+Espressif's QEMU and has never run on a chip.
 
 ## Links
 

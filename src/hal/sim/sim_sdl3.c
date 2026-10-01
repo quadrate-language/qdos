@@ -74,8 +74,7 @@ typedef struct {
 	bool shared;
 	int scale;
 	const char* pending;   ///< Rest of a text button still to be delivered
-	qdos_pad_layer layer;  ///< Which keypad face is showing
-	qdos_pad_layer locked; ///< What a one-press layer hands back to
+	qdos_pad_face face; ///< Which keypad face is showing
 
 	/** Held down by the mouse, drawn sunk until the button comes back up */
 	const qdos_pad_button* pressed;
@@ -348,7 +347,7 @@ static void sim_shutdown(qdos_hal* hal) {
 /** @brief Redraw the keypad over the last panel image and show it */
 static void push_frame(sim_state* st) {
 	qdos_frame_draw(st->rgb, WINDOW_W);
-	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_PAD_X, QDOS_PAD_Y, st->layer, st->pressed);
+	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_PAD_X, QDOS_PAD_Y, st->face.layer, st->pressed);
 
 	if (st->background) {
 		return;
@@ -377,42 +376,6 @@ static void sim_present(qdos_hal* hal, const uint8_t* fb) {
 	}
 
 	push_frame(st);
-}
-
-/** @brief Map a typed character to a logical key */
-static void map_char(char ch, qdos_key_event* out) {
-	out->ch = 0;
-
-	if (ch >= '0' && ch <= '9') {
-		out->key = (qdos_key)(QDOS_KEY_0 + (ch - '0'));
-		return;
-	}
-
-	switch (ch) {
-	case '.':
-		out->key = QDOS_KEY_DOT;
-		return;
-	case '+':
-		out->key = QDOS_KEY_ADD;
-		out->ch = ch; // typed, so a line takes the character and not the key's word
-		return;
-	case '-':
-		out->key = QDOS_KEY_SUB;
-		out->ch = ch;
-		return;
-	case '*':
-		out->key = QDOS_KEY_MUL;
-		out->ch = ch;
-		return;
-	case '/':
-		out->key = QDOS_KEY_DIV;
-		out->ch = ch;
-		return;
-	default:
-		out->key = QDOS_KEY_CHAR;
-		out->ch = ch;
-		return;
-	}
 }
 
 static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
@@ -451,34 +414,13 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 			st->pressed = b;
 			push_frame(st);
 
-			qdos_pad_layer selects;
-			if (qdos_pad_modifier(b, &selects)) {
-				if (st->layer == selects) {
-					st->layer = QDOS_PAD_PLAIN;
-					st->locked = QDOS_PAD_PLAIN;
-				} else {
-					st->layer = selects;
-					// Letters lock, since a name is more than one press;
-					// symbols do not, and hand back to what was showing
-					if (selects == QDOS_PAD_ALPHA) {
-						st->locked = QDOS_PAD_ALPHA;
-					}
-				}
+			const qdos_pad_layer was = st->face.layer;
+			const qdos_pad_action* a = qdos_pad_press(&st->face, b);
+			if (was != st->face.layer) {
 				push_frame(st);
-				break;
 			}
-
-			const qdos_pad_action* a = qdos_pad_action_for(b, st->layer);
-			const qdos_pad_layer was = st->layer;
-			st->layer = st->locked;
 			if (a == NULL) {
-				if (was != st->layer) {
-					push_frame(st);
-				}
 				break;
-			}
-			if (was != st->layer) {
-				push_frame(st);
 			}
 
 			if (a->key != QDOS_KEY_NONE) {
@@ -504,7 +446,7 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 
 		case SDL_EVENT_TEXT_INPUT:
 			if (event.text.text[0]) {
-				map_char(event.text.text[0], out);
+				qdos_pad_typed(event.text.text[0], out);
 				return true;
 			}
 			break;
@@ -569,7 +511,7 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 }
 
 static qdos_keypad_mod sim_modifier(qdos_hal* hal) {
-	switch (((sim_state*)hal->impl)->layer) {
+	switch (((sim_state*)hal->impl)->face.layer) {
 	case QDOS_PAD_ALPHA:
 		return QDOS_MOD_ALPHA;
 	case QDOS_PAD_SYMBOL:
@@ -581,9 +523,9 @@ static qdos_keypad_mod sim_modifier(qdos_hal* hal) {
 
 static void sim_modifier_reset(qdos_hal* hal) {
 	sim_state* st = (sim_state*)hal->impl;
-	if (st->layer != QDOS_PAD_PLAIN || st->locked != QDOS_PAD_PLAIN) {
-		st->layer = QDOS_PAD_PLAIN;
-		st->locked = QDOS_PAD_PLAIN;
+	if (st->face.layer != QDOS_PAD_PLAIN || st->face.locked != QDOS_PAD_PLAIN) {
+		st->face.layer = QDOS_PAD_PLAIN;
+		st->face.locked = QDOS_PAD_PLAIN;
 		push_frame(st);
 	}
 }

@@ -15,6 +15,12 @@
 #include <stdio.h>
 #include <string.h>
 
+/* C11's, which newlib (as on ESP-IDF) leaves out. x + y*I is not the same: it
+ * turns an infinite part into a NaN. */
+#ifndef CMPLX
+#define CMPLX(x, y) __builtin_complex((double)(x), (double)(y))
+#endif
+
 #define QDOS_PI 3.14159265358979323846
 
 typedef struct {
