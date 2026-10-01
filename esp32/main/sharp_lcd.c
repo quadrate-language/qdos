@@ -17,7 +17,7 @@
 #include "sdkconfig.h"
 
 // The whole driver, where there is a panel to drive; see CONFIG_QDOS_LCD
-#if CONFIG_QDOS_LCD
+#if CONFIG_QDOS_LCD && !CONFIG_QDOS_LCD_QEMU
 
 #include <qdos/hal.h>
 
@@ -179,4 +179,4 @@ void qdos_lcd_stop(void) {
 	}
 }
 
-#endif // CONFIG_QDOS_LCD
+#endif // CONFIG_QDOS_LCD && !CONFIG_QDOS_LCD_QEMU

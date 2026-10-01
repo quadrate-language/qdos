@@ -41,18 +41,20 @@ under **QDOS**, has the pins, the shell's stack and the call depth.
 ### Under QEMU
 
 Espressif's QEMU 9.2.2 or later, for the S3's PSRAM; the one in the v5.5 image
-is older. `sdkconfig.qemu` moves the console to the UART, drops the panel and
-echoes the stack on the console instead, since there is nothing to look at:
+is older. `sdkconfig.qemu` moves the console to the UART, and swaps the Sharp
+panel, whose SPI QEMU does not emulate, for QEMU's virtual RGB display, shown
+in a window at twice the glass's size (`main/qemu_lcd.c`). From the top of the
+tree:
 
 ```bash
-idf.py -B build-qemu -D SDKCONFIG=build-qemu/sdkconfig \
-    -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.qemu" build
-idf.py -B build-qemu -D SDKCONFIG=build-qemu/sdkconfig qemu \
-    --qemu-extra-args='-m 8M -global driver=ssi_psram,property=is_octal,value=true'
+make esp32-qemu
 ```
 
-Type at it as at the serial console, below. Each change to the stack is
-logged with how much of the shell's stack it has taken.
+That builds with `idf.py`, or the Docker image when there is none, fetches the
+QEMU release on first use, and boots. Type at the terminal it was started from,
+as at the serial console, below; the window has no keyboard. Each change to the
+stack is logged there too, with how much of the shell's stack it has taken.
+`QEMU_DISPLAY=none` drops the window, and Ctrl-a x quits.
 
 ## Wiring
 

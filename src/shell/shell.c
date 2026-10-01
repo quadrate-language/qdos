@@ -7299,7 +7299,8 @@ static void report_top(qdos_shell* sh) {
 		const size_t room = (size_t)(QDOS_COLS - 3);
 		char* out = shown[count];
 		out[0] = '\0';
-		if (!format_complex(sh, count, out, sizeof(shown[count]), room) && !format_array(sh, count, out, sizeof(shown[count]), room)) {
+		if (!format_complex(sh, count, out, sizeof(shown[count]), room) &&
+				!format_array(sh, count, out, sizeof(shown[count]), room)) {
 			format_value(sh, &value, out, sizeof(shown[count]), room);
 		}
 		rows[count] = out;

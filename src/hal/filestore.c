@@ -137,8 +137,8 @@ qdos_store_result qdos_filestore_list(
 
 		// A folder is listed with the mark on it, being an app and not a file
 		char name[288];
-		const int written = snprintf(
-				name, sizeof(name), "%s%s", ent->d_name, qdos_filestore_is_dir(root, ent->d_name) ? "/" : "");
+		const int written =
+				snprintf(name, sizeof(name), "%s%s", ent->d_name, qdos_filestore_is_dir(root, ent->d_name) ? "/" : "");
 		if (written <= 0 || (size_t)written >= sizeof(name)) {
 			continue;
 		}

@@ -73,8 +73,8 @@ typedef struct {
 	/** The card is a PC's to write, and so nothing the shell may read */
 	bool shared;
 	int scale;
-	const char* pending;   ///< Rest of a text button still to be delivered
-	qdos_pad_face face; ///< Which keypad face is showing
+	const char* pending; ///< Rest of a text button still to be delivered
+	qdos_pad_face face;	 ///< Which keypad face is showing
 
 	/** Held down by the mouse, drawn sunk until the button comes back up */
 	const qdos_pad_button* pressed;

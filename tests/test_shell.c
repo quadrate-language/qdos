@@ -8744,7 +8744,8 @@ static void test_graph_arrows_move_a_cursor(void) {
 /** ui::spring is a zigzag between its two ends, half its width either side of the line joining them. */
 static void test_ui_spring_draws_a_zigzag(void) {
 	store_reset();
-	seed_app(QDOS_SCOPE_INBOX, "sp", "fn main( -- ) { ui::cls 40 20 40 120 4 20 ui::spring ui::show ui::wait drop drop }");
+	seed_app(QDOS_SCOPE_INBOX, "sp",
+			"fn main( -- ) { ui::cls 40 20 40 120 4 20 ui::spring ui::show ui::wait drop drop }");
 
 	qdos_key_event script[16];
 	size_t n = 0;

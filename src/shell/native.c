@@ -18,16 +18,19 @@
  */
 #define RTLD_NOW 0
 #define RTLD_LOCAL 0
+
 static void* dlopen(const char* path, int flags) {
 	(void)path;
 	(void)flags;
 	return NULL;
 }
+
 static void* dlsym(void* handle, const char* name) {
 	(void)handle;
 	(void)name;
 	return NULL;
 }
+
 static int dlclose(void* handle) {
 	(void)handle;
 	return 0;
@@ -507,8 +510,7 @@ static bool loadable(qdos_store_scope scope, const char* key, const char* path, 
 
 	char tmp[520];
 	written = snprintf(buf, cap, "%s/%d/%s", cache, (int)scope, key);
-	if (written <= 0 || (size_t)written >= cap ||
-			snprintf(tmp, sizeof(tmp), "%s.tmp", buf) >= (int)sizeof(tmp)) {
+	if (written <= 0 || (size_t)written >= cap || snprintf(tmp, sizeof(tmp), "%s.tmp", buf) >= (int)sizeof(tmp)) {
 		return false;
 	}
 
@@ -597,8 +599,8 @@ static bool load_one(const char* file, void* userdata) {
 	// RTLD_NOW: an unresolved symbol is a refusal now, not mid-calculation
 	char open_path[512];
 	void* handle = loadable(walk->scope, key, path, open_path, sizeof(open_path))
-			? dlopen(open_path, RTLD_NOW | RTLD_LOCAL)
-			: NULL;
+						   ? dlopen(open_path, RTLD_NOW | RTLD_LOCAL)
+						   : NULL;
 	if (handle == NULL) {
 		snprintf(entry->error, sizeof(entry->error), "WILL NOT LOAD");
 		write_text(walk->hal, NATIVE_LOADING_KEY, "");

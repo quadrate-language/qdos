@@ -26,17 +26,25 @@ menu "QDOS"
 		help
 			Every change to the top of the stack is logged, with how much of
 			the shell's stack has been used so far. For bring-up before the
-			panel is wired, and for running under QEMU, which has no panel.
+			panel is wired, and for running under QEMU without a window.
 
 	config QDOS_LCD
-		bool "Drive the Sharp panel"
+		bool "Drive a panel"
 		default y
 		help
-			Off for a board with nothing on the SPI pins, and for QEMU,
-			which does not emulate the S3's general-purpose SPI.
+			Off for a board with nothing on the SPI pins.
+
+	config QDOS_LCD_QEMU
+		bool "The panel is QEMU's virtual display"
+		depends on QDOS_LCD
+		default n
+		help
+			Espressif's QEMU does not emulate the S3's general-purpose SPI,
+			so the Sharp panel cannot be driven there. It has a virtual RGB
+			display instead, shown in a window. This does nothing on a chip.
 
 	menu "Display (Sharp LS027B7DH01)"
-		depends on QDOS_LCD
+		depends on QDOS_LCD && !QDOS_LCD_QEMU
 		config QDOS_LCD_SCLK
 			int "SCLK GPIO"
 			default 39

@@ -3,6 +3,7 @@ idf_component_register(
 		"main.c"
 		"hal_esp32.c"
 		"sharp_lcd.c"
+		"qemu_lcd.c"
 		"keymatrix.c"
 		"serial_keys.c"
 	INCLUDE_DIRS "."
