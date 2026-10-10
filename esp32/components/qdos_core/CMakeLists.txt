@@ -58,9 +58,11 @@ idf_component_register(
 	REQUIRES quadrate
 	LDFRAGMENTS "linker.lf")
 
+# No dynamic linker: the native modules are linked in and listed by the
+# backend; see src/shell/native.c
+target_compile_definitions(${COMPONENT_LIB} PUBLIC QDOS_NO_DLOPEN)
+
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-	# No dynamic linker, so no uploaded native modules; see src/shell/native.c
-	QDOS_NO_DLOPEN
 	# No pipe or dup2 to catch what print writes; see src/shell/guarded.c
 	QDOS_CAPTURE_STDIO)
 

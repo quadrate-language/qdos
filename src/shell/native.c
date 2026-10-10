@@ -12,23 +12,30 @@
 
 #ifdef QDOS_NO_DLOPEN
 /*
- * No dynamic linker, as on a microcontroller. Such a backend has no store_path
- * either, so the module walk stops before any of these is reached; they are
- * here so the rest of the file need not know.
+ * No dynamic linker, as on a microcontroller. The modules are linked into the
+ * firmware and listed in qdos_native_builtins; opening the file found in the
+ * store is looking its name up there.
  */
+#include <string.h>
+
 #define RTLD_NOW 0
 #define RTLD_LOCAL 0
 
 static void* dlopen(const char* path, int flags) {
-	(void)path;
 	(void)flags;
+	const char* slash = strrchr(path, '/');
+	const char* file = slash != NULL ? slash + 1 : path;
+	for (const qdos_native_builtin* b = qdos_native_builtins; b->file != NULL; b++) {
+		if (strcmp(b->file, file) == 0) {
+			return (void*)b;
+		}
+	}
 	return NULL;
 }
 
 static void* dlsym(void* handle, const char* name) {
-	(void)handle;
 	(void)name;
-	return NULL;
+	return handle != NULL ? (void*)((const qdos_native_builtin*)handle)->module : NULL;
 }
 
 static int dlclose(void* handle) {

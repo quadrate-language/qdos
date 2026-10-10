@@ -1,0 +1,18 @@
+# DOOM's tables and buffers live in PSRAM, as the shell's do: internal RAM is
+# wanted for the shell's stack, which DOOM runs on.
+[scheme:doom_extram_bss]
+entries:
+    bss -> extern_ram
+    common -> extern_ram
+
+# info.c's states and mobjinfo are 40 KB of initialised data that only
+# DeHackEd writes, and doomgeneric has none: they stay in flash
+[scheme:doom_info_flash]
+entries:
+    data -> flash_rodata
+
+[mapping:doom]
+archive: libdoom.a
+entries:
+    * (doom_extram_bss)
+    info (doom_info_flash)

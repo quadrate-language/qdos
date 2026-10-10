@@ -62,6 +62,9 @@ All of it is in menuconfig; these are the defaults.
 
 | | GPIO | |
 |---|---|---|
+| Panel VIN | 3V3 | Not 5V: on a DevKitC-1 powered through its USB port, the panel stayed blank from 5V |
+| Panel GND | GND | |
+| Panel 3Vo | — | The breakout's regulator output; leave it open |
 | Panel SCLK | 39 | SPI2, 2 MHz |
 | Panel DI (MOSI) | 40 | |
 | Panel CS | 41 | Active high, as on the Pi |
@@ -126,14 +129,36 @@ The layout fits 8 MB of flash.
 
 ## What the Pi has that this does not
 
-- **Native modules.** There is no dynamic linker. `hal->store_path` is NULL, so
-  the shell never looks for them.
+- **Uploaded native modules.** There is no dynamic linker. A module can only be
+  linked into the firmware and listed in `main/builtins.c`; the app folder then
+  holds a file of its name, and opening that is a lookup. DOOM is done this way,
+  below.
 - **The USB drive.** The S3 has a USB device controller and TinyUSB has a
   mass-storage class, so this is possible, but it is not done. Until then the
   inbox can only be written by flashing.
 - **A battery gauge**, until there is a battery.
 - **The time of day.** It reads as unset until something sets the clock. The
   RTC keeps the time through deep sleep, but nothing sets it yet.
+
+## DOOM
+
+`sdkconfig.doom` builds DOOM in: the doomgeneric engine and qdos-doom's host,
+from `../doomgeneric` and `../qdos-doom` beside this tree, in `components/doom`.
+The `doom` app folder -- `main.qd`, `doom1.wad` and a stand-in `libdoom.so` -- is
+put in the system store, which is 6 MB for it, so it needs 16 MB of flash (an
+N16R8). Put the shareware `doom1.wad` in `../qdos-doom/doom`, or point `DOOM_WAD`
+at it, then from a fresh sdkconfig:
+
+```bash
+rm -f sdkconfig
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.doom" build
+```
+
+Changing the partition table moves the data partition, so the first flash
+starts the store empty. Internal RAM is the tight part: DOOM's own buffers are
+in PSRAM, `info.c`'s tables stay in flash, and the internal reserve is 32 KB
+instead of 64, which leaves the shell up with 76 KB internal free. Every frame
+goes to the panel whole, at 2 MHz, which is about 50 ms of the frame time.
 
 ## How the port is put together
 

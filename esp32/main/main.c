@@ -57,6 +57,7 @@ void app_main(void) {
 	// keypad, the console and the timers.
 	const uint32_t stack = CONFIG_QDOS_SHELL_STACK_KB * 1024;
 	if (xTaskCreatePinnedToCore(shell_task, "shell", stack, NULL, 5, NULL, 1) != pdPASS) {
-		ESP_LOGE(TAG, "no room for a %u KB shell stack", (unsigned)(stack / 1024));
+		ESP_LOGE(TAG, "no room for a %u KB shell stack: the largest free block is %u KB", (unsigned)(stack / 1024),
+				(unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
 	}
 }

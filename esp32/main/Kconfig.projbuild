@@ -80,4 +80,13 @@ menu "QDOS"
 				sleep.
 	endmenu
 
+	config QDOS_DOOM
+		bool "DOOM, linked in"
+		default n
+		help
+			The engine from ../doomgeneric and the host from ../qdos-doom,
+			built into the firmware, with the app folder and its WAD in the
+			system store. Needs 16 MB of flash: build with sdkconfig.doom.
+			See README.md.
+
 endmenu

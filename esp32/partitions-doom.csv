@@ -1,0 +1,7 @@
+# For 16 MB of flash, with DOOM: its WAD is 4 MB of the system store.
+# Name,   Type, SubType,  Offset,  Size
+nvs,      data, nvs,      0x9000,  24K
+phy_init, data, phy,      ,        4K
+factory,  app,  factory,  0x10000, 3M
+system,   data, fat,      ,        6M
+data,     data, fat,      ,        4M

@@ -26,6 +26,22 @@ extern "C" {
 #define QDOS_NATIVE_ERROR_MAX 26
 #define QDOS_NATIVE_BLOCKED_MAX 128
 
+#ifdef QDOS_NO_DLOPEN
+/**
+ * @brief A module linked into the firmware, where there is no dynamic linker
+ *
+ * The app folder still holds a file of this name, so the module is found where
+ * it would be on the Pi; only opening it is a lookup instead of dlopen.
+ */
+typedef struct {
+	const char* file; ///< As found in the store, e.g. "libdoom.so"
+	const qdos_native_module* module;
+} qdos_native_builtin;
+
+/** @brief Ended by an entry with no file; the backend defines it */
+extern const qdos_native_builtin qdos_native_builtins[];
+#endif
+
 typedef struct {
 	char name[QDOS_PROGRAM_NAME_MAX]; ///< `foo`, from libfoo.so
 

@@ -207,6 +207,10 @@ static qdos_store_result esp_store_remove(qdos_hal* hal, const char* name) {
 	return qdos_filestore_remove(&((esp_state*)hal->impl)->fs, name);
 }
 
+static bool esp_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
+	return qdos_filestore_path(&((esp_state*)hal->impl)->fs, scope, name, buf, cap);
+}
+
 static qdos_store_result esp_store_list(
 		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
 	return qdos_filestore_list(&((esp_state*)hal->impl)->fs, scope, folder, visit, user);
@@ -262,7 +266,7 @@ void qdos_esp32_hal(qdos_hal* hal) {
 	hal->store_write = esp_store_write;
 	hal->store_remove = esp_store_remove;
 	hal->store_list = esp_store_list;
-	// No store_path: nothing can be opened by path without a dynamic linker
+	hal->store_path = esp_store_path;
 	hal->time_of_day = esp_time_of_day;
 #if CONFIG_QDOS_SERIAL_STACK
 	hal->show_stack = esp_show_stack;

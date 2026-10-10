@@ -23,6 +23,7 @@
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -49,7 +50,7 @@ static spi_device_handle_t g_dev;
 static SemaphoreHandle_t g_lock; ///< The timer and the shell both send
 static esp_timer_handle_t g_vcom_timer;
 static uint8_t* g_tx;			 ///< DMA-capable, so internal RAM
-static uint8_t g_shown[QDOS_SCREEN_H][LINE_BYTES];
+EXT_RAM_BSS_ATTR static uint8_t g_shown[QDOS_SCREEN_H][LINE_BYTES]; ///< PSRAM: the shell's stack needs the internal RAM
 static bool g_vcom;
 
 static void send(const uint8_t* buf, size_t len) {
