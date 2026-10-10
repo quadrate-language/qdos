@@ -7,6 +7,7 @@ idf_component_register(
 		"keymatrix.c"
 		"serial_keys.c"
 		"builtins.c"
+		"upload.c"
 	INCLUDE_DIRS "."
 	REQUIRES qdos_core doom driver esp_driver_spi esp_driver_gpio esp_driver_usb_serial_jtag
 		esp_timer fatfs vfs wear_levelling)

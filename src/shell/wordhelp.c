@@ -175,6 +175,8 @@ static const struct {
 		{"times", "a b -- a*b: the key"},
 		{"trunc", "x -- x without its fraction"},
 		{"ui::answer", "x -- : leave x on the stack when the app ends"},
+		{"ui::arg", " -- x ok: the next number off the stack it was run from"},
+		{"ui::args", " -- n: how many numbers ui::arg can still take"},
 		{"ui::arrow", "x0 y0 x1 y1 -- : a line with a head at x1 y1"},
 		{"ui::ask", "\"prompt\" -- x ok: ask for a number"},
 		{"ui::ask_or", "\"prompt\" x -- x ok: ask, offering x"},

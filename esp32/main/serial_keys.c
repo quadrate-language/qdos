@@ -11,6 +11,7 @@
 #include "serial_keys.h"
 
 #include "input.h"
+#include "upload.h"
 
 #include "hal/sim/keypad_ui.h"
 
@@ -30,6 +31,8 @@
 #include <string.h>
 
 #define ESC 0x1B
+/** Ctrl-B: what follows is a file for the inbox; see upload.c */
+#define STX 0x02
 /** How long after an Escape the rest of a sequence may take to arrive */
 #define SEQUENCE_MS 30
 
@@ -46,6 +49,17 @@ static int read_byte(int timeout_ms) {
 	const int got = uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, &b, 1, ticks);
 #endif
 	return got == 1 ? b : -1;
+}
+
+/** Up to @p cap bytes, for an upload; 0 if none came within @p timeout_ms */
+static int read_chunk(uint8_t* buf, size_t cap, int timeout_ms) {
+	const TickType_t ticks = pdMS_TO_TICKS(timeout_ms);
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+	const int got = usb_serial_jtag_read_bytes(buf, (uint32_t)cap, ticks);
+#else
+	const int got = uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, buf, (uint32_t)cap, ticks);
+#endif
+	return got > 0 ? got : 0;
 }
 
 static void send_key(qdos_key key) {
@@ -133,6 +147,9 @@ static void serial_task(void* arg) {
 		case '\t':
 			send_key(QDOS_KEY_TAB);
 			break;
+		case STX:
+			qdos_upload_run(read_chunk);
+			break;
 		case ESC: {
 			const int next = read_byte(SEQUENCE_MS);
 			if (next == '[' || next == 'O') {
@@ -175,5 +192,5 @@ int qdos_serial_keys_init(QueueHandle_t out) {
 		return 1;
 	}
 
-	return xTaskCreatePinnedToCore(serial_task, "serial", 3072, NULL, 5, NULL, 0) == pdPASS ? 0 : 1;
+	return xTaskCreatePinnedToCore(serial_task, "serial", 6144, NULL, 5, NULL, 0) == pdPASS ? 0 : 1;
 }

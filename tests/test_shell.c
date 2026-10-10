@@ -7151,6 +7151,149 @@ static void test_sample_quad(void) {
 	CHECK(output_has(mid, "X2 = -1-2i"));
 }
 
+/** quad: with a, b and c on the stack it asks for nothing, and leaves only the roots. */
+static void test_sample_quad_takes_the_stack(void) {
+	store_reset();
+	seed_sample("quad");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "quad");
+	const size_t results = n;
+	key(script, &n, QDOS_KEY_CLEAR);
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t mid[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, results, fb, mid);
+	CHECK(output_has(mid, "X1 = -2"));
+	CHECK(output_has(mid, "X2 = -1"));
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "-1") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "-2") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** quad: an a of 0 off the stack is refused, and the three are still there. */
+static void test_sample_quad_refused_leaves_the_stack(void) {
+	store_reset();
+	seed_sample("quad");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "0");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "quad");
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 1") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 0") != NULL);
+}
+
+/** tri: a 3 4 5 triangle off the stack has its right angle opposite c. */
+static void test_sample_tri_takes_the_stack(void) {
+	store_reset();
+	seed_sample("tri");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "4");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "tri");
+	key(script, &n, QDOS_KEY_1); // SSS
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(row[0] == '\0');
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1.5707") != NULL);
+	read_level(fb, 3, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** fin: loan, rate and years on the stack, in the order it asks, give the payment. */
+static void test_sample_fin_takes_the_stack(void) {
+	store_reset();
+	seed_sample("fin");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "200000");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "30");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "fin");
+	key(script, &n, QDOS_KEY_1); // PAYMENT
+	key(script, &n, QDOS_KEY_CLEAR);
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1073.64") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
+/** units: a value on the stack is what is converted, with no question. */
+static void test_sample_units_takes_the_stack(void) {
+	store_reset();
+	seed_sample("units");
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "100");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "units");
+	key(script, &n, QDOS_KEY_6); // TEMPERATURE
+	key(script, &n, QDOS_KEY_1); // C
+	key(script, &n, QDOS_KEY_1); // F
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[EDIT_COLS_T + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 212") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(row[0] == '\0');
+}
+
 /** units: a mile is 1.609344 km, and 100 C is 212 F, which picked is left on the stack. */
 static void test_sample_units(void) {
 	store_reset();
@@ -8218,6 +8361,71 @@ static void test_an_app_answers_onto_the_stack(void) {
 	CHECK(strstr(row, " 3") != NULL);
 }
 
+/** An app takes its inputs off the calculator's stack, top first, and only once it has finished. */
+static void test_an_app_takes_its_arguments_off_the_stack(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "sub", "fn main( -- ) { ui::arg drop -> a ui::arg drop -> b b a - ui::answer }");
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "5");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "10");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "sub");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	// 10 3 taken, 7 answered, and the 5 under them left alone
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 7") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 5") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, "10") == NULL);
+}
+
+/** An app that fails has taken nothing off the stack. */
+static void test_an_app_that_fails_takes_no_arguments(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "bad", "fn main( -- ) { ui::arg drop drop ui::answer }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	digits(script, &n, "4");
+	key(script, &n, QDOS_KEY_ENTER);
+	type_line(script, &n, "bad");
+	key(script, &n, QDOS_KEY_LEFT); // the error covers level 1 until a key
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "1:") != NULL && strstr(row, " 4") != NULL);
+}
+
+/** With nothing on the stack, ui::arg says so rather than failing. */
+static void test_an_app_with_no_arguments_is_told(void) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "none", "fn main( -- ) { ui::arg -> ok -> x ok 0 == if { 99.0 ui::answer } }");
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	type_line(script, &n, "none");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "99") != NULL);
+}
+
 /** A second point, or one in the exponent, is ignored as a calculator ignores it. */
 static void test_a_second_point_is_ignored(void) {
 	store_reset();
@@ -9110,6 +9318,11 @@ int main(void) {
 	test_ui_text_words();
 	test_ui_keyname();
 	test_sample_quad();
+	test_sample_quad_takes_the_stack();
+	test_sample_quad_refused_leaves_the_stack();
+	test_sample_tri_takes_the_stack();
+	test_sample_units_takes_the_stack();
+	test_sample_fin_takes_the_stack();
 	test_sample_units();
 	test_sample_fin();
 	test_sample_tri();
@@ -9136,6 +9349,9 @@ int main(void) {
 	test_a_graph_message_hides_the_readout();
 	test_a_prompt_has_its_own_soft_keys();
 	test_an_app_answers_onto_the_stack();
+	test_an_app_takes_its_arguments_off_the_stack();
+	test_an_app_that_fails_takes_no_arguments();
+	test_an_app_with_no_arguments_is_told();
 	test_a_second_point_is_ignored();
 	test_a_typed_overflow_is_refused();
 	test_a_failed_key_keeps_the_undo();

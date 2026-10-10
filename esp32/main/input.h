@@ -23,6 +23,7 @@ typedef struct {
 	uint8_t row;		///< Pad row, top first
 	uint8_t col;		///< Position in the row, left first
 	qdos_key_event key; ///< When !pad
+	bool wake;			///< No press at all: only ends a wait, as an upload does
 } qdos_input;
 
 #endif // QDOS_ESP_INPUT_H

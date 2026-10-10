@@ -287,7 +287,14 @@ touching the user's registers. `ui::answer ( x -- )` leaves x on the
 calculator's stack when the app ends, so an answer can be gone on with: `quad`
 leaves its roots, `fin` what it solved for, `tri` the three parts it found
 (the first triangle, where there are two), and `units` the conversion picked
-from its list. `ui::save ( x name )` and `ui::load ( name -- x ok )` keep a value between
+from its list. `ui::arg ( -- x ok )` is the other way in: the next
+number on the stack the app was run from, the top first, with ok 0 once there
+is none or the next is not a number, and `ui::args ( -- n )` says how many it
+can still take. What it read is only taken off when the app finishes having
+answered something, so one that fails, is stopped, or finds no answer leaves
+the stack as it found it. The shipped apps take their inputs this way when
+all of them are there, and ask for them all when they are not: `3 ENTER 4
+ENTER 1 quad` solves 3x² + 4x + 1 without a question. `ui::save ( x name )` and `ui::load ( name -- x ok )` keep a value between
 runs, as a file in the app's own folder. The language has no string concatenation, so
 `ui::str ( x -- s )` and `ui::cat ( a b -- s )` show numbers as the calculator
 does and join them.

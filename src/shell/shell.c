@@ -443,6 +443,8 @@ struct qdos_shell {
 	double ui_slot[UI_SLOTS];
 	qdos_value ui_answer[UI_ANSWERS]; ///< For the calculator's stack when the app ends
 	size_t ui_answer_count;
+	qd_context* app_caller; ///< The stack the running app was called from, which ui::arg reads
+	size_t ui_args_taken;	///< How much of it ui::arg has read, taken off when the app ends
 
 	menu_id menu;
 	size_t menu_sel;
@@ -1050,6 +1052,7 @@ static void render_soft(qdos_shell* sh, qdos_console* con) {
 }
 
 static int push_value(qd_context* ctx, const qdos_value* value);
+static bool pop_value(qd_context* ctx, qdos_value* out);
 
 /** @brief Take what an evaluation printed and put it where it can be seen */
 static void absorb_output(qdos_shell* sh) {
@@ -3047,12 +3050,20 @@ static int run_app(qd_context* ctx, void* userdata) {
 
 	snprintf(sh->app_name, sizeof(sh->app_name), "%s", name);
 
+	qd_context* caller_before = sh->app_caller;
+	const size_t taken_before = sh->ui_args_taken;
+	sh->app_caller = ctx;
+	sh->ui_args_taken = 0;
+
 	char error[2 * MESSAGE_COLS + 1] = "";
 	if (load_app_sources(sh, app, name, error, sizeof(error)) &&
 			(!qdos_guarded_eval(app, source) || !qdos_guarded_eval(app, QDOS_APP_ENTRY))) {
 		snprintf(error, sizeof(error), "%s", qdos_guarded_error(app));
 	}
 
+	const size_t taken = sh->ui_args_taken;
+	sh->app_caller = caller_before;
+	sh->ui_args_taken = taken_before;
 	sh->app_interp = outer;
 	sh->app_name[0] = '\0';
 	qd_interp_destroy(app);
@@ -3067,6 +3078,13 @@ static int run_app(qd_context* ctx, void* userdata) {
 		sh->ui_answer_count = answers_before;
 		qd_set_error_msg(ctx, error);
 		return 1;
+	}
+
+	// What ui::arg read is only taken now, and only for an answer: an app that
+	// stops, or finds nothing to give, has taken nothing
+	for (size_t i = 0; sh->ui_answer_count > answers_before && i < taken; i++) {
+		qdos_value gone;
+		pop_value(ctx, &gone);
 	}
 
 	// An app run from inside another answers to that one
@@ -8294,6 +8312,48 @@ static int native_answer(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+/**
+ * `ui::arg` - ( -- x:f64 ok:i64 ) the next number on the stack the app was run
+ * from, the top first; ok is 0 once there is none, or the next is not a number
+ */
+static int native_arg(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double x = 0.0;
+	int64_t ok = 0;
+
+	// Read, not popped: run_app takes them off once the app has finished
+	const qd_stack* st = (sh->app_caller != NULL) ? sh->app_caller->st : NULL;
+	if (st != NULL && sh->ui_args_taken < st->size) {
+		const qd_stack_element_t* e = &st->data[st->size - 1 - sh->ui_args_taken];
+		if (e->type == QD_STACK_TYPE_FLOAT || e->type == QD_STACK_TYPE_INT) {
+			x = (e->type == QD_STACK_TYPE_FLOAT) ? e->value.f : (double)e->value.i;
+			ok = 1;
+			sh->ui_args_taken++;
+		}
+	}
+
+	if (qd_push_f(ctx, x) != 0 || qd_push_i(ctx, ok) != 0) {
+		return 1;
+	}
+	return 0;
+}
+
+/** `ui::args` - ( -- n:i64 ) how many more numbers ui::arg can take before one that is not */
+static int native_args(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	int64_t n = 0;
+
+	const qd_stack* st = (sh->app_caller != NULL) ? sh->app_caller->st : NULL;
+	for (size_t i = sh->ui_args_taken; st != NULL && i < st->size; i++) {
+		const qd_stack_type type = st->data[st->size - 1 - i].type;
+		if (type != QD_STACK_TYPE_FLOAT && type != QD_STACK_TYPE_INT) {
+			break;
+		}
+		n++;
+	}
+	return qd_push_i(ctx, n) != 0;
+}
+
 /** `ui::put` - ( x:f64 slot:i64 -- ) keep a number for this run, 0 to 31 */
 static int native_put(qd_context* ctx, void* userdata) {
 	qdos_shell* sh = userdata;
@@ -9015,6 +9075,8 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "ui::input", "(prompt:str -- s:str ok:i64)", native_input, sh);
 	qd_interp_register(interp, "ui::put", "(x:f64 slot:i64 -- )", native_put, sh);
 	qd_interp_register(interp, "ui::answer", "(x:f64 -- )", native_answer, sh);
+	qd_interp_register(interp, "ui::arg", "( -- x:f64 ok:i64)", native_arg, sh);
+	qd_interp_register(interp, "ui::args", "( -- n:i64)", native_args, sh);
 	qd_interp_register(interp, "ui::get", "(slot:i64 -- x:f64)", native_get, sh);
 	qd_interp_register(interp, "ui::str", "(x:f64 -- s:str)", native_str, sh);
 	qd_interp_register(interp, "ui::cat", "(a:str b:str -- s:str)", native_cat, sh);

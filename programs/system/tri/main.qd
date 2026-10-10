@@ -41,8 +41,17 @@ fn answer3(x:f64 y:f64 z:f64 -- ) {
 	z ui::answer
 }
 
-fn ask(prompt:str -- x:f64 ok:i64) {
-	prompt ui::ask
+// Three parts off the calculator's stack when all three are there, in the
+// order the case names them, else asked for one by one
+fn three(p:str q:str r:str -- x:f64 y:f64 z:f64 ok:i64) {
+	ui::args 3 >= if {
+		ui::arg drop ui::arg drop ui::arg drop -> x -> y -> z
+		x y z 1 return
+	}
+	p ui::ask 0 == if { drop 0.0 0.0 0.0 0 return } -> x
+	q ui::ask 0 == if { drop 0.0 0.0 0.0 0 return } -> y
+	r ui::ask 0 == if { drop 0.0 0.0 0.0 0 return } -> z
+	x y z 1
 }
 
 fn main() {
@@ -50,9 +59,7 @@ fn main() {
 	k 0 == if { return }
 
 	k 1 == if {
-		"a?" ask 0 == if { drop return } -> a
-		"b?" ask 0 == if { drop return } -> b
-		"c?" ask 0 == if { drop return } -> c
+		"a?" "b?" "c?" three 0 == if { drop drop drop return } -> c -> b -> a
 		a b c sss if {
 			a b c facing -> aa
 			b a c facing -> bb
@@ -60,16 +67,12 @@ fn main() {
 		}
 	}
 	k 2 == if {
-		"a?" ask 0 == if { drop return } -> a
-		"C?" ask 0 == if { drop return } -> cc
-		"b?" ask 0 == if { drop return } -> b
+		"a?" "C?" "b?" three 0 == if { drop drop drop return } -> b -> cc -> a
 		a a * b b * + 2.0 a * b * cc cos * - sqrt -> c
 		a b c sss if { c a b c facing b a c facing answer3 }
 	}
 	k 3 == if {
-		"A?" ask 0 == if { drop return } -> aa
-		"c?" ask 0 == if { drop return } -> c
-		"B?" ask 0 == if { drop return } -> bb
+		"A?" "c?" "B?" three 0 == if { drop drop drop return } -> bb -> c -> aa
 		half aa - bb - -> cc
 		cc 0.0 <= if { "NO SUCH TRIANGLE" print nl } else {
 			c aa sin * cc sin divide -> a
@@ -79,9 +82,7 @@ fn main() {
 		}
 	}
 	k 4 == if {
-		"a?" ask 0 == if { drop return } -> a
-		"b?" ask 0 == if { drop return } -> b
-		"A?" ask 0 == if { drop return } -> aa
+		"a?" "b?" "A?" three 0 == if { drop drop drop return } -> aa -> b -> a
 		b aa sin * a divide -> s
 		s 1.0 > if { "NO SUCH TRIANGLE" print nl } else {
 			s asin -> bb

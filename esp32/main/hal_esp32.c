@@ -50,6 +50,26 @@ typedef struct {
 
 static esp_state g_esp;
 
+/** Set by an upload on the console's task, read by the shell's */
+static volatile bool g_store_touched;
+
+void qdos_esp32_store_touched(void) {
+	g_store_touched = true;
+
+	// The shell may be waiting on a key with no timeout
+	const qdos_input wake = {.wake = true};
+	if (g_esp.input != NULL) {
+		xQueueSend(g_esp.input, &wake, 0);
+	}
+}
+
+static bool esp_store_changed(qdos_hal* hal) {
+	(void)hal;
+	const bool touched = g_store_touched;
+	g_store_touched = false;
+	return touched;
+}
+
 static void mount_store(esp_state* st) {
 	const esp_vfs_fat_mount_config_t ro = {
 			.max_files = 4,
@@ -73,7 +93,7 @@ static void mount_store(esp_state* st) {
 	}
 
 	st->fs.system_dir = SYSTEM_MOUNT;
-	st->fs.inbox_dir = DATA_MOUNT "/inbox";
+	st->fs.inbox_dir = QDOS_ESP32_INBOX;
 	st->fs.store_dir = DATA_MOUNT "/user";
 	mkdir(st->fs.inbox_dir, 0755);
 	mkdir(st->fs.store_dir, 0755);
@@ -131,6 +151,9 @@ static bool esp_poll_key(qdos_hal* hal, qdos_key_event* out) {
 
 	qdos_input in;
 	while (xQueueReceive(st->input, &in, 0) == pdTRUE) {
+		if (in.wake) {
+			continue;
+		}
 		if (!in.pad) {
 			*out = in.key;
 			return true;
@@ -267,6 +290,7 @@ void qdos_esp32_hal(qdos_hal* hal) {
 	hal->store_remove = esp_store_remove;
 	hal->store_list = esp_store_list;
 	hal->store_path = esp_store_path;
+	hal->store_changed = esp_store_changed;
 	hal->time_of_day = esp_time_of_day;
 #if CONFIG_QDOS_SERIAL_STACK
 	hal->show_stack = esp_show_stack;

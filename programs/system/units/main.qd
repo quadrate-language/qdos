@@ -37,6 +37,16 @@ fn from_c(c:f64 unit:i64 -- v:f64) {
 	c 273.15 +
 }
 
+// The value off the calculator's stack the first time round, if there is one;
+// after that, or with none there, asked for
+fn amount(prompt:str -- v:f64 ok:i64) {
+	0 ui::get 0.0 == ui::args 1 >= and if {
+		1.0 0 ui::put
+		ui::arg return
+	}
+	prompt ui::ask
+}
+
 fn main() {
 	loop {
 		"CONVERT" kinds ui::menu -> kind
@@ -45,7 +55,7 @@ fn main() {
 		"FROM" names ui::menu -> from
 		from 0 != if {
 			names from 1 - nth -> unit
-			unit "?" ui::cat ui::ask 0 == if { drop } else {
+			unit "?" ui::cat amount 0 == if { drop } else {
 				-> v
 				[]str -> shown
 				[]f64 -> values

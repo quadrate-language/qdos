@@ -27,10 +27,19 @@ fn main() {
 	"SOLVE FOR" ["PAYMENT" "LOAN" "RATE %" "YEARS"] ui::menu -> want
 	want 0 == if { return }
 
-	want 2 != if { "LOAN?" "loan" ask 0 == if { drop return } 0 ui::put }
-	want 3 != if { "RATE %?" "rate" ask 0 == if { drop return } 1 ui::put }
-	want 4 != if { "YEARS?" "years" ask 0 == if { drop return } 2 ui::put }
-	want 1 != if { "PAYMENT?" "payment" ask 0 == if { drop return } 3 ui::put }
+	// The other three off the calculator's stack when they are all there, in
+	// the order they would be asked for, so the last is on top
+	ui::args 3 >= if {
+		want 1 != if { ui::arg drop 3 ui::put }
+		want 4 != if { ui::arg drop 2 ui::put }
+		want 3 != if { ui::arg drop 1 ui::put }
+		want 2 != if { ui::arg drop 0 ui::put }
+	} else {
+		want 2 != if { "LOAN?" "loan" ask 0 == if { drop return } 0 ui::put }
+		want 3 != if { "RATE %?" "rate" ask 0 == if { drop return } 1 ui::put }
+		want 4 != if { "YEARS?" "years" ask 0 == if { drop return } 2 ui::put }
+		want 1 != if { "PAYMENT?" "payment" ask 0 == if { drop return } 3 ui::put }
+	}
 
 	0 ui::get -> p
 	1 ui::get 1200.0 divide -> i

@@ -8,6 +8,12 @@
 
 #include <qdos/hal.h>
 
+/** @brief Where uploads land: the inbox scope */
+#define QDOS_ESP32_INBOX "/data/inbox"
+
+/** @brief Something landed on the inbox; the shell reads it again */
+void qdos_esp32_store_touched(void);
+
 /** @brief Fill in @p hal with the ESP32-S3 backend */
 void qdos_esp32_hal(qdos_hal* hal);
 

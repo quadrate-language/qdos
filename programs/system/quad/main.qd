@@ -5,14 +5,25 @@ fn f(x:f64 -- y:f64) {
 	0 ui::get x * x * 1 ui::get x * + 2 ui::get +
 }
 
+// a b c off the calculator's stack when all three are there, else asked for
+fn coefficients( -- a:f64 b:f64 c:f64 ok:i64) {
+	ui::args 3 >= if {
+		ui::arg drop ui::arg drop ui::arg drop -> a -> b -> c
+		a b c 1 return
+	}
+	"A?" ui::ask 0 == if { drop 0.0 0.0 0.0 0 return } -> a
+	a 0.0 == if { a 0.0 0.0 1 return }
+	"B?" ui::ask 0 == if { drop 0.0 0.0 0.0 0 return } -> b
+	"C?" ui::ask 0 == if { drop 0.0 0.0 0.0 0 return } -> c
+	a b c 1
+}
+
 fn main() {
-	"A?" ui::ask 0 == if { drop return } -> a
+	coefficients 0 == if { drop drop drop return } -> c -> b -> a
 	a 0.0 == if {
 		"A CANNOT BE 0" ui::say
 		return
 	}
-	"B?" ui::ask 0 == if { drop return } -> b
-	"C?" ui::ask 0 == if { drop return } -> c
 	a 0 ui::put
 	b 1 ui::put
 	c 2 ui::put
