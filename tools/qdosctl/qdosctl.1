@@ -1,0 +1,217 @@
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH QDOSCTL 1 "2026-10-10" "qdosctl 0.3.0" "QDOS Manual"
+.SH NAME
+qdosctl \- talk to a QDOS calculator over its USB serial console
+.SH SYNOPSIS
+.B qdosctl
+.RI [ OPTION ]...\&
+.B upload
+.IR PATH ...
+.br
+.B qdosctl
+.RI [ OPTION ]...\&
+.BR list " | " ping " | " console " | " log
+.br
+.B qdosctl
+.RI [ OPTION ]...\&
+.B remove
+.IR NAME ...
+.br
+.B qdosctl
+.RI [ OPTION ]...\&
+.B push
+.IR NUMBER ...
+.br
+.B qdosctl
+.RI [ OPTION ]...\&
+.BR run " | " type
+.I TEXT
+.br
+.B qdosctl
+.RI [ OPTION ]...\&
+.B key
+.IR NAME ...
+.SH DESCRIPTION
+.B qdosctl
+puts programs on a QDOS calculator, takes them off again, types at it and
+shows what it logs, all over the USB cable it is plugged in by.
+.PP
+The calculator's USB port is a serial console: what is typed at it arrives as
+key presses, and what it logs comes back. Files travel the same way, framed so
+they are never taken for typing. They land on the
+.IR inbox ,
+the store for programs that come from a computer, and the calculator reads the
+inbox again as soon as a file has arrived: a new app is in
+.B APPS
+at once, with no restart.
+.PP
+Only one program may have the port open at a time. Close a monitor or a
+terminal on it before running
+.BR qdosctl ,
+and
+.B qdosctl
+before flashing.
+.SH COMMANDS
+.TP
+.BI upload " PATH" ...
+Put programs and apps on the inbox. A file is put there under its own name; a
+folder is an app, and every file in it is put in a folder of that name, so
+.I ../qdos\-doom/doom
+becomes
+.IR doom/main.qd ,
+.I doom/doom1.wad
+and so on. Each file is checked against its CRC\-32 when it has arrived, and
+only then put in place, so the calculator never reads half of one. A file of
+the same name is replaced. Names are letters, digits,
+.BR . ", " _ " and " \- ,
+at most 64 long.
+.TP
+.B list
+List the files on the inbox, with their sizes.
+.TP
+.BI remove " NAME" ...
+Take a program, or an app with everything in it, off the inbox. What the
+firmware itself ships cannot be removed.
+.TP
+.BI push " NUMBER" ...
+Put numbers on the calculator's stack, the last on top, as if they had been
+typed and entered. A negative number needs no quoting:
+.BR "qdosctl push 1 \-3 2" .
+.TP
+.BI run " LINE"
+Evaluate a line, as if it had been typed on the input line and
+.B ENTER
+pressed: a word, an app, or a whole expression. Quote it if it has spaces.
+.TP
+.BI type " TEXT"
+Type text as it is, character by character, without pressing
+.BR ENTER .
+.TP
+.BI key " NAME" ...
+Press keys, in order:
+.BR enter ,
+.BR esc ,
+.BR del ,
+.BR tab ,
+.BR up ,
+.BR down ,
+.BR left ,
+.BR right ,
+.BR f1 " to " f5
+(the soft keys), and
+.B power
+(power off, saving the session).
+.TP
+.B console
+An interactive terminal on the calculator: what is typed goes to it as keys,
+and its log is shown.
+.B Ctrl\-]
+leaves.
+.TP
+.B log
+Print the calculator's log as it comes, until interrupted. With stack logging
+built in, every change to the stack is a line of it.
+.TP
+.B ping
+Check that QDOS is running and answering.
+.SH OPTIONS
+.TP
+.BR \-p ", " \-\-port " \fIDEVICE\fR"
+The serial port. Without it, the calculator is found by its USB name under
+.IR /dev/serial/by\-id ,
+and failing that the first
+.I /dev/ttyACM*
+is taken.
+.TP
+.BR \-q ", " \-\-quiet
+Print only errors.
+.TP
+.BR \-h ", " \-\-help
+Show a summary of the commands and exit.
+.TP
+.BR \-V ", " \-\-version
+Show the version and exit.
+.SH ENVIRONMENT
+.TP
+.B QDOS_PORT
+The serial port, when
+.B \-\-port
+is not given.
+.TP
+.B NO_COLOR
+When set, nothing is coloured.
+.SH EXIT STATUS
+.TP
+.B 0
+Everything was done.
+.TP
+.B 1
+The calculator refused something: a file that did not arrive whole, or a name
+that is not on the inbox.
+.TP
+.B 2
+The command line was wrong.
+.TP
+.B 3
+The calculator could not be reached: no port, no permission, the port in use,
+or QDOS not answering.
+.SH EXAMPLES
+Put a program and an app on the calculator, and see that they are there:
+.PP
+.RS
+.nf
+qdosctl upload hello.qd ../qdos\-doom/doom
+qdosctl list
+.fi
+.RE
+.PP
+Solve x\(ha2 \- 3x + 2 = 0 with the shipped
+.B quad
+app, which takes its coefficients off the stack:
+.PP
+.RS
+.nf
+qdosctl push 1 \-3 2
+qdosctl run quad
+.fi
+.RE
+.PP
+Open the menu of apps and start the first one:
+.PP
+.RS
+.nf
+qdosctl key f2 enter
+.fi
+.RE
+.SH FILES
+.TP
+.I /dev/serial/by\-id/usb\-Espressif*
+The calculator, as udev names it.
+.SH NOTES
+Using the port needs membership of the group that owns it:
+.B uucp
+on Arch Linux,
+.B dialout
+on Debian and Ubuntu.
+.B qdosctl
+names the group when it is refused.
+.PP
+The protocol is a Ctrl\-B, then one line \(em
+.BI PUT " size crc32 path" ,
+.BI DEL " path" ,
+.B LS
+or
+.B HELLO
+\(em then, for
+.BR PUT ,
+the file's bytes. The calculator answers each with a line beginning
+.BR "QDUP " ,
+among its log. See
+.I esp32/main/upload.c
+in the QDOS sources.
+.PP
+Native modules cannot be uploaded: the calculator has no dynamic linker, so
+they have to be built into its firmware.
+.SH SEE ALSO
+.BR stty (1),
+.BR picocom (1)

@@ -93,22 +93,23 @@ arrows are the arrows, F1–F5 the soft row, and F10 is power.
 
 ## Uploading
 
-The same port takes files for the inbox, as the Pi's USB drive does:
+The same port takes files for the inbox, as the Pi's USB drive does, through
+`qdosctl` from `tools/qdosctl` (`make install-qdosctl` puts it, its man page
+and its bash completion under `/usr/local`):
 
 ```bash
-./esp32/upload.py hello.qd                # a program
-./esp32/upload.py ../qdos-doom/doom       # an app: every file in the folder
-./esp32/upload.py --list
-./esp32/upload.py --remove hello.qd       # or an app's folder name
+qdosctl upload hello.qd ../qdos-doom/doom   # a program, and an app's folder
+qdosctl list
+qdosctl remove hello.qd
+qdosctl push 1 -3 2 && qdosctl run quad     # type at it, too
 ```
 
 The shell reads the inbox again as soon as a file lands, so a new app is in
 APPS without a restart. Nothing else may have the port open meanwhile, a
-monitor included; `--port` or `QDOS_PORT` names another one. An upload is a
-Ctrl-B and a command line, which typing never sends, then the file's bytes;
-each file is checked against its CRC-32 and renamed into place whole. See
-`main/upload.c`. A native module cannot be uploaded: with no dynamic linker it
-has to be built in, as DOOM is.
+monitor included. An upload is a Ctrl-B and a command line, which typing never
+sends, then the file's bytes; each file is checked against its CRC-32 and
+renamed into place whole. See `main/upload.c` and qdosctl(1). A native module
+cannot be uploaded: with no dynamic linker it has to be built in, as DOOM is.
 
 ## Power
 
@@ -154,7 +155,7 @@ The layout fits 8 MB of flash.
   below.
 - **The USB drive.** The S3 has a USB device controller and TinyUSB has a
   mass-storage class, so this is possible, but it is not done. The inbox is
-  written over the console instead, by `upload.py`.
+  written over the console instead, by `qdosctl`.
 - **A battery gauge**, until there is a battery.
 - **The time of day.** It reads as unset until something sets the clock. The
   RTC keeps the time through deep sleep, but nothing sets it yet.

@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# bash completion for qdosctl(1)
+
+_qdosctl() {
+	local cur prev words cword
+	_init_completion || return
+
+	local commands="upload list remove push run type key console log ping help"
+	local options="-p --port -q --quiet -h --help -V --version"
+	local keys="enter esc del tab up down left right f1 f2 f3 f4 f5 power"
+
+	case "$prev" in
+	-p | --port)
+		local -a ports=(/dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB*)
+		local p
+		COMPREPLY=()
+		for p in "${ports[@]}"; do
+			[[ -e "$p" && "$p" == "$cur"* ]] && COMPREPLY+=("$p")
+		done
+		return
+		;;
+	-h | --help | -V | --version)
+		return
+		;;
+	esac
+
+	# The command is the first word that is neither an option nor a port
+	local i command=""
+	for ((i = 1; i < cword; i++)); do
+		case "${words[i]}" in
+		-p | --port) ((i++)) ;;
+		-*) ;;
+		*)
+			command=${words[i]}
+			break
+			;;
+		esac
+	done
+
+	if [[ "$cur" == -* && "$cur" != -[0-9]* ]]; then
+		COMPREPLY=($(compgen -W "$options" -- "$cur"))
+		return
+	fi
+
+	case "$command" in
+	"")
+		COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+		;;
+	upload | up)
+		# Programs and the folders apps are
+		_filedir 'qd'
+		;;
+	key | keys)
+		COMPREPLY=($(compgen -W "$keys" -- "$cur"))
+		;;
+	*)
+		COMPREPLY=()
+		;;
+	esac
+} &&
+	complete -F _qdosctl qdosctl

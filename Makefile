@@ -4,6 +4,8 @@
 #   make format     reformat in place
 #   make fmtcheck   report what is not formatted, change nothing
 #   make esp32-qemu build the ESP32-S3 firmware and boot it under QEMU
+#   make install-qdosctl    install qdosctl, its man page and completion
+#                           (PREFIX=/usr/local, DESTDIR for packaging)
 
 # The .clang-format is Quadrate's, copied so the two trees read alike. QDOS is
 # mostly C where Quadrate is C++, so this sweeps .c as well.
@@ -14,7 +16,7 @@
 SOURCES = $(shell find src include tests examples -type f \
 	\( -name '*.c' -o -name '*.h' -o -name '*.cc' \) 2>/dev/null)
 
-.PHONY: format fmtcheck esp32-qemu esp32-qemu-build
+.PHONY: format fmtcheck esp32-qemu esp32-qemu-build install-qdosctl uninstall-qdosctl
 
 format:
 	clang-format -i $(SOURCES)
@@ -69,3 +71,17 @@ $(ESP32_BUILD)/qemu/bin/qemu-system-xtensa:
 	mkdir -p $(ESP32_BUILD)
 	curl -fL https://github.com/espressif/qemu/releases/download/$(QEMU_RELEASE)/$(QEMU_ASSET) \
 		| tar xJ -C $(ESP32_BUILD)
+
+# qdosctl, for talking to a calculator over USB; see tools/qdosctl/qdosctl.1
+PREFIX ?= /usr/local
+QDOSCTL_BIN = $(DESTDIR)$(PREFIX)/bin/qdosctl
+QDOSCTL_MAN = $(DESTDIR)$(PREFIX)/share/man/man1/qdosctl.1
+QDOSCTL_COMPLETION = $(DESTDIR)$(PREFIX)/share/bash-completion/completions/qdosctl
+
+install-qdosctl:
+	install -Dm755 tools/qdosctl/qdosctl $(QDOSCTL_BIN)
+	install -Dm644 tools/qdosctl/qdosctl.1 $(QDOSCTL_MAN)
+	install -Dm644 tools/qdosctl/qdosctl.bash-completion $(QDOSCTL_COMPLETION)
+
+uninstall-qdosctl:
+	rm -f $(QDOSCTL_BIN) $(QDOSCTL_MAN) $(QDOSCTL_COMPLETION)

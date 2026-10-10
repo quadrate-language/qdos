@@ -1,0 +1,506 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# qdosctl - talk to a QDOS calculator over its USB serial console
+#
+# The other end is esp32/main/serial_keys.c and esp32/main/upload.c. See
+# qdosctl(1).
+
+set -uo pipefail
+
+readonly VERSION="0.3.0"
+readonly PROG="${0##*/}"
+
+# Exit statuses, as qdosctl(1) lists them
+readonly EX_OK=0
+readonly EX_FAIL=1
+readonly EX_USAGE=2
+readonly EX_PORT=3
+
+# How long the calculator has to answer: a command line, and a reboot
+readonly REPLY_TIMEOUT=5
+readonly BOOT_TRIES=10
+
+PORT="${QDOS_PORT:-}"
+QUIET=0
+FD=""
+
+# ---- output -----------------------------------------------------------------
+
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; then
+	C_BOLD=$'\e[1m' C_DIM=$'\e[2m' C_RED=$'\e[31m' C_GREEN=$'\e[32m' C_OFF=$'\e[0m'
+else
+	C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_OFF=""
+fi
+
+die() {
+	local status=$1
+	shift
+	printf '%s: %serror:%s %s\n' "$PROG" "$C_RED" "$C_OFF" "$*" >&2
+	exit "$status"
+}
+
+info() {
+	((QUIET)) || printf '%s\n' "$*"
+}
+
+usage() {
+	cat <<EOF
+${C_BOLD}Usage:${C_OFF} $PROG [OPTION]... COMMAND [ARG]...
+
+Talk to a QDOS calculator over its USB serial console.
+
+${C_BOLD}Commands:${C_OFF}
+  upload PATH...     put programs (.qd) or app folders on the inbox
+  list               list what is on the inbox
+  remove NAME...     take a program or an app off the inbox
+  push NUMBER...     put numbers on the calculator's stack
+  run LINE           evaluate a line, as if typed and ENTER pressed
+  type TEXT          type text, character by character
+  key NAME...        press keys: enter, esc, del, tab, up, down, left,
+                     right, f1-f5, power
+  console            an interactive terminal; Ctrl-] leaves it
+  log                print the calculator's log until interrupted
+  ping               check that QDOS is answering
+
+${C_BOLD}Options:${C_OFF}
+  -p, --port DEVICE  the serial port (default: found, or \$QDOS_PORT)
+  -q, --quiet        print only errors
+  -h, --help         show this help and exit
+  -V, --version      show the version and exit
+
+See qdosctl(1) for details.
+EOF
+}
+
+# ---- the port ---------------------------------------------------------------
+
+# The calculator's own USB serial unit, by its stable name, or else the first
+# CDC ACM device
+find_port() {
+	local dev
+	for dev in /dev/serial/by-id/usb-Espressif*; do
+		[[ -e "$dev" ]] && { readlink -f "$dev"; return 0; }
+	done
+	for dev in /dev/ttyACM*; do
+		[[ -e "$dev" ]] && { printf '%s\n' "$dev"; return 0; }
+	done
+	return 1
+}
+
+open_port() {
+	if [[ -z "$PORT" ]]; then
+		PORT=$(find_port) || die "$EX_PORT" "no calculator found; plug it in by its USB port, or give --port"
+	fi
+	[[ -e "$PORT" ]] || die "$EX_PORT" "$PORT: no such device"
+
+	if [[ ! -r "$PORT" || ! -w "$PORT" ]]; then
+		local group
+		group=$(stat -c %G "$PORT" 2>/dev/null || echo "?")
+		die "$EX_PORT" "$PORT: permission denied; join the '$group' group (sudo usermod -aG $group \$USER) and log in again"
+	fi
+
+	if command -v fuser >/dev/null && fuser -s "$PORT" 2>/dev/null; then
+		die "$EX_PORT" "$PORT is in use by another program (a monitor?); only one may have it"
+	fi
+
+	# Opened once and held, so the board sees a single open; raw, so nothing
+	# is translated on the way
+	exec {FD}<>"$PORT" || die "$EX_PORT" "$PORT: cannot open"
+	stty -F "$PORT" 115200 raw -echo -echoe -echok -echoctl -echoke 2>/dev/null ||
+		die "$EX_PORT" "$PORT: not a serial port"
+}
+
+close_port() {
+	[[ -n "$FD" ]] && exec {FD}>&-
+	FD=""
+}
+
+# Bytes to the calculator, as given (printf's escapes are the caller's)
+send() {
+	printf '%b' "$1" >&"$FD"
+}
+
+# The next line of the upload protocol's, "QDUP ..." with the prefix taken
+# off; the log around it is skipped. False on timeout.
+REPLY=""
+reply() {
+	local timeout=${1:-$REPLY_TIMEOUT}
+	local deadline=$((SECONDS + timeout)) line
+	while ((SECONDS <= deadline)); do
+		IFS= read -r -t 1 -u "$FD" line || continue
+		line=${line%$'\r'}
+		if [[ "$line" == *"QDUP "* ]]; then
+			REPLY=${line#*QDUP }
+			return 0
+		fi
+	done
+	return 1
+}
+
+# A Ctrl-B and a command line; the answer is left in REPLY
+command_line() {
+	send '\x02'
+	printf '%s\n' "$1" >&"$FD"
+	reply "${2:-$REPLY_TIMEOUT}"
+}
+
+# The board may have been reset by the port being opened: give it the time
+# a boot takes
+hello() {
+	local i
+	for ((i = 0; i < BOOT_TRIES; i++)); do
+		command_line HELLO 1 && [[ "$REPLY" == OK ]] && return 0
+	done
+	die "$EX_PORT" "$PORT: QDOS is not answering (is the firmware older than the upload support?)"
+}
+
+# ---- helpers ----------------------------------------------------------------
+
+# CRC-32 as zlib computes it, from the trailer gzip writes after the data
+crc32() {
+	local bytes
+	bytes=$(gzip -c <"$1" | tail -c 8 | head -c 4 | od -An -tx1 | tr -d ' \n')
+	printf '%s%s%s%s' "${bytes:6:2}" "${bytes:4:2}" "${bytes:2:2}" "${bytes:0:2}"
+}
+
+human_size() {
+	local n=$1
+	if ((n >= 1048576)); then
+		printf '%d.%d MB' $((n / 1048576)) $((n % 1048576 * 10 / 1048576))
+	elif ((n >= 1024)); then
+		printf '%d.%d KB' $((n / 1024)) $((n % 1024 * 10 / 1024))
+	else
+		printf '%d B' "$n"
+	fi
+}
+
+# What the calculator calls a program or an app's file: a name, or app/name
+valid_name() {
+	[[ "$1" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9_-][A-Za-z0-9._-]{0,63})?$ ]]
+}
+
+key_bytes() {
+	case "${1,,}" in
+	enter | ret | return) printf '\\r' ;;
+	esc | escape | clear) printf '\\x1b' ;;
+	del | delete | backspace | bs) printf '\\x7f' ;;
+	tab) printf '\\t' ;;
+	up) printf '\\x1b[A' ;;
+	down) printf '\\x1b[B' ;;
+	right) printf '\\x1b[C' ;;
+	left) printf '\\x1b[D' ;;
+	f1) printf '\\x1bOP' ;;
+	f2) printf '\\x1bOQ' ;;
+	f3) printf '\\x1bOR' ;;
+	f4) printf '\\x1bOS' ;;
+	f5) printf '\\x1b[15~' ;;
+	power | off | f10) printf '\\x1b[21~' ;;
+	*) return 1 ;;
+	esac
+}
+
+# One key at a time: an Escape on its own is only ESC once nothing follows it
+press() {
+	send "$1"
+	sleep 0.08
+}
+
+# ---- commands ---------------------------------------------------------------
+
+cmd_upload() {
+	(($#)) || die "$EX_USAGE" "upload: nothing to upload"
+
+	# Every file first, so nothing is half done for a typing mistake
+	local -a locals=() remotes=()
+	local arg file app
+	for arg in "$@"; do
+		arg=${arg%/}
+		if [[ -d "$arg" ]]; then
+			app=${arg##*/}
+			for file in "$arg"/*; do
+				[[ -f "$file" ]] || continue
+				locals+=("$file")
+				remotes+=("$app/${file##*/}")
+			done
+		elif [[ -f "$arg" ]]; then
+			locals+=("$arg")
+			remotes+=("${arg##*/}")
+		else
+			die "$EX_USAGE" "upload: $arg: no such file or folder"
+		fi
+	done
+	((${#locals[@]})) || die "$EX_USAGE" "upload: no files to upload"
+	local i
+	for i in "${!remotes[@]}"; do
+		valid_name "${remotes[i]}" ||
+			die "$EX_USAGE" "upload: ${remotes[i]}: not a name the calculator takes (letters, digits, . _ -)"
+	done
+
+	open_port
+	hello
+
+	local failed=0 size crc width=0
+	for i in "${!remotes[@]}"; do
+		((${#remotes[i]} > width)) && width=${#remotes[i]}
+	done
+	for i in "${!locals[@]}"; do
+		file=${locals[i]}
+		size=$(stat -c %s "$file")
+		crc=$(crc32 "$file")
+
+		if ! command_line "PUT $size $crc ${remotes[i]}" || [[ "$REPLY" != READY ]]; then
+			printf '  %-*s  %s%s%s\n' "$width" "${remotes[i]}" "$C_RED" "${REPLY:-no answer}" "$C_OFF" >&2
+			failed=1
+			continue
+		fi
+		cat "$file" >&"$FD"
+
+		# Wear-levelled flash writes at well under 100 KB/s
+		if reply $((REPLY_TIMEOUT + size / 20000)) && [[ "$REPLY" == OK ]]; then
+			((QUIET)) || printf '  %-*s  %10s  %sok%s\n' "$width" "${remotes[i]}" "$(human_size "$size")" "$C_GREEN" "$C_OFF"
+		else
+			printf '  %-*s  %10s  %s%s%s\n' "$width" "${remotes[i]}" "$(human_size "$size")" \
+				"$C_RED" "${REPLY:-no answer}" "$C_OFF" >&2
+			failed=1
+		fi
+	done
+	return $((failed ? EX_FAIL : EX_OK))
+}
+
+cmd_list() {
+	(($# == 0)) || die "$EX_USAGE" "list: takes no arguments"
+	open_port
+	hello
+
+	send '\x02'
+	printf 'LS\n' >&"$FD"
+	local -a sizes=() paths=()
+	while reply; do
+		[[ "$REPLY" == OK ]] && break
+		[[ "$REPLY" == "F "* ]] || continue
+		REPLY=${REPLY#F }
+		sizes+=("${REPLY%% *}")
+		paths+=("${REPLY#* }")
+	done
+	[[ "$REPLY" == OK ]] || die "$EX_PORT" "list: the calculator stopped answering"
+
+	if ((${#paths[@]} == 0)); then
+		info "${C_DIM}The inbox is empty.${C_OFF}"
+		return "$EX_OK"
+	fi
+	local i total=0
+	while IFS=$'\t' read -r i; do
+		printf '%10s  %s\n' "$(human_size "${sizes[i]}")" "${paths[i]}"
+		total=$((total + sizes[i]))
+	done < <(for i in "${!paths[@]}"; do printf '%s\t%s\n' "$i" "${paths[i]}"; done | sort -t $'\t' -k2 | cut -f1)
+	((QUIET)) || printf '%s%10s  %d files%s\n' "$C_DIM" "$(human_size "$total")" "${#paths[@]}" "$C_OFF"
+}
+
+cmd_remove() {
+	(($#)) || die "$EX_USAGE" "remove: nothing to remove"
+	local name
+	for name in "$@"; do
+		valid_name "${name%/}" || die "$EX_USAGE" "remove: $name: not a name the calculator takes"
+	done
+
+	open_port
+	hello
+	local failed=0
+	for name in "$@"; do
+		name=${name%/}
+		if command_line "DEL $name" && [[ "$REPLY" == OK ]]; then
+			info "  removed $name"
+		else
+			case "$REPLY" in
+			"ERR MISSING") printf '  %s: %snot on the inbox%s\n' "$name" "$C_RED" "$C_OFF" >&2 ;;
+			*) printf '  %s: %s%s%s\n' "$name" "$C_RED" "${REPLY:-no answer}" "$C_OFF" >&2 ;;
+			esac
+			failed=1
+		fi
+	done
+	return $((failed ? EX_FAIL : EX_OK))
+}
+
+# A line: ':' opens the calculator's input line, as typing a letter does
+type_line() {
+	local text=$1 i
+	press ':'
+	for ((i = 0; i < ${#text}; i++)); do
+		printf '%s' "${text:i:1}" >&"$FD"
+	done
+	press '\r'
+}
+
+cmd_push() {
+	(($#)) || die "$EX_USAGE" "push: no numbers given"
+	local n
+	for n in "$@"; do
+		[[ "$n" =~ ^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$ ]] ||
+			die "$EX_USAGE" "push: $n: not a number"
+	done
+	open_port
+	hello
+	press '\x1b'
+	type_line "$*"
+	sleep 0.3
+}
+
+cmd_run() {
+	(($# == 1)) || die "$EX_USAGE" "run: give one line, quoted"
+	open_port
+	hello
+	press '\x1b'
+	type_line "$1"
+	sleep 0.3
+}
+
+cmd_type() {
+	(($# == 1)) || die "$EX_USAGE" "type: give the text as one argument, quoted"
+	open_port
+	hello
+	local text=$1 i
+	for ((i = 0; i < ${#text}; i++)); do
+		printf '%s' "${text:i:1}" >&"$FD"
+		sleep 0.02
+	done
+	sleep 0.2
+}
+
+cmd_key() {
+	(($#)) || die "$EX_USAGE" "key: no keys given"
+	local name seq
+	local -a seqs=()
+	for name in "$@"; do
+		seq=$(key_bytes "$name") || die "$EX_USAGE" "key: $name: no such key (see qdosctl(1))"
+		seqs+=("$seq")
+	done
+	open_port
+	hello
+	for seq in "${seqs[@]}"; do
+		press "$seq"
+	done
+	sleep 0.2
+}
+
+cmd_ping() {
+	(($# == 0)) || die "$EX_USAGE" "ping: takes no arguments"
+	open_port
+	hello
+	info "${C_GREEN}QDOS is answering${C_OFF} on $PORT"
+}
+
+cmd_log() {
+	(($# == 0)) || die "$EX_USAGE" "log: takes no arguments"
+	open_port
+	((QUIET)) || printf '%s-- the log from %s; Ctrl-C stops --%s\n' "$C_DIM" "$PORT" "$C_OFF" >&2
+	local line
+	while true; do
+		IFS= read -r -u "$FD" line || { [[ -e "$PORT" ]] || die "$EX_PORT" "$PORT went away"; continue; }
+		line=${line%$'\r'}
+		[[ "$line" == *"QDUP "* ]] && continue
+		printf '%s\n' "$line"
+	done
+}
+
+cmd_console() {
+	(($# == 0)) || die "$EX_USAGE" "console: takes no arguments"
+	[[ -t 0 ]] || die "$EX_USAGE" "console: needs a terminal"
+	open_port
+
+	local saved
+	saved=$(stty -g)
+	local reader=""
+	# shellcheck disable=SC2329 # run by the trap
+	restore() {
+		[[ -n "$reader" ]] && kill "$reader" 2>/dev/null
+		stty "$saved"
+		printf '\n%s-- left the console --%s\n' "$C_DIM" "$C_OFF" >&2
+	}
+	trap restore EXIT
+	trap 'exit 130' INT TERM
+
+	printf '%s-- console on %s; Ctrl-] leaves --%s\r\n' "$C_DIM" "$PORT" "$C_OFF" >&2
+	stty raw -echo
+	cat <&"$FD" &
+	reader=$!
+
+	local c
+	while IFS= read -rsN1 c; do
+		[[ "$c" == $'\x1d' ]] && break
+		printf '%s' "$c" >&"$FD"
+	done
+}
+
+# ---- main -------------------------------------------------------------------
+
+main() {
+	local -a args=()
+	while (($#)); do
+		case "$1" in
+		-p | --port)
+			(($# >= 2)) || die "$EX_USAGE" "$1 needs a device"
+			PORT=$2
+			shift 2
+			;;
+		--port=*)
+			PORT=${1#--port=}
+			shift
+			;;
+		-q | --quiet)
+			QUIET=1
+			shift
+			;;
+		-h | --help)
+			usage
+			exit "$EX_OK"
+			;;
+		-V | --version)
+			printf '%s %s\n' "$PROG" "$VERSION"
+			exit "$EX_OK"
+			;;
+		--)
+			shift
+			args+=("$@")
+			break
+			;;
+		-[0-9.]*)
+			# A negative number, after a command: push -3
+			((${#args[@]})) || die "$EX_USAGE" "unknown option $1 (try --help)"
+			args+=("$1")
+			shift
+			;;
+		-*)
+			die "$EX_USAGE" "unknown option $1 (try --help)"
+			;;
+		*)
+			args+=("$1")
+			shift
+			;;
+		esac
+	done
+
+	((${#args[@]})) || { usage >&2; exit "$EX_USAGE"; }
+	local command=${args[0]}
+	local -a rest=("${args[@]:1}")
+
+	case "$command" in
+	upload | up) cmd_upload "${rest[@]}" ;;
+	list | ls) cmd_list "${rest[@]}" ;;
+	remove | rm) cmd_remove "${rest[@]}" ;;
+	push) cmd_push "${rest[@]}" ;;
+	run) cmd_run "${rest[@]}" ;;
+	type) cmd_type "${rest[@]}" ;;
+	key | keys) cmd_key "${rest[@]}" ;;
+	console | term) cmd_console "${rest[@]}" ;;
+	log) cmd_log "${rest[@]}" ;;
+	ping) cmd_ping "${rest[@]}" ;;
+	help) usage ;;
+	*) die "$EX_USAGE" "unknown command '$command' (try --help)" ;;
+	esac
+	local status=$?
+	close_port
+	exit "$status"
+}
+
+main "$@"

@@ -5,7 +5,7 @@
  * The USB port is the terminal, so an upload is framed to be told apart from
  * typing: a Ctrl-B, then one line naming the command, then for PUT the file's
  * bytes. Every answer is one line starting "QDUP ", which the host picks out
- * from among the log. esp32/upload.py is the other end.
+ * from among the log. tools/qdosctl is the other end.
  *
  *   PUT <size> <crc32, hex> <path>   then <size> bytes
  *   DEL <path>                       a file, or an app folder and what is in it
