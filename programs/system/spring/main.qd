@@ -8,7 +8,7 @@ fn scene() {
 	-1.25 5.0 -1.6 1.6 ui::view
 }
 
-fn frame(t:f64 y:f64 -- ) {
+fn frame(t:f128 y:f128 -- ) {
 	ui::cls
 	0 8 70 2 1 ui::box
 	0.0 0.0 ui::at 5.0 0.0 ui::at ui::line

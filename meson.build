@@ -43,9 +43,9 @@ if not quadrate_src.startswith('/')
 endif
 quadrate_dist = quadrate_src / get_option('quadrate_dist')
 
-# Order matters: interp references qc and rt, math and qc reference rt and u8t
+# Order matters: interp references qc and rt, math, f128 and qc reference rt and u8t
 quadrate_libs = []
-foreach name : ['interp', 'qc', 'math', 'rt', 'u8t']
+foreach name : ['interp', 'qc', 'math', 'f128', 'rt', 'u8t']
 	quadrate_libs += quadrate_dist / 'lib/quadrate/lib' + name + '.a'
 endforeach
 
@@ -107,6 +107,7 @@ qdos_core = static_library('qdos_core',
 			'src/shell/infix.c',
 			'src/shell/stats.c',
 			'src/shell/statwords.c',
+			'src/shell/decimal.c',
 			version_h,
 			'src/hal/sim/keypad_ui.c',
 			'src/hal/sim/padfont.c',

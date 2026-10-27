@@ -5,7 +5,7 @@
 // an object of its own, and this works out a great many of them.
 
 // How many steps c takes to leave the circle of radius 2, or limit if it stays
-fn escape(cx:f64 cy:f64 limit:i64 -- n:i64) {
+fn escape(cx:f128 cy:f128 limit:i64 -- n:i64) {
 	0.0 -> x
 	0.0 -> y
 	0 -> n
@@ -36,7 +36,7 @@ fn cell(px:i64 py:i64 size:i64 n:i64 limit:i64 -- ) {
 }
 
 // The drawing, or the name of the key that stopped it
-fn draw(cx:f64 cy:f64 scale:f64 size:i64 limit:i64 -- pressed:str) {
+fn draw(cx:f128 cy:f128 scale:f128 size:i64 limit:i64 -- pressed:str) {
 	ui::cls
 	0 240 size for py {
 		cy 120 py - scale * + -> im

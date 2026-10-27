@@ -5,6 +5,8 @@
 
 #include "statwords.h"
 
+#include "decimal.h"
+
 #include "mathwords.h"
 #include "stats.h"
 
@@ -339,11 +341,7 @@ static int w_randint(qd_context* ctx, void* user) {
 #define LIST "(xs:[]f64 -- r:f64)"
 #define PAIR "(xs:[]f64 ys:[]f64 -- a:f64 b:f64)"
 
-static const struct {
-	const char* name;
-	const char* signature;
-	qd_interp_native_fn fn;
-} WORDS[] = {
+static const qdos_f64_word WORDS[] = {
 		{"sum", LIST, w_sum},
 		{"mean", LIST, w_mean},
 		{"median", LIST, w_median},
@@ -368,7 +366,5 @@ static const struct {
 };
 
 void qdos_register_stats(qd_interp* interp) {
-	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++) {
-		qd_interp_register(interp, WORDS[i].name, WORDS[i].signature, WORDS[i].fn, NULL);
-	}
+	qdos_register_f64_words(interp, WORDS, sizeof(WORDS) / sizeof(*WORDS));
 }

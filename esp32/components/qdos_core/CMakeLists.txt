@@ -42,6 +42,7 @@ idf_component_register(
 		"${QDOS}/src/shell/infix.c"
 		"${QDOS}/src/shell/stats.c"
 		"${QDOS}/src/shell/statwords.c"
+		"${QDOS}/src/shell/decimal.c"
 		"${QDOS}/src/hal/sim/keypad_ui.c"
 		"${QDOS}/src/hal/sim/padfont.c"
 		"${QDOS}/src/ui/console.c"

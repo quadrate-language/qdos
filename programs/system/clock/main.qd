@@ -2,19 +2,19 @@
 // A stopwatch and a countdown timer, in large figures. It only wakes up to
 // redraw while it is running; stopped, it waits for a key and nothing else.
 
-fn two(n:f64 -- s:str) {
+fn two(n:f128 -- s:str) {
 	n 10.0 < if { "0" n ui::cat return }
 	n ui::str
 }
 
-fn shown(ms:f64 -- s:str) {
+fn shown(ms:f128 -- s:str) {
 	ms 100.0 divide floor -> tenths
 	tenths 600.0 divide floor two ":" ui::cat
 	tenths 600.0 fmod 10.0 divide floor two ui::cat "." ui::cat
 	tenths 10.0 fmod ui::cat
 }
 
-fn face(title:str ms:f64 hint:str -- ) {
+fn face(title:str ms:f128 hint:str -- ) {
 	ui::cls
 	0 0 title ui::text
 	3 ms shown 3 ui::big

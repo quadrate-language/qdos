@@ -5,6 +5,8 @@
 
 #include "complex.h"
 
+#include "decimal.h"
+
 #include "mathwords.h"
 
 #include <quadrate/rt/qd_struct.h>
@@ -65,7 +67,7 @@ int qdos_cpx_push(qd_context* ctx, double re, double im) {
 		re = 0.0;
 	}
 	if (im == 0.0) {
-		return qd_push_f(ctx, re);
+		return qdos_decimal() ? qd_push_q(ctx, qdos_decimal_of_double(re)) : qd_push_f(ctx, re);
 	}
 
 	cpx* z = (cpx*)qd_struct_alloc(sizeof(cpx), cpx_destroy);
@@ -115,6 +117,10 @@ static bool peek(qd_context* ctx, size_t depth, double complex* out, bool* is_co
 		*out = CMPLX(element.value.f, 0.0);
 		return true;
 	}
+	if (element.type == QD_STACK_TYPE_F128) {
+		*out = CMPLX(qd_f128_to_f64(element.value.q), 0.0);
+		return true;
+	}
 	return false;
 }
 
@@ -141,7 +147,7 @@ static int answer(qd_context* ctx, const char* word, size_t arity, double comple
 
 static int real_answer(qd_context* ctx, size_t arity, double x) {
 	drop(ctx, arity);
-	return qd_push_f(ctx, x);
+	return qdos_decimal() ? qd_push_q(ctx, qdos_decimal_of_double(x)) : qd_push_f(ctx, x);
 }
 
 /* Whether a real argument leaves the reals here, and the mode lets it */
@@ -345,13 +351,18 @@ static int w_i(qd_context* ctx, void* user) {
 	return qdos_cpx_push(ctx, 0.0, 1.0);
 }
 
+// A complex number's parts are f64; with decimal on, parts go in and come out as decimals
+static const qdos_f64_word WORDS[] = {
+		{"complex", "(re:f64 im:f64 -- z:ptr)", w_complex},
+		{"csplit", "(z:ptr -- re:f64 im:f64)", w_csplit},
+		{"polar", "(r:f64 theta:f64 -- z:ptr)", w_polar},
+		{"real", "(z:ptr -- x:f64)", w_real},
+		{"imag", "(z:ptr -- y:f64)", w_imag},
+		{"angle", "(z:ptr -- theta:f64)", w_angle},
+		{"conj", "(z:ptr -- w:ptr)", w_conj},
+		{"i", "( -- z:ptr)", w_i},
+};
+
 void qdos_register_complex(qd_interp* interp) {
-	qd_interp_register(interp, "complex", "(re:f64 im:f64 -- z:ptr)", w_complex, NULL);
-	qd_interp_register(interp, "csplit", "(z:ptr -- re:f64 im:f64)", w_csplit, NULL);
-	qd_interp_register(interp, "polar", "(r:f64 theta:f64 -- z:ptr)", w_polar, NULL);
-	qd_interp_register(interp, "real", "(z:ptr -- x:f64)", w_real, NULL);
-	qd_interp_register(interp, "imag", "(z:ptr -- y:f64)", w_imag, NULL);
-	qd_interp_register(interp, "angle", "(z:ptr -- theta:f64)", w_angle, NULL);
-	qd_interp_register(interp, "conj", "(z:ptr -- w:ptr)", w_conj, NULL);
-	qd_interp_register(interp, "i", "( -- z:ptr)", w_i, NULL);
+	qdos_register_f64_words(interp, WORDS, sizeof(WORDS) / sizeof(*WORDS));
 }

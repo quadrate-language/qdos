@@ -5,12 +5,14 @@
 
 #include <qdos/shell.h>
 
+#include <quadrate/f128/f128.h>
 #include <quadrate/interp/interp.h>
 #include <quadrate/rt/array.h>
 
 #include "../ui/console.h"
 #include "complete.h"
 #include "complex.h"
+#include "decimal.h"
 #include "editor.h"
 #include "graph.h"
 #include "guarded.h"
@@ -158,6 +160,9 @@ typedef enum {
 
 #define DECIMALS_AUTO -1
 #define DECIMALS_MAX 9
+
+/// Digits before the point a decimal is still written out plain with, as an i64 is
+#define DECIMAL_PLAIN_MAX 19
 
 enum {
 	NOTATION_NORMAL = 0,
@@ -501,6 +506,15 @@ struct qdos_shell {
 
 	size_t auto_off; ///< Index into AUTO_OFF_MINUTES
 	bool off_warned; ///< The warning is already on screen
+
+	/// The natives written for f64, each kept to decimals through qdos_decimal_call()
+	struct f64_native {
+		qd_interp_native_fn fn;
+		size_t inputs;
+		qdos_shell* sh;
+	} f64_natives[32];
+
+	size_t f64_native_count;
 };
 
 /** @brief How long the machine may sit idle, in ms; nought means never */
@@ -720,7 +734,150 @@ static void tidy_exponent(char* text) {
 	memmove(digits, digits + zeros, strlen(digits + zeros) + 1);
 }
 
+/* A finite f128 as its digits, leading zeros gone, and how many of them come before the point */
+typedef struct {
+	bool negative;
+	char digits[QD_F128_STRING_MAX];
+	int count;
+	int point;
+} decimal_digits;
+
+static void decimal_digits_of(qd_f128_t q, decimal_digits* d) {
+	char text[QD_F128_STRING_MAX];
+	qd_f128_format(q, text, sizeof(text));
+	const char* p = text;
+	d->negative = (*p == '-');
+	if (*p == '-' || *p == '+') {
+		p++;
+	}
+	d->count = 0;
+	int before = -1;
+	for (; *p != '\0' && *p != 'e' && *p != 'E'; p++) {
+		if (*p == '.') {
+			before = d->count;
+		} else {
+			d->digits[d->count++] = *p;
+		}
+	}
+	d->point = ((before < 0) ? d->count : before) + ((*p != '\0') ? atoi(p + 1) : 0);
+	int lead = 0;
+	while (lead < d->count - 1 && d->digits[lead] == '0') {
+		lead++;
+	}
+	memmove(d->digits, d->digits + lead, (size_t)(d->count - lead));
+	d->count -= lead;
+	d->point -= lead;
+	d->digits[d->count] = '\0';
+}
+
+/* 0.00012, 1200 and 12.5, with the fraction padded out to @p decimals places */
+static void decimal_plain(const decimal_digits* d, int decimals, char* out, size_t cap) {
+	size_t len = 0;
+	const bool zero = d->count == 1 && d->digits[0] == '0';
+	if (d->negative && len + 1 < cap) {
+		out[len++] = '-';
+	}
+	if (d->point <= 0 || zero) {
+		out[len++] = '0';
+	}
+	for (int i = 0; i < d->point && !zero && len + 1 < cap; i++) {
+		out[len++] = (i < d->count) ? d->digits[i] : '0';
+	}
+	int fraction = 0;
+	if (!zero) {
+		for (int i = d->point; i < d->count && len + 2 < cap; i++, fraction++) {
+			if (fraction == 0) {
+				out[len++] = '.';
+			}
+			out[len++] = (i < 0) ? '0' : d->digits[i];
+		}
+	}
+	for (; fraction < decimals && len + 2 < cap; fraction++) {
+		if (fraction == 0) {
+			out[len++] = '.';
+		}
+		out[len++] = '0';
+	}
+	out[len] = '\0';
+}
+
+/* 1.25e-7, as tidy_exponent leaves a double */
+static void decimal_scientific(const decimal_digits* d, char* out, size_t cap) {
+	snprintf(out, cap, "%s%c%s%se%d", d->negative ? "-" : "", d->digits[0], (d->count > 1) ? "." : "", d->digits + 1,
+			d->point - 1);
+}
+
+/* @p q rounded to @p digits significant digits, trailing zeros stripped */
+static qd_f128_t decimal_round(qd_f128_t q, int point, int digits) {
+	char like[24];
+	snprintf(like, sizeof(like), "1e%d", point - digits);
+	qd_f128_t unit;
+	if (!qd_f128_parse(like, &unit)) {
+		return q;
+	}
+	return qd_f128_reduce(qd_f128_quantize(q, unit));
+}
+
+/**
+ * @brief An f128 as the settings say to show it, in @p room columns
+ *
+ * Shown plain while it fits and is not tiny or vast, then with as many digits as fit,
+ * rounded, then in exponent form. A fixed number of decimals keeps the column.
+ */
+static void format_decimal(const qdos_shell* sh, qd_f128_t q, char* out, size_t cap, size_t room) {
+	if (!qd_f128_is_finite(q)) {
+		qd_f128_format(q, out, cap);
+		return;
+	}
+	const double near = qd_f128_to_f64(q);
+	// Past a double's range SCI and ENG are left to the exponent form below
+	if (sh->notation != NOTATION_NORMAL && isfinite(near) && (near != 0.0 || qd_f128_is_zero(q))) {
+		format_exponent(near, sh->notation == NOTATION_ENG, sh->decimals, out, cap);
+		if (strlen(out) <= room) {
+			return;
+		}
+	} else if (sh->decimals != DECIMALS_AUTO) {
+		char like[24];
+		snprintf(like, sizeof(like), "1e-%d", sh->decimals);
+		qd_f128_t unit;
+		const qd_f128_t fixed = qd_f128_parse(like, &unit) ? qd_f128_quantize(q, unit) : qd_f128_nan();
+		if (!qd_f128_is_nan(fixed)) {
+			decimal_digits d;
+			decimal_digits_of(fixed, &d);
+			decimal_plain(&d, sh->decimals, out, cap);
+			if (strlen(out) <= room) {
+				return;
+			}
+		}
+	}
+
+	decimal_digits d;
+	decimal_digits_of(qd_f128_reduce(q), &d);
+	for (int digits = d.count; digits >= 1; digits--) {
+		decimal_digits r;
+		decimal_digits_of(decimal_round(q, d.point, digits), &r);
+		if (r.point > -4 && r.point <= DECIMAL_PLAIN_MAX) {
+			decimal_plain(&r, 0, out, cap);
+			if (strlen(out) <= room) {
+				return;
+			}
+		}
+		decimal_scientific(&r, out, cap);
+		if (strlen(out) <= room) {
+			return;
+		}
+	}
+}
+
 static void format_value(const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap, size_t room) {
+	if (value->type == QD_INTERP_VALUE_F128) {
+		qd_f128_t q;
+		if (qd_f128_parse(value->text, &q)) {
+			format_decimal(sh, q, out, cap, room);
+			return;
+		}
+	}
+
 	const bool number = value->type == QD_INTERP_VALUE_INT || value->type == QD_INTERP_VALUE_FLOAT;
 	const double shown = (value->type == QD_INTERP_VALUE_INT) ? (double)value->i : value->f;
 
@@ -1533,7 +1690,8 @@ static bool entry_commit(qdos_shell* sh) {
 		len += (size_t)snprintf(text + len, sizeof(text) - len, "e%s", exponent);
 	}
 
-	// A whole number too big for an integer is a float, not the nought Quadrate reads it as
+	// A whole number too big for an integer is a float -- in decimal an f128, which holds it
+	// exactly -- not the nought Quadrate reads it as
 	if (strchr(text, '.') == NULL && strchr(text, 'e') == NULL) {
 		errno = 0;
 		(void)strtoll(text, NULL, 10);
@@ -1542,8 +1700,9 @@ static bool entry_commit(qdos_shell* sh) {
 		}
 	}
 
-	// Refused as the keys refuse a result past the largest double
-	if (!isfinite(strtod(text, NULL))) {
+	// Refused as the keys refuse a result past the largest number the stack can hold
+	qd_f128_t typed;
+	if (qdos_decimal() ? !qd_f128_parse(text, &typed) || !qd_f128_is_finite(typed) : !isfinite(strtod(text, NULL))) {
 		set_message(sh, "OVERFLOW", true);
 		return false;
 	}
@@ -1721,7 +1880,7 @@ static void entry_negate(qdos_shell* sh) {
 		double re, im;
 		const bool number = qd_interp_peek(sh->interp, 0, &top) &&
 							(top.type == QD_INTERP_VALUE_INT || top.type == QD_INTERP_VALUE_FLOAT ||
-									qdos_cpx_of(&st->data[st->size - 1], &re, &im));
+									top.type == QD_INTERP_VALUE_F128 || qdos_cpx_of(&st->data[st->size - 1], &re, &im));
 		apply_word(sh, number ? "-1 times" : "neg");
 		return;
 	}
@@ -3794,7 +3953,8 @@ static bool graph_run(
 	qd_context* ctx = qd_interp_context(interp);
 	const size_t before = qd_interp_depth(interp);
 	for (size_t k = 0; k < count; k++) {
-		if (qd_push_f(ctx, in[k]) != 0) {
+		// In decimal the word's own numbers are f128, which an f64 would not mix with
+		if ((qdos_decimal() ? qd_push_q(ctx, qdos_decimal_of_double(in[k])) : qd_push_f(ctx, in[k])) != 0) {
 			while (qd_interp_depth(interp) > before && qdos_guarded_eval(interp, "drop")) {
 			}
 			return false;
@@ -3811,8 +3971,11 @@ static bool graph_run(
 		for (size_t k = 0; k < outs && got; k++) {
 			qd_interp_value v;
 			if (qd_interp_peek(interp, outs - 1 - k, &v) &&
-					(v.type == QD_INTERP_VALUE_INT || v.type == QD_INTERP_VALUE_FLOAT)) {
-				out[k] = (v.type == QD_INTERP_VALUE_INT) ? (double)v.i : v.f;
+					(v.type == QD_INTERP_VALUE_INT || v.type == QD_INTERP_VALUE_FLOAT ||
+							v.type == QD_INTERP_VALUE_F128)) {
+				out[k] = (v.type == QD_INTERP_VALUE_INT)	? (double)v.i
+						 : (v.type == QD_INTERP_VALUE_F128) ? strtod(v.text, NULL)
+															: v.f;
 			} else {
 				snprintf(sh->graph_error, sizeof(sh->graph_error), "'%.24s' MUST LEAVE A NUMBER", word);
 				got = false;
@@ -5335,9 +5498,12 @@ static bool field_number(qdos_shell* sh, double* out) {
 		set_message(sh, "NEED ONE NUMBER", true);
 	} else {
 		qd_interp_value v;
-		got = qd_interp_peek(interp, 0, &v) && (v.type == QD_INTERP_VALUE_INT || v.type == QD_INTERP_VALUE_FLOAT);
+		got = qd_interp_peek(interp, 0, &v) &&
+			  (v.type == QD_INTERP_VALUE_INT || v.type == QD_INTERP_VALUE_FLOAT || v.type == QD_INTERP_VALUE_F128);
 		if (got) {
-			*out = (v.type == QD_INTERP_VALUE_INT) ? (double)v.i : v.f;
+			*out = (v.type == QD_INTERP_VALUE_INT)	  ? (double)v.i
+				   : (v.type == QD_INTERP_VALUE_F128) ? strtod(v.text, NULL)
+													  : v.f;
 			got = isfinite(*out);
 		}
 		if (!got) {
@@ -8346,6 +8512,11 @@ static int native_arg(qd_context* ctx, void* userdata) {
 	const qd_stack* st = (sh->app_caller != NULL) ? sh->app_caller->st : NULL;
 	if (st != NULL && sh->ui_args_taken < st->size) {
 		const qd_stack_element_t* e = &st->data[st->size - 1 - sh->ui_args_taken];
+		if (e->type == QD_STACK_TYPE_F128) {
+			// Handed over whole, every digit of it
+			sh->ui_args_taken++;
+			return (qd_push_q(ctx, e->value.q) != 0 || qd_push_i(ctx, 1) != 0) ? 1 : 0;
+		}
 		if (e->type == QD_STACK_TYPE_FLOAT || e->type == QD_STACK_TYPE_INT) {
 			x = (e->type == QD_STACK_TYPE_FLOAT) ? e->value.f : (double)e->value.i;
 			ok = 1;
@@ -8367,7 +8538,7 @@ static int native_args(qd_context* ctx, void* userdata) {
 	const qd_stack* st = (sh->app_caller != NULL) ? sh->app_caller->st : NULL;
 	for (size_t i = sh->ui_args_taken; st != NULL && i < st->size; i++) {
 		const qd_stack_type type = st->data[st->size - 1 - i].type;
-		if (type != QD_STACK_TYPE_FLOAT && type != QD_STACK_TYPE_INT) {
+		if (type != QD_STACK_TYPE_FLOAT && type != QD_STACK_TYPE_INT && type != QD_STACK_TYPE_F128) {
 			break;
 		}
 		n++;
@@ -9046,7 +9217,36 @@ static int native_rollu(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+static int through_decimal(qd_context* ctx, void* userdata) {
+	const struct f64_native* entry = userdata;
+	return qdos_decimal_call(ctx, entry->inputs, entry->fn, entry->sh);
+}
+
+/* A native written for f64, kept to decimals: one entry per native, shared by every interp */
+static void register_f64(
+		qdos_shell* sh, qd_interp* interp, const char* name, const char* signature, qd_interp_native_fn fn) {
+	size_t k = 0;
+	while (k < sh->f64_native_count && sh->f64_natives[k].fn != fn) {
+		k++;
+	}
+	if (k == sh->f64_native_count) {
+		if (k == sizeof(sh->f64_natives) / sizeof(*sh->f64_natives)) {
+			qd_interp_register(interp, name, signature, fn, sh);
+			return;
+		}
+		sh->f64_natives[k].fn = fn;
+		sh->f64_natives[k].inputs = qdos_signature_inputs(signature);
+		sh->f64_natives[k].sh = sh;
+		sh->f64_native_count++;
+	}
+	qd_interp_register(interp, name, signature, through_decimal, &sh->f64_natives[k]);
+}
+
 static void register_natives(qdos_shell* sh, qd_interp* interp) {
+	// Numbers typed with a point are decimal, and f128:: is there for a program to call
+	qd_interp_set_default_float(interp, qdos_decimal() ? QD_INTERP_FLOAT_F128 : QD_INTERP_FLOAT_F64);
+	qd_f128_register(qd_interp_context(interp));
+
 	qd_interp_register(interp, "lastx", "( -- x:f64)", native_lastx, sh);
 	qd_interp_register(interp, "rolld", "( -- )", native_rolld, sh);
 	qd_interp_register(interp, "rollu", "( -- )", native_rollu, sh);
@@ -9060,13 +9260,13 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "cls", "( -- )", native_cls, sh);
 
 	// What CALC finds on a graph, for any word taking x and leaving y
-	qd_interp_register(interp, "root", "(f:str a:f64 b:f64 -- x:f64)", native_root, sh);
-	qd_interp_register(interp, "fmin", "(f:str a:f64 b:f64 -- x:f64)", native_fmin, sh);
-	qd_interp_register(interp, "fmax", "(f:str a:f64 b:f64 -- x:f64)", native_fmax, sh);
-	qd_interp_register(interp, "nderiv", "(f:str x:f64 -- d:f64)", native_nderiv, sh);
-	qd_interp_register(interp, "fnint", "(f:str a:f64 b:f64 -- area:f64)", native_fnint, sh);
-	qd_interp_register(interp, "intersect", "(f:str g:str a:f64 b:f64 -- x:f64)", native_intersect, sh);
-	qd_interp_register(interp, "area", "(f:str g:str a:f64 b:f64 -- area:f64)", native_area, sh);
+	register_f64(sh, interp, "root", "(f:str a:f64 b:f64 -- x:f64)", native_root);
+	register_f64(sh, interp, "fmin", "(f:str a:f64 b:f64 -- x:f64)", native_fmin);
+	register_f64(sh, interp, "fmax", "(f:str a:f64 b:f64 -- x:f64)", native_fmax);
+	register_f64(sh, interp, "nderiv", "(f:str x:f64 -- d:f64)", native_nderiv);
+	register_f64(sh, interp, "fnint", "(f:str a:f64 b:f64 -- area:f64)", native_fnint);
+	register_f64(sh, interp, "intersect", "(f:str g:str a:f64 b:f64 -- x:f64)", native_intersect);
+	register_f64(sh, interp, "area", "(f:str g:str a:f64 b:f64 -- area:f64)", native_area);
 
 	for (int i = 0; i < STAT_LISTS; i++) {
 		char name[4];
@@ -9075,7 +9275,7 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 		sh->list_word[i].index = i;
 		qd_interp_register(interp, name, "( -- xs:[]f64)", native_list, &sh->list_word[i]);
 	}
-	qd_interp_register(interp, "lsto", "(xs:[]f64 n:i64 -- )", native_lsto, sh);
+	register_f64(sh, interp, "lsto", "(xs:[]f64 n:i64 -- )", native_lsto);
 	qdos_register_stats(interp);
 
 	// The machine itself, for a program that has taken the screen
@@ -9085,21 +9285,21 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "ui::wait", "( -- key:i64 ch:i64)", native_wait, sh);
 	qd_interp_register(interp, "ui::say", "(s:str -- )", native_say, sh);
 	qd_interp_register(interp, "ui::plot", "(f:str -- )", native_plot, sh);
-	qd_interp_register(interp, "ui::window", "(x0:f64 x1:f64 y0:f64 y1:f64 -- )", native_window, sh);
-	qd_interp_register(interp, "ui::ask", "(prompt:str -- x:f64 ok:i64)", native_ask, sh);
-	qd_interp_register(interp, "ui::ask_or", "(prompt:str x:f64 -- x:f64 ok:i64)", native_ask_or, sh);
+	register_f64(sh, interp, "ui::window", "(x0:f64 x1:f64 y0:f64 y1:f64 -- )", native_window);
+	register_f64(sh, interp, "ui::ask", "(prompt:str -- x:f64 ok:i64)", native_ask);
+	register_f64(sh, interp, "ui::ask_or", "(prompt:str x:f64 -- x:f64 ok:i64)", native_ask_or);
 	qd_interp_register(interp, "ui::menu", "(title:str items:[]str -- i:i64)", native_menu, sh);
 	qd_interp_register(interp, "ui::pause", "( -- )", native_pause, sh);
 	qd_interp_register(interp, "ui::sleep", "(ms:i64 -- )", native_sleep, sh);
 	qd_interp_register(interp, "ui::points", "(on:i64 -- )", native_points, sh);
 	qd_interp_register(interp, "ui::keyname", "(key:i64 ch:i64 -- s:str)", native_keyname, sh);
 	qd_interp_register(interp, "ui::input", "(prompt:str -- s:str ok:i64)", native_input, sh);
-	qd_interp_register(interp, "ui::put", "(x:f64 slot:i64 -- )", native_put, sh);
+	register_f64(sh, interp, "ui::put", "(x:f64 slot:i64 -- )", native_put);
 	qd_interp_register(interp, "ui::answer", "(x:f64 -- )", native_answer, sh);
-	qd_interp_register(interp, "ui::arg", "( -- x:f64 ok:i64)", native_arg, sh);
+	register_f64(sh, interp, "ui::arg", "( -- x:f64 ok:i64)", native_arg);
 	qd_interp_register(interp, "ui::args", "( -- n:i64)", native_args, sh);
-	qd_interp_register(interp, "ui::get", "(slot:i64 -- x:f64)", native_get, sh);
-	qd_interp_register(interp, "ui::str", "(x:f64 -- s:str)", native_str, sh);
+	register_f64(sh, interp, "ui::get", "(slot:i64 -- x:f64)", native_get);
+	register_f64(sh, interp, "ui::str", "(x:f64 -- s:str)", native_str);
 	qd_interp_register(interp, "ui::cat", "(a:str b:str -- s:str)", native_cat, sh);
 	qd_interp_register(interp, "ui::cls", "( -- )", native_ui_cls, sh);
 	qd_interp_register(interp, "ui::show", "( -- )", native_show, sh);
@@ -9108,19 +9308,18 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "ui::big", "(row:i64 s:str scale:i64 -- )", native_big, sh);
 	qd_interp_register(interp, "ui::pixel", "(x:i64 y:i64 on:i64 -- )", native_pixel, sh);
 	qd_interp_register(interp, "ui::write", "(x:i64 y:i64 s:str scale:i64 -- )", native_write, sh);
-	qd_interp_register(interp, "ui::save", "(x:f64 name:str -- )", native_save, sh);
-	qd_interp_register(interp, "ui::load", "(name:str -- x:f64 ok:i64)", native_load, sh);
+	register_f64(sh, interp, "ui::save", "(x:f64 name:str -- )", native_save);
+	register_f64(sh, interp, "ui::load", "(name:str -- x:f64 ok:i64)", native_load);
 	qd_interp_register(interp, "ui::line", "(x0:i64 y0:i64 x1:i64 y1:i64 -- )", native_line, sh);
-	qd_interp_register(
-			interp, "ui::spring", "(x0:f64 y0:f64 x1:f64 y1:f64 coils:i64 width:f64 -- )", native_spring, sh);
+	register_f64(sh, interp, "ui::spring", "(x0:f64 y0:f64 x1:f64 y1:f64 coils:i64 width:f64 -- )", native_spring);
 	qd_interp_register(interp, "ui::box", "(x:i64 y:i64 w:i64 h:i64 fill:i64 -- )", native_box, sh);
-	qd_interp_register(interp, "ui::circle", "(x:f64 y:f64 r:f64 fill:i64 -- )", native_circle, sh);
-	qd_interp_register(interp, "ui::arrow", "(x0:f64 y0:f64 x1:f64 y1:f64 -- )", native_arrow, sh);
-	qd_interp_register(interp, "ui::trace", "(x:f64 y:f64 -- )", native_trace, sh);
+	register_f64(sh, interp, "ui::circle", "(x:f64 y:f64 r:f64 fill:i64 -- )", native_circle);
+	register_f64(sh, interp, "ui::arrow", "(x0:f64 y0:f64 x1:f64 y1:f64 -- )", native_arrow);
+	register_f64(sh, interp, "ui::trace", "(x:f64 y:f64 -- )", native_trace);
 	qd_interp_register(interp, "ui::trace_clear", "( -- )", native_trace_clear, sh);
-	qd_interp_register(interp, "ui::view", "(x0:f64 x1:f64 y0:f64 y1:f64 -- )", native_view, sh);
-	qd_interp_register(interp, "ui::at", "(x:f64 y:f64 -- px:f64 py:f64)", native_at, sh);
-	qd_interp_register(interp, "ui::frame", "(fps:i64 -- dt:f64)", native_frame, sh);
+	register_f64(sh, interp, "ui::view", "(x0:f64 x1:f64 y0:f64 y1:f64 -- )", native_view);
+	register_f64(sh, interp, "ui::at", "(x:f64 y:f64 -- px:f64 py:f64)", native_at);
+	register_f64(sh, interp, "ui::frame", "(fps:i64 -- dt:f64)", native_frame);
 	qd_interp_register(interp, "ui::pressed", "( -- name:str)", native_pressed, sh);
 	qdos_register_math(interp);
 	qdos_register_complex(interp);
@@ -9228,6 +9427,7 @@ qdos_shell* qdos_shell_create(qdos_hal* hal) {
 	sh->cursor_on = true;		  // nor a cursor that starts out invisible
 	sh->auto_off = AUTO_OFF_DEFAULT;
 	restore_settings(sh); // over the defaults just set, where anything was saved
+	qdos_decimal_set(true);
 	register_natives(sh, sh->interp);
 	qdos_console_init(&sh->con);
 

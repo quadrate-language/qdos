@@ -8,6 +8,8 @@
 
 #include "native.h"
 
+#include "decimal.h"
+
 #include <quadrate/rt/runtime.h>
 
 #ifdef QDOS_NO_DLOPEN
@@ -270,7 +272,7 @@ static const char* app_of(const qdos_native_word* word) {
 }
 
 /** @brief The interpreter calls this; the module's own function is the userdata */
-static int call_word(qd_context* ctx, void* userdata) {
+static int call_word_binary(qd_context* ctx, void* userdata) {
 	const qdos_native_word* word = (const qdos_native_word*)userdata;
 
 	if (!g_called) {
@@ -286,6 +288,12 @@ static int call_word(qd_context* ctx, void* userdata) {
 	g_app = was;
 
 	return broken_or(ctx, result);
+}
+
+/* A module's words are written for f64, so in decimal they are handed f64 and give back decimals */
+static int call_word(qd_context* ctx, void* userdata) {
+	const qdos_native_word* word = (const qdos_native_word*)userdata;
+	return qdos_decimal_call(ctx, qdos_signature_inputs(word->signature), call_word_binary, userdata);
 }
 
 /* See qdos_natives_recover() in native.h for why these exist. */

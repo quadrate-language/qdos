@@ -825,6 +825,128 @@ static void test_decimal_entry(void) {
 	CHECK(strstr(row, "3") != NULL);
 }
 
+/* The value at the top after keys, as its row reads with the level number and padding gone */
+static void top_after(const qdos_key_event* script, size_t n, char* out, size_t cap) {
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
+	const char* p = strchr(row, ':');
+	p = (p != NULL) ? p + 1 : row;
+	while (*p == ' ') {
+		p++;
+	}
+	snprintf(out, cap, "%s", p);
+	size_t len = strlen(out);
+	while (len > 0 && out[len - 1] == ' ') {
+		out[--len] = '\0';
+	}
+}
+
+/** Numbers are decimal: a tenth is a tenth, with no suffix to say so. */
+static void test_numbers_are_decimal(void) {
+	store_reset();
+	char top[QDOS_COLS + 1];
+
+	qdos_key_event script[64];
+	size_t n = 0;
+	digits(script, &n, "0.1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "0.2");
+	key(script, &n, QDOS_KEY_ADD);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "0.3");
+
+	// And in a line, where 0.3 is the same number the keys made
+	n = 0;
+	type_line(script, &n, "0.1 0.2 + 0.3 ==");
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "1");
+
+	// A third has more digits than a double holds, as many as the row has room for
+	n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_DIV);
+	top_after(script, n, top, sizeof(top));
+	CHECK(strncmp(top, "0.33333333333333333", 19) == 0);
+
+	// Whole numbers stay whole
+	n = 0;
+	digits(script, &n, "6");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_DIV);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "2");
+
+	n = 0;
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_SQRT);
+	top_after(script, n, top, sizeof(top));
+	CHECK(strncmp(top, "1.41421356237309504880", strlen(top)) == 0 && strlen(top) > 17);
+}
+
+/** In degrees the angles a person types come out exact. */
+static void test_decimal_degrees_are_exact(void) {
+	store_reset();
+	seed_setting("settings.angle", 1);
+	char top[QDOS_COLS + 1];
+
+	qdos_key_event script[16];
+	size_t n = 0;
+	digits(script, &n, "30");
+	key(script, &n, QDOS_KEY_SIN);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "0.5");
+
+	n = 0;
+	digits(script, &n, "90");
+	key(script, &n, QDOS_KEY_COS);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "0");
+}
+
+/** Fixed decimals round a decimal, past the width it goes to exponent form, and vast is written so. */
+static void test_decimal_display(void) {
+	store_reset();
+	seed_setting("settings.decimals", 2);
+	char top[QDOS_COLS + 1];
+
+	qdos_key_event script[32];
+	size_t n = 0;
+	digits(script, &n, "2");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "3");
+	key(script, &n, QDOS_KEY_DIV);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "0.67");
+
+	store_reset();
+	n = 0;
+	digits(script, &n, "1");
+	key(script, &n, QDOS_KEY_EE);
+	digits(script, &n, "30");
+	key(script, &n, QDOS_KEY_ENTER);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "1e30");
+
+	n = 0;
+	digits(script, &n, "0.00001");
+	key(script, &n, QDOS_KEY_ENTER);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "1e-5");
+
+	n = 0;
+	digits(script, &n, "2.5");
+	key(script, &n, QDOS_KEY_ENTER);
+	digits(script, &n, "4");
+	key(script, &n, QDOS_KEY_MUL);
+	top_after(script, n, top, sizeof(top));
+	CHECK_STR(top, "10");
+}
+
 /** A point with no digit on one side is still a number on a keypad. */
 static void test_bare_point_entry(void) {
 	store_reset();
@@ -5551,7 +5673,7 @@ static void test_pi_key(void) {
 	run_script(script, n, fb);
 	char row[QDOS_COLS + 1];
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
-	CHECK(strstr(row, "6.28318530717959") != NULL);
+	CHECK(strstr(row, "6.28318530717958647693") != NULL); // decimal, to the width of the row
 
 	n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
@@ -5559,14 +5681,14 @@ static void test_pi_key(void) {
 	key(script, &n, QDOS_KEY_ENTER);
 	run_script(script, n, fb);
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
-	CHECK(strstr(row, "3.14159265358979") != NULL);
+	CHECK(strstr(row, "3.14159265358979323846") != NULL);
 
 	// e is shift on the same key, and does the same in both
 	n = 0;
 	key(script, &n, QDOS_KEY_E);
 	run_script(script, n, fb);
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
-	CHECK(strstr(row, "2.71828182845905") != NULL);
+	CHECK(strstr(row, "2.71828182845904523536") != NULL);
 
 	n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
@@ -5574,7 +5696,7 @@ static void test_pi_key(void) {
 	key(script, &n, QDOS_KEY_ENTER);
 	run_script(script, n, fb);
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
-	CHECK(strstr(row, "2.71828182845905") != NULL);
+	CHECK(strstr(row, "2.71828182845904523536") != NULL);
 }
 
 /** A soft key does what its label says for the current mode. */
@@ -6323,7 +6445,7 @@ static void test_output_page(void) {
 	CHECK(strstr(row, "OUTPUT") == NULL);
 }
 
-/** On the keypad a number too big for an integer is a float, and so is a sum past one. */
+/** On the keypad a number too big for an integer is a decimal, and so is a sum past one. */
 static void test_keypad_numbers_past_an_integer(void) {
 	store_reset();
 
@@ -6343,11 +6465,11 @@ static void test_keypad_numbers_past_an_integer(void) {
 	read_level(fb, 1, row, sizeof(row));
 	CHECK(strstr(row, "1e20") != NULL); // not the nought it used to be
 	read_level(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "9.22337203685478e18") != NULL); // not wrapped negative
+	CHECK(strstr(row, "9223372036854775808") != NULL); // not wrapped negative, and exact
 
-	// exp of 1000 has no finite value: refused, and 1000 still there to correct
+	// exp of 20000 has no finite value: refused, and 20000 still there to correct
 	n = 0;
-	digits(script, &n, "1000");
+	digits(script, &n, "20000");
 	key(script, &n, QDOS_KEY_EXP);
 	store_reset();
 	run_script(script, n, fb);
@@ -6355,7 +6477,7 @@ static void test_keypad_numbers_past_an_integer(void) {
 	read_error(fb, error, sizeof(error));
 	CHECK(strstr(error, "OVERFLOW") != NULL);
 	read_level(fb, 0, row, sizeof(row));
-	CHECK(strstr(row, "1000") != NULL);
+	CHECK(strstr(row, "20000") != NULL);
 }
 
 /* ---------------------------------------------------------------------------
@@ -8449,7 +8571,7 @@ static void test_a_second_point_is_ignored(void) {
 	CHECK(strstr(row, " 1000") != NULL);
 }
 
-/** A number typed past the largest double is refused, not put on the stack as inf. */
+/** A number typed past the largest decimal is refused, not put on the stack as inf. */
 static void test_a_typed_overflow_is_refused(void) {
 	store_reset();
 
@@ -8457,7 +8579,7 @@ static void test_a_typed_overflow_is_refused(void) {
 	size_t n = 0;
 	digits(script, &n, "1");
 	key(script, &n, QDOS_KEY_EE);
-	digits(script, &n, "400");
+	digits(script, &n, "7000");
 	key(script, &n, QDOS_KEY_ENTER);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -9056,6 +9178,9 @@ int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
 	test_decimal_entry();
+	test_numbers_are_decimal();
+	test_decimal_degrees_are_exact();
+	test_decimal_display();
 	test_bare_point_entry();
 	test_bare_enter_duplicates();
 	test_entry_editing();

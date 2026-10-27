@@ -6,6 +6,7 @@
 #include "mathwords.h"
 
 #include "complex.h"
+#include "decimal.h"
 
 #include <quadrate/math/math.h>
 #include <quadrate/rt/runtime.h>
@@ -49,6 +50,8 @@ bool qdos_peek_number(qd_context* ctx, size_t depth, double* out) {
 		*out = (double)element.value.i;
 	} else if (element.type == QD_STACK_TYPE_FLOAT) {
 		*out = element.value.f;
+	} else if (element.type == QD_STACK_TYPE_F128) {
+		*out = qd_f128_to_f64(element.value.q);
 	} else {
 		return false;
 	}
@@ -482,6 +485,227 @@ static int w_e(qd_context* ctx, void* user) {
 	return qd_push_f(ctx, 2.71828182845904523536);
 }
 
+/*
+ * The words in decimal. With decimal on, a word that has an f128 counterpart computes
+ * in it, to 34 digits: sqrt 2 is the decimal128 nearest the root, not a double's 17
+ * digits. A word that keeps whole numbers whole still does, when its arguments were
+ * whole and the answer is one that fits an i64.
+ */
+
+static qd_f128_t q_int(int64_t v) {
+	return qd_f128_from_i64(v);
+}
+
+static bool q_less(qd_f128_t a, qd_f128_t b) {
+	return qd_f128_compare(a, b) == -1;
+}
+
+static bool q_equal(qd_f128_t a, qd_f128_t b) {
+	return qd_f128_compare(a, b) == 0;
+}
+
+static qd_f128_t q_degrees_to_radians(qd_f128_t degrees) {
+	return qd_f128_div(qd_f128_mul(degrees, qd_f128_pi()), q_int(180));
+}
+
+static qd_f128_t q_radians_out(qd_f128_t radians) {
+	return g_degrees ? qd_f128_div(qd_f128_mul(radians, q_int(180)), qd_f128_pi()) : radians;
+}
+
+/*
+ * As trig_in: a whole quarter turn is exact, in degrees or as a multiple of pi/2 in
+ * radians, so `180 sin` and `pi sin` are 0. Returns false, having said why, for the
+ * tangent of a right angle.
+ */
+static bool q_trig(qd_context* ctx, trig_kind kind, qd_f128_t x, qd_f128_t* out) {
+	if (qd_f128_is_finite(x)) {
+		const qd_f128_t quarter = g_degrees ? q_int(90) : qd_f128_div(qd_f128_pi(), q_int(2));
+		const qd_f128_t turns = qd_f128_round_even(qd_f128_div(x, quarter));
+		// pi is rounded, and so is pi/2: within a few units in the last place of x is the turn
+		const qd_f128_t off = qd_f128_abs(qd_f128_sub(qd_f128_mul(turns, quarter), x));
+		const bool on_turn =
+				g_degrees ? qd_f128_is_zero(off)
+						  : qd_f128_is_zero(off) ||
+									q_less(off, qd_f128_scaleb(q_int(4), qd_f128_to_i64(qd_f128_logb(x)) - 33));
+		if (on_turn) {
+			const int64_t q = ((qd_f128_to_i64(qd_f128_fmod(turns, q_int(4))) % 4) + 4) % 4;
+			if (kind == TRIG_TAN && q % 2 == 1) {
+				qdos_math_error(ctx, "tan", "UNDEFINED");
+				return false;
+			}
+			static const int64_t SIN[4] = {0, 1, 0, -1};
+			*out = q_int(kind == TRIG_SIN ? SIN[q] : kind == TRIG_COS ? SIN[(q + 1) % 4] : 0);
+			return true;
+		}
+	}
+	qd_f128_t radians = x;
+	if (g_degrees) {
+		qd_f128_t turn = qd_f128_fmod(x, q_int(360));
+		if (qd_f128_is_signed(turn)) {
+			turn = qd_f128_add(turn, q_int(360));
+		}
+		radians = q_degrees_to_radians(turn);
+	}
+	*out = kind == TRIG_SIN ? qd_f128_sin(radians) : kind == TRIG_COS ? qd_f128_cos(radians) : qd_f128_tan(radians);
+	return true;
+}
+
+// A word given whole numbers keeps a whole answer whole
+static bool keeps_integers(const char* name) {
+	static const char* const WORDS_KEEPING[] = {"sq", "cb", "abs", "ceil", "floor", "round", "trunc", "min", "max",
+			"divide", "modulo", "plus", "minus", "times", "fac", "fmod", "pow"};
+	for (size_t i = 0; i < sizeof(WORDS_KEEPING) / sizeof(*WORDS_KEEPING); i++) {
+		if (strcmp(name, WORDS_KEEPING[i]) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * The word on f128 arguments, the deeper one being a. Returns -1 for a word with no
+ * decimal counterpart, which then goes through qdos_decimal_call(); otherwise what a
+ * native returns, the result pushed or the reason set.
+ */
+static int decimal_word(qd_context* ctx, const char* name, size_t arity) {
+	qd_f128_t a = q_int(0), b = q_int(0);
+	if ((arity >= 1 && !qdos_decimal_peek(ctx, 0, arity == 2 ? &b : &a)) ||
+			(arity == 2 && !qdos_decimal_peek(ctx, 1, &a))) {
+		return qdos_math_error(ctx, name, arity == 2 ? "NEEDS 2 NUMBERS" : "NEEDS A NUMBER");
+	}
+	const qd_f128_t x = a;
+	const qd_f128_t zero = q_int(0), one = q_int(1);
+	qd_f128_t r;
+
+	if (strcmp(name, "sq") == 0) {
+		r = qd_f128_mul(x, x);
+	} else if (strcmp(name, "cb") == 0) {
+		r = qd_f128_mul(qd_f128_mul(x, x), x);
+	} else if (strcmp(name, "abs") == 0) {
+		r = qd_f128_abs(x);
+	} else if (strcmp(name, "ceil") == 0) {
+		r = qd_f128_ceil(x);
+	} else if (strcmp(name, "floor") == 0) {
+		r = qd_f128_floor(x);
+	} else if (strcmp(name, "round") == 0) {
+		r = qd_f128_round(x);
+	} else if (strcmp(name, "trunc") == 0) {
+		r = qd_f128_trunc(x);
+	} else if (strcmp(name, "sqrt") == 0) {
+		if (q_less(x, zero)) {
+			return qdos_math_error(ctx, name, "NEEDS 0 OR MORE");
+		}
+		r = qd_f128_sqrt(x);
+	} else if (strcmp(name, "ln") == 0 || strcmp(name, "log10") == 0 || strcmp(name, "log") == 0) {
+		if (!q_less(zero, x)) {
+			return qdos_math_error(ctx, name, "NEEDS MORE THAN 0");
+		}
+		r = strcmp(name, "ln") == 0 ? qd_f128_ln(x) : qd_f128_log10(x);
+	} else if (strcmp(name, "exp") == 0) {
+		r = qd_f128_exp(x);
+	} else if (strcmp(name, "alog") == 0) {
+		r = qd_f128_pow(q_int(10), x);
+	} else if (strcmp(name, "inv") == 0) {
+		if (qd_f128_is_zero(x)) {
+			return qdos_math_error(ctx, name, "CANNOT DIVIDE BY 0");
+		}
+		r = qd_f128_div(one, x);
+	} else if (strcmp(name, "fac") == 0) {
+		if (!q_equal(qd_f128_trunc(x), x) || q_less(x, zero) || q_less(q_int(1000), x)) {
+			return qdos_math_error(ctx, name, "WHOLE, 0 TO 1000");
+		}
+		r = one;
+		for (int64_t k = 2, n = qd_f128_to_i64(x); k <= n; k++) {
+			r = qd_f128_mul(r, q_int(k));
+		}
+	} else if (strcmp(name, "sin") == 0 || strcmp(name, "cos") == 0 || strcmp(name, "tan") == 0) {
+		const trig_kind kind = name[0] == 's' ? TRIG_SIN : name[0] == 'c' ? TRIG_COS : TRIG_TAN;
+		if (!q_trig(ctx, kind, x, &r)) {
+			return 1;
+		}
+	} else if (strcmp(name, "asin") == 0 || strcmp(name, "acos") == 0) {
+		if (q_less(x, q_int(-1)) || q_less(one, x)) {
+			return qdos_math_error(ctx, name, "NEEDS -1 TO 1");
+		}
+		r = q_radians_out(name[1] == 's' ? qd_f128_asin(x) : qd_f128_acos(x));
+	} else if (strcmp(name, "atan") == 0) {
+		r = q_radians_out(qd_f128_atan(x));
+	} else if (strcmp(name, "pow") == 0) {
+		r = qd_f128_pow(a, b);
+	} else if (strcmp(name, "hypot") == 0) {
+		r = qd_f128_sqrt(qd_f128_add(qd_f128_mul(a, a), qd_f128_mul(b, b)));
+	} else if (strcmp(name, "min") == 0 || strcmp(name, "max") == 0) {
+		// Keeps the value it picked, so an integer stays one
+		qd_stack_element_t top, second;
+		if (qd_stack_pop(ctx->st, &top) != QD_STACK_OK || qd_stack_pop(ctx->st, &second) != QD_STACK_OK) {
+			return 1;
+		}
+		const qd_stack_element_t kept = (strcmp(name, "max") == 0) == q_less(a, b) ? top : second;
+		return (kept.type == QD_STACK_TYPE_INT)	   ? qd_push_i(ctx, kept.value.i)
+			   : (kept.type == QD_STACK_TYPE_F128) ? qd_push_q(ctx, kept.value.q)
+												   : qd_push_f(ctx, kept.value.f);
+	} else if (strcmp(name, "fmod") == 0 || strcmp(name, "divide") == 0 || strcmp(name, "modulo") == 0) {
+		if (qd_f128_is_zero(b)) {
+			return qdos_math_error(ctx, name, "ZERO DIVISOR");
+		}
+		if (strcmp(name, "divide") == 0) {
+			r = qd_f128_div(a, b);
+		} else {
+			r = qd_f128_fmod(a, b);
+			// modulo has the sign of the divisor
+			if (name[0] == 'm' && !qd_f128_is_zero(r) && qd_f128_is_signed(r) != qd_f128_is_signed(b)) {
+				r = qd_f128_add(r, b);
+			}
+		}
+	} else if (strcmp(name, "plus") == 0) {
+		r = qd_f128_add(a, b);
+	} else if (strcmp(name, "minus") == 0) {
+		r = qd_f128_sub(a, b);
+	} else if (strcmp(name, "times") == 0) {
+		r = qd_f128_mul(a, b);
+	} else if (strcmp(name, "atan2") == 0) {
+		r = q_radians_out(qd_f128_atan2(a, b));
+	} else if (strcmp(name, "pi") == 0) {
+		r = qd_f128_pi();
+	} else if (strcmp(name, "e") == 0) {
+		r = qd_f128_e();
+	} else {
+		return -1;
+	}
+
+	qd_stack_element_t discard;
+	for (size_t k = 0; k < arity; k++) {
+		qd_stack_pop(ctx->st, &discard);
+	}
+	return qd_push_q(ctx, r);
+}
+
+/* The keypad's % in decimal: y stays as it was, and x becomes x percent of it */
+static int decimal_percent(qd_context* ctx) {
+	qd_f128_t x, y;
+	if (!qdos_decimal_peek(ctx, 0, &x) || !qdos_decimal_peek(ctx, 1, &y)) {
+		return qdos_math_error(ctx, "percent", "NEEDS 2 NUMBERS");
+	}
+	qd_stack_element_t discard;
+	qd_stack_pop(ctx->st, &discard);
+	return qd_push_q(ctx, qd_f128_div(qd_f128_mul(y, x), q_int(100)));
+}
+
+/* An f128 that is a whole number an i64 holds, as that i64 */
+static void whole_to_integer(qd_context* ctx) {
+	qd_stack* st = ctx->st;
+	qd_stack_element_t* top = &st->data[st->size - 1];
+	if (top->type != QD_STACK_TYPE_F128 || !qd_f128_is_finite(top->value.q)) {
+		return;
+	}
+	const qd_f128_t q = top->value.q;
+	const int64_t i = qd_f128_to_i64(q);
+	if (q_equal(qd_f128_trunc(q), q) && q_equal(q_int(i), q)) {
+		top->value.i = i;
+		top->type = QD_STACK_TYPE_INT;
+	}
+}
+
 #define UNARY "(x:f64 -- r:f64)"
 #define BINARY "(a:f64 b:f64 -- r:f64)"
 
@@ -556,15 +780,43 @@ static int guarded(qd_context* ctx, void* user) {
 
 	const size_t depth = qd_stack_size(ctx->st);
 	qd_stack_element_t args[2];
-	bool numbers = g_finite_only && depth >= arity;
+	bool numbers = depth >= arity;
+	bool whole = true;
 	for (size_t k = 0; numbers && k < arity; k++) {
 		numbers = qd_stack_element(ctx->st, depth - arity + k, &args[k]) == QD_STACK_OK &&
-				  (args[k].type == QD_STACK_TYPE_INT || args[k].type == QD_STACK_TYPE_FLOAT);
+				  (args[k].type == QD_STACK_TYPE_INT || args[k].type == QD_STACK_TYPE_FLOAT ||
+						  args[k].type == QD_STACK_TYPE_F128);
+		whole = whole && args[k].type == QD_STACK_TYPE_INT;
 	}
 
-	const int result = WORDS[i].fn(ctx, NULL);
-	double r = 0.0;
-	if (result != 0 || !numbers || !qdos_peek_number(ctx, 0, &r) || isfinite(r)) {
+	int result;
+	if (!qdos_decimal()) {
+		result = WORDS[i].fn(ctx, NULL);
+	} else if (strcmp(WORDS[i].name, "percent") == 0) {
+		result = decimal_percent(ctx);
+	} else {
+		result = numbers ? decimal_word(ctx, WORDS[i].name, arity) : -1;
+		if (result == -1) {
+			result = qdos_decimal_call(ctx, arity, WORDS[i].fn, NULL);
+		} else if (result == 0 && (whole || strcmp(WORDS[i].name, "fac") == 0) && keeps_integers(WORDS[i].name)) {
+			whole_to_integer(ctx);
+		}
+	}
+
+	// From the keypad a result with no finite value is refused, and the arguments put back
+	if (result != 0 || !numbers || !g_finite_only || qd_stack_size(ctx->st) == 0) {
+		return result;
+	}
+	const qd_stack_element_t* top = &ctx->st->data[qd_stack_size(ctx->st) - 1];
+	bool finite = true, nan = false;
+	if (top->type == QD_STACK_TYPE_FLOAT) {
+		finite = isfinite(top->value.f);
+		nan = isnan(top->value.f);
+	} else if (top->type == QD_STACK_TYPE_F128) {
+		finite = qd_f128_is_finite(top->value.q);
+		nan = qd_f128_is_nan(top->value.q);
+	}
+	if (finite) {
 		return result;
 	}
 
@@ -573,11 +825,13 @@ static int guarded(qd_context* ctx, void* user) {
 	for (size_t k = 0; k < arity; k++) {
 		if (args[k].type == QD_STACK_TYPE_INT) {
 			qd_push_i(ctx, args[k].value.i);
+		} else if (args[k].type == QD_STACK_TYPE_F128) {
+			qd_push_q(ctx, args[k].value.q);
 		} else {
 			qd_push_f(ctx, args[k].value.f);
 		}
 	}
-	return qdos_math_error(ctx, WORDS[i].name, isnan(r) ? "UNDEFINED" : "OVERFLOW");
+	return qdos_math_error(ctx, WORDS[i].name, nan ? "UNDEFINED" : "OVERFLOW");
 }
 
 void qdos_register_math(qd_interp* interp) {

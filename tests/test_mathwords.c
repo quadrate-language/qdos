@@ -5,15 +5,18 @@
 
 #include "check.h"
 
+#include "../src/shell/decimal.h"
 #include "../src/shell/mathwords.h"
 #include "../src/ui/console.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static qd_interp* fresh(void) {
 	qd_interp* interp = qd_interp_create(4096);
+	qd_interp_set_default_float(interp, qdos_decimal() ? QD_INTERP_FLOAT_F128 : QD_INTERP_FLOAT_F64);
 	qdos_register_math(interp);
 	return interp;
 }
@@ -26,7 +29,9 @@ static double value_of(const char* source, bool* ok) {
 	double out = NAN;
 	qd_interp_value value;
 	if (*ok && qd_interp_peek(interp, 0, &value)) {
-		out = (value.type == QD_INTERP_VALUE_FLOAT) ? value.f : (double)value.i;
+		out = (value.type == QD_INTERP_VALUE_FLOAT)	 ? value.f
+			  : (value.type == QD_INTERP_VALUE_F128) ? strtod(value.text, NULL)
+													 : (double)value.i;
 	}
 
 	qd_interp_destroy(interp);
@@ -307,7 +312,8 @@ static void test_modulo(void) {
 	CHECK(!is_whole("7.5 2 modulo") && value_of("7.5 2 modulo", &ok) == 1.5);
 	CHECK(value_of("-7.5 2 modulo", &ok) == 0.5);
 	CHECK(value_of("7 2.5 modulo", &ok) == 2.0);
-	CHECK(value_of("-1e-20 3 modulo", &ok) == 0.0);
+	// A double cannot hold 3 less 1e-20 and rounds it to the divisor; a decimal can
+	CHECK(value_of("-1e-20 3 modulo", &ok) == (qdos_decimal() ? 3.0 : 0.0));
 	CHECK(refuses("7 0 modulo") && refuses("7.5 0.0 modulo") && refuses("\"a\" 2 modulo"));
 }
 
@@ -354,28 +360,85 @@ static void test_alog(void) {
 
 /** From the keypad a result with no finite value is refused and the arguments kept. */
 static void test_finite_only_refuses_and_restores(void) {
+	// The largest of each kind, which ten times over has no finite value
+	const char* big = qdos_decimal() ? "1e6144" : "1e308";
+	char line[64];
 	qd_interp* interp = fresh();
 	qdos_math_set_finite_only(true);
-	CHECK(!qd_interp_eval(interp, "1e308 10 times"));
+	snprintf(line, sizeof(line), "%s 10 times", big);
+	CHECK(!qd_interp_eval(interp, line));
 	CHECK(strstr(qd_interp_error(interp), "OVERFLOW") != NULL);
 	CHECK(qd_interp_depth(interp) == 2);
 	qd_interp_value v;
 	CHECK(qd_interp_peek(interp, 0, &v) && v.type == QD_INTERP_VALUE_INT && v.i == 10);
-	CHECK(qd_interp_peek(interp, 1, &v) && v.f == 1e308);
+	qd_f128_t kept, want;
+	CHECK(qd_interp_peek(interp, 1, &v) &&
+			(qdos_decimal() ? qd_f128_parse(v.text, &kept) && qd_f128_parse(big, &want) &&
+									  qd_f128_compare(kept, want) == 0
+							: v.f == 1e308));
 
 	CHECK(qd_interp_eval(interp, "clear -8 0.5 pow") == false);
 	CHECK(strstr(qd_interp_error(interp), "UNDEFINED") != NULL);
-	CHECK(qd_interp_eval(interp, "clear 1000 exp") == false);
+	CHECK(qd_interp_eval(interp, "clear 20000 exp") == false);
 	CHECK(qd_interp_eval(interp, "clear 2 3 pow"));
 	qdos_math_set_finite_only(false);
 
 	// Anywhere else infinity is a value like any other
-	CHECK(qd_interp_eval(interp, "clear 1e308 10 times"));
-	CHECK(qd_interp_peek(interp, 0, &v) && isinf(v.f));
+	snprintf(line, sizeof(line), "clear %s 10 times", big);
+	CHECK(qd_interp_eval(interp, line));
+	CHECK(qd_interp_peek(interp, 0, &v) && isinf(qdos_decimal() ? strtod(v.text, NULL) : v.f));
 	qd_interp_destroy(interp);
 }
 
-int main(void) {
+/* The top of the stack as decimal text, or "" where it is not a decimal */
+static void decimal_of(const char* source, char* out, size_t cap) {
+	qd_interp* interp = fresh();
+	qd_interp_value value;
+	out[0] = '\0';
+	if (qd_interp_eval(interp, source) && qd_interp_peek(interp, 0, &value) && value.type == QD_INTERP_VALUE_F128) {
+		snprintf(out, cap, "%s", value.text);
+	}
+	qd_interp_destroy(interp);
+}
+
+/** In decimal the words answer in decimal, exactly where a double could not */
+static void test_decimal_words(void) {
+	static const struct {
+		const char* source;
+		const char* want;
+	} CASES[] = {
+			{"0.1 0.2 plus", "0.3"},
+			{"1 10 divide", "0.1"},
+			{"2 sqrt", "1.414213562373095048801688724209698"},
+			{"0.1 sq", "0.01"},
+			{"2.5 round", "3"},
+			{"-2.5 floor", "-3"},
+			{"100 log10", "2"},
+			{"1 exp", "2.718281828459045235360287471352662"},
+			{"pi", "3.141592653589793238462643383279503"},
+			{"0.3 0.1 fmod", "0.0"},
+			{"7.5 2 modulo", "1.5"},
+			{"3 4 hypot", "5"},
+			{"5 inv", "0.2"},
+			{"1.1 2 pow", "1.21"},
+	};
+
+	char got[QD_F128_STRING_MAX];
+	for (size_t i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+		decimal_of(CASES[i].source, got, sizeof(got));
+		CHECK_STR(got, CASES[i].want);
+	}
+
+	// Words written for f64 come back decimal too: cosh has no decimal version
+	decimal_of("0 cosh", got, sizeof(got));
+	CHECK_STR(got, "1");
+
+	// Integers in, integer out, where the word keeps them
+	CHECK(is_whole("7 2 max"));
+	CHECK(is_whole("3 fac"));
+}
+
+static void run_all(void) {
 	test_overflow_becomes_a_float();
 	test_modulo();
 	test_degree_trig_is_exact();
@@ -393,5 +456,14 @@ int main(void) {
 	test_inside_the_domain();
 	test_repeated_ln_does_not_abort();
 	test_refusal_keeps_the_value();
+}
+
+int main(void) {
+	run_all();
+
+	// And all of it again on the calculator's own numbers
+	qdos_decimal_set(true);
+	run_all();
+	test_decimal_words();
 	return check_report("mathwords");
 }

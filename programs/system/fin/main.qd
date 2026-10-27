@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Loan payments: give three of amount, rate, years and monthly payment
 
-fn cents(x:f64 -- y:f64) {
+fn cents(x:f128 -- y:f128) {
 	x 100.0 * round 100.0 divide
 }
 
-fn pay(p:f64 rate:f64 years:f64 -- m:f64) {
+fn pay(p:f128 rate:f128 years:f128 -- m:f128) {
 	rate 1200.0 divide -> i
 	years 12.0 * -> n
 	i 0.0 == if { p n divide return }
@@ -13,12 +13,12 @@ fn pay(p:f64 rate:f64 years:f64 -- m:f64) {
 }
 
 // The payment a rate gives, less the one wanted, for root to find nought in
-fn gap(rate:f64 -- y:f64) {
+fn gap(rate:f128 -- y:f128) {
 	0 ui::get rate 2 ui::get pay 3 ui::get -
 }
 
 // Offering what was given last time, which ENTER takes
-fn ask(prompt:str name:str -- x:f64 ok:i64) {
+fn ask(prompt:str name:str -- x:f128 ok:i64) {
 	name ui::load -> had -> last
 	had if { prompt last ui::ask_or } else { prompt ui::ask }
 }
