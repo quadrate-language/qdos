@@ -22,19 +22,45 @@ if(NOT EXISTS "${QD}/subprojects/u8t/src/scanner.c")
 	message(FATAL_ERROR "u8t is missing from ${QD}/subprojects.\n"
 		"Run `meson subprojects download` in the Quadrate tree, or build it once.")
 endif()
+if(NOT EXISTS "${QD}/subprojects/mpdecimal-4.0.1/libmpdec/mpdecimal.c")
+	message(FATAL_ERROR "libmpdec is missing from ${QD}/subprojects.\n"
+		"Run `meson subprojects download` in the Quadrate tree, or build it once.")
+endif()
 
 set(rt "${QD}/lib/rt/src")
 set(qc "${QD}/lib/qc/src")
+set(mpd "${QD}/subprojects/mpdecimal-4.0.1/libmpdec")
+
+# libmpdec, behind f128, in the portable ANSI C configuration Quadrate's Meson
+# build picks, and the 32-bit one, as the S3 is
+set(mpd_sources
+	"${mpd}/basearith.c"
+	"${mpd}/constants.c"
+	"${mpd}/context.c"
+	"${mpd}/convolute.c"
+	"${mpd}/crt.c"
+	"${mpd}/difradix2.c"
+	"${mpd}/fnt.c"
+	"${mpd}/fourstep.c"
+	"${mpd}/io.c"
+	"${mpd}/mpalloc.c"
+	"${mpd}/mpdecimal.c"
+	"${mpd}/mpsignal.c"
+	"${mpd}/numbertheory.c"
+	"${mpd}/sixstep.c"
+	"${mpd}/transpose.c")
 
 idf_component_register(
 	SRCS
 		# lib/rt, with the platform layer for a target that has no processes
 		# no dynamic linker and no C11 threads
+		"${rt}/f128.c"
 		"${rt}/natives.c"
 		"${rt}/runtime.c"
 		"${rt}/runtime_stack.c"
 		"${rt}/runtime_ops.c"
 		"${rt}/runtime_io.c"
+		"${rt}/runtime_f128.c"
 		"${rt}/stack.c"
 		"${rt}/memory.c"
 		"${rt}/qd_string.c"
@@ -64,8 +90,11 @@ idf_component_register(
 		"${QD}/lib/interp/src/interp.cc"
 		# u8t
 		"${QD}/subprojects/u8t/src/scanner.c"
+		${mpd_sources}
 		# stdlib/math
 		"${QD}/stdlib/math/src/math.c"
+		# stdlib/f128
+		"${QD}/stdlib/f128/src/f128.c"
 	INCLUDE_DIRS
 		# newlib's gaps, filled for u8t's public header
 		"compat"
@@ -74,6 +103,7 @@ idf_component_register(
 		"${QD}/lib/interp/include"
 		"${QD}/subprojects/u8t/include"
 		"${QD}/stdlib/math/include"
+		"${QD}/stdlib/f128/include"
 	PRIV_INCLUDE_DIRS
 		"${QD}/lib/rt"
 		"${QD}/lib/platform/include"
@@ -90,6 +120,23 @@ add_custom_command(
 	DEPENDS "${QD}/tools/gen_module_register.py" "${QD}/stdlib/math/qd/math/math.qd"
 	VERBATIM)
 target_sources(${COMPONENT_LIB} PRIVATE "${math_register}")
+
+set(f128_register "${CMAKE_CURRENT_BINARY_DIR}/f128_register.c")
+add_custom_command(
+	OUTPUT "${f128_register}"
+	COMMAND "${python}" "${QD}/tools/gen_module_register.py" --module f128
+		"${QD}/stdlib/f128/qd/f128/f128.qd" "${f128_register}"
+	DEPENDS "${QD}/tools/gen_module_register.py" "${QD}/stdlib/f128/qd/f128/f128.qd"
+	VERBATIM)
+target_sources(${COMPONENT_LIB} PRIVATE "${f128_register}")
+
+# mpdecimal.h is generated, as libmpdec's own build does it
+set(MPD_HEADER_CONFIG "/* ABI: 32-bit */\n#define MPD_CONFIG_32 1")
+configure_file("${mpd}/mpdecimal.h.in" "${CMAKE_CURRENT_BINARY_DIR}/mpdec/mpdecimal.h" @ONLY)
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/mpdec" "${mpd}")
+set_source_files_properties(${mpd_sources} PROPERTIES
+	COMPILE_DEFINITIONS "ANSI;CONFIG_32;NDEBUG"
+	COMPILE_OPTIONS "-w;-O2")
 
 # The version the runtime reports, from the tags as Meson takes it
 execute_process(

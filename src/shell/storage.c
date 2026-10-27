@@ -100,6 +100,9 @@ bool qdos_value_encode(const qdos_value* value, uint8_t* out, size_t* len) {
 		return true;
 	}
 
+	// An f128 as its text rather than its sixteen bytes: those are Quadrate's in-memory
+	// layout, and a session has to outlive a change to it
+	case QDOS_VALUE_F128:
 	case QDOS_VALUE_STRING: {
 		const size_t length = strnlen(value->s, QDOS_VALUE_STRING_MAX - 1);
 		put_u64(&out[PAYLOAD_OFFSET], (uint64_t)length);
@@ -148,12 +151,13 @@ bool qdos_value_decode(const uint8_t* in, size_t len, qdos_value* value) {
 		return true;
 	}
 
+	case QDOS_VALUE_F128:
 	case QDOS_VALUE_STRING: {
 		// A length that overruns the record means the store is damaged
 		if (payload >= QDOS_VALUE_STRING_MAX || len < HEADER_SIZE + payload) {
 			return false;
 		}
-		value->type = QDOS_VALUE_STRING;
+		value->type = (qdos_value_type)in[4];
 		memcpy(value->s, &in[HEADER_SIZE], (size_t)payload);
 		value->s[payload] = '\0';
 		return true;
@@ -851,6 +855,10 @@ static bool session_encode(const qd_stack_element_t* from, qdos_value* value) {
 			return true;
 		}
 		return false;
+	case QD_STACK_TYPE_F128:
+		value->type = QDOS_VALUE_F128;
+		qd_f128_format(from->value.q, value->s, sizeof(value->s));
+		return true;
 	}
 	return false;
 }
@@ -963,6 +971,14 @@ qdos_store_result qdos_storage_restore_session(qdos_hal* hal, qd_interp* interp)
 		case QDOS_VALUE_COMPLEX:
 			qdos_cpx_push(ctx, value.f, value.im);
 			break;
+		case QDOS_VALUE_F128: {
+			qd_f128_t q;
+			if (!qd_f128_parse(value.s, &q)) {
+				return QDOS_STORE_IO_ERROR;
+			}
+			qd_push_q(ctx, q);
+			break;
+		}
 		case QDOS_VALUE_EMPTY:
 			// A session written by firmware that stored a placeholder where a
 			// pointer had been. Stop rather than push the nought it decodes to:

@@ -760,6 +760,8 @@ static const char* array_type_name(qd_array_type type) {
 		return "str";
 	case QD_ARRAY_TYPE_PTR:
 		return "ptr";
+	case QD_ARRAY_TYPE_F128:
+		return "f128";
 	case QD_ARRAY_TYPE_ANY:
 		return "any";
 	}
@@ -1096,6 +1098,9 @@ static bool value_at(qdos_shell* sh, size_t i, qdos_value* out) {
 		out->type = QDOS_VALUE_STRING;
 		snprintf(out->s, sizeof(out->s), "%s", text);
 		return strlen(text) < sizeof(out->s);
+	} else if (value.type == QD_INTERP_VALUE_F128) {
+		out->type = QDOS_VALUE_F128;
+		snprintf(out->s, sizeof(out->s), "%s", value.text);
 	} else {
 		return false;
 	}
@@ -7557,6 +7562,15 @@ static bool pop_value(qd_context* ctx, qdos_value* out) {
 	case QD_STACK_TYPE_STR:
 		out->type = QDOS_VALUE_STRING;
 		return qd_pop_s(ctx, out->s, sizeof(out->s)) == 0;
+	case QD_STACK_TYPE_F128: {
+		qd_f128_t q;
+		if (qd_pop_q(ctx, &q) != 0) {
+			return false;
+		}
+		out->type = QDOS_VALUE_F128;
+		qd_f128_format(q, out->s, sizeof(out->s));
+		return true;
+	}
 	case QD_STACK_TYPE_PTR: {
 		if (!qdos_cpx_of(&st->data[st->size - 1], &out->f, &out->im)) {
 			return false;
@@ -7585,6 +7599,10 @@ static int push_value(qd_context* ctx, const qdos_value* value) {
 		return qd_push_s(ctx, value->s);
 	case QDOS_VALUE_COMPLEX:
 		return qdos_cpx_push(ctx, value->f, value->im);
+	case QDOS_VALUE_F128: {
+		qd_f128_t q;
+		return qd_f128_parse(value->s, &q) ? qd_push_q(ctx, q) : 1;
+	}
 	case QDOS_VALUE_EMPTY:
 		break;
 	}
@@ -8225,6 +8243,9 @@ static void ui_text_of(const qdos_shell* sh, const qdos_value* v, char* out, siz
 		shown.type = QD_INTERP_VALUE_INT;
 		shown.i = v->i;
 		snprintf(shown.text, sizeof(shown.text), "%lld", (long long)v->i);
+	} else if (v->type == QDOS_VALUE_F128) {
+		shown.type = QD_INTERP_VALUE_F128;
+		snprintf(shown.text, sizeof(shown.text), "%.*s", QD_F128_STRING_MAX - 1, v->s);
 	} else {
 		shown.type = QD_INTERP_VALUE_FLOAT;
 		shown.f = v->f;

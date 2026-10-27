@@ -181,6 +181,12 @@ static void test_encode_decode_roundtrip(void) {
 	const qdos_value empty = {.type = QDOS_VALUE_EMPTY};
 	CHECK(qdos_value_encode(&empty, buf, &len) && qdos_value_decode(buf, len, &out));
 	CHECK(out.type == QDOS_VALUE_EMPTY);
+	qdos_value decimal;
+	memset(&decimal, 0, sizeof(decimal));
+	decimal.type = QDOS_VALUE_F128;
+	snprintf(decimal.s, sizeof(decimal.s), "-9.876543210987654321098765432109876e-4321");
+	CHECK(qdos_value_encode(&decimal, buf, &len) && qdos_value_decode(buf, len, &out));
+	CHECK(out.type == QDOS_VALUE_F128 && strcmp(out.s, decimal.s) == 0);
 }
 
 static void test_encoding_is_explicit(void) {
@@ -301,6 +307,30 @@ static void test_session_survives_a_restart(void) {
 	CHECK(qd_interp_eval(after, "drop +"));
 	CHECK(qd_interp_peek(after, 0, &value) && value.i == 30);
 
+	qd_interp_destroy(after);
+}
+
+// An f128 comes back as it was saved: every digit, the trailing zero of 1.10, the exponent
+static void test_session_keeps_f128_exactly(void) {
+	store_reset();
+	qdos_hal hal = make_hal();
+
+	qd_interp* before = qd_interp_create(256);
+	CHECK(qd_interp_eval(before, "1.10q 9.999999999999999999999999999999999e6144q -0q"));
+	CHECK(qdos_storage_save_session(&hal, before) == QDOS_STORE_OK);
+	qd_interp_destroy(before);
+
+	qd_interp* after = qd_interp_create(256);
+	CHECK(qdos_storage_restore_session(&hal, after) == QDOS_STORE_OK);
+	CHECK(qd_interp_depth(after) == 3);
+	qd_interp_value value;
+	CHECK(qd_interp_peek(after, 0, &value) && value.type == QD_INTERP_VALUE_F128 && strcmp(value.text, "-0") == 0);
+	CHECK(qd_interp_peek(after, 1, &value) && strcmp(value.text, "9.999999999999999999999999999999999e+6144") == 0);
+	CHECK(qd_interp_peek(after, 2, &value) && strcmp(value.text, "1.10") == 0);
+
+	// Still decimal arithmetic after the restart
+	CHECK(qd_interp_eval(after, "drop drop 0.20q +"));
+	CHECK(qd_interp_peek(after, 0, &value) && strcmp(value.text, "1.30") == 0);
 	qd_interp_destroy(after);
 }
 
@@ -731,6 +761,7 @@ int main(void) {
 	test_corrupt_store_reads_as_absent();
 	test_register_keys();
 	test_session_survives_a_restart();
+	test_session_keeps_f128_exactly();
 	test_no_session_is_not_an_error();
 	test_empty_session_roundtrips();
 	test_session_stops_at_a_value_it_cannot_encode();
