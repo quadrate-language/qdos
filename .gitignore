@@ -1,5 +1,6 @@
-# Build outputs
+# Build outputs, and the extra Meson build directories beside build/
 build/
+build-*/
 dist/
 compile_commands.json
 
@@ -29,7 +30,16 @@ CLAUDE.md
 # Python bytecode from the font tools
 __pycache__/
 
-# ESP-IDF: the QEMU build, and the sdkconfig idf.py writes beside the defaults
-esp32/build-qemu/
+# ESP-IDF: every build directory (build, build-qemu, ...), and the sdkconfig
+# idf.py writes beside the defaults
+esp32/build/
+esp32/build-*/
 esp32/sdkconfig
 esp32/sdkconfig.old
+
+# KiCad: lock files, per-user view state, backups and caches
+*.lck
+*.kicad_prl
+*-backups/
+_autosave-*
+fp-info-cache
