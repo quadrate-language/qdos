@@ -91,6 +91,9 @@ typedef struct {
 	/** Held down by the mouse, drawn sunk until the button comes back up */
 	const qdos_pad_button* pressed;
 
+	const qdos_pad_button* ripple; ///< On a page, the key last pressed while its ring fades
+	Uint64 ripple_at;			   ///< When it was pressed
+
 	/** Android has taken the surface away, so frames are kept but not shown */
 	bool background;
 
@@ -383,10 +386,22 @@ static void sim_shutdown(qdos_hal* hal) {
 	SDL_Quit();
 }
 
+/** @brief How long a press's ring takes to fade, and how often it is redrawn meanwhile */
+#define SIM_RIPPLE_MS 350
+
 /** @brief Redraw the keypad over the last panel image and show it */
 static void push_frame(sim_state* st) {
 	qdos_frame_draw(st->rgb, WINDOW_W);
 	qdos_pad_draw(st->rgb, WINDOW_W, QDOS_PAD_X, QDOS_PAD_Y, st->face.layer, st->pressed);
+	if (st->ripple != NULL) {
+		const Uint64 age = SDL_GetTicks() - st->ripple_at;
+		if (age >= SIM_RIPPLE_MS) {
+			st->ripple = NULL;
+		} else {
+			qdos_pad_draw_ripple(
+					st->rgb, WINDOW_W, QDOS_PAD_X, QDOS_PAD_Y, st->ripple, (int)(age * 256 / SIM_RIPPLE_MS));
+		}
+	}
 
 	if (st->background) {
 		return;
@@ -396,6 +411,16 @@ static void push_frame(sim_state* st) {
 	SDL_RenderClear(st->renderer);
 	SDL_RenderTexture(st->renderer, st->texture, NULL, NULL);
 	SDL_RenderPresent(st->renderer);
+}
+
+/** @brief Hold @p b down, and on a page send a ring out from it */
+static void sim_hold(sim_state* st, const qdos_pad_button* b) {
+	st->pressed = b;
+#ifdef __EMSCRIPTEN__
+	st->ripple = b;
+	st->ripple_at = SDL_GetTicks();
+#endif
+	push_frame(st);
 }
 
 static void sim_present(qdos_hal* hal, const uint8_t* fb) {
@@ -453,6 +478,10 @@ static bool sim_press(sim_state* st, const qdos_pad_button* b, qdos_key_event* o
 /** @brief When the key the page pressed comes back up; 0 while none is down */
 static Uint64 g_press_until;
 
+/** @brief Put ALPHA on or off, past the end of WEB_KEYS */
+#define SIM_WEB_ALPHA_ON (-15)
+#define SIM_WEB_ALPHA_OFF (-16)
+
 /** @brief The named keys, by the negative codes web/pre.js gives them */
 static const qdos_key WEB_KEYS[] = {
 		QDOS_KEY_NONE,
@@ -476,12 +505,34 @@ static bool sim_web_key_due(void) {
 	return EM_ASM_INT({ return Module.qdosKeyDue ? Module.qdosKeyDue() : 0; }) != 0;
 }
 
-/** @brief The button that sends @p key, on any face, to be drawn pressed */
-static const qdos_pad_button* sim_button_for(qdos_key key) {
+/** @brief The button that sends @p key, or types the letter @p ch, to be drawn pressed */
+static const qdos_pad_button* sim_button_for(qdos_key key, char ch) {
 	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
 		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
 			const qdos_pad_button* b = qdos_pad_button_at(col, row);
-			if (b != NULL && (b->plain.key == key || b->symbol.key == key)) {
+			if (b == NULL) {
+				continue;
+			}
+			if (key == QDOS_KEY_CHAR) {
+				const char* t = b->alpha.text;
+				if (t != NULL && t[0] == ch && t[1] == '\0') {
+					return b;
+				}
+			} else if (b->plain.key == key || b->symbol.key == key) {
+				return b;
+			}
+		}
+	}
+	return NULL;
+}
+
+/** @brief The ALPHA key */
+static const qdos_pad_button* sim_alpha_button(void) {
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			qdos_pad_layer selects;
+			if (b != NULL && qdos_pad_modifier(b, &selects) && selects == QDOS_PAD_ALPHA) {
 				return b;
 			}
 		}
@@ -492,6 +543,17 @@ static const qdos_pad_button* sim_button_for(qdos_key key) {
 static bool sim_web_key(sim_state* st, qdos_key_event* out) {
 	const int code = EM_ASM_INT({ return Module.qdosNextKey ? Module.qdosNextKey() : 0; });
 	if (code == 0) {
+		return false;
+	}
+
+	if (code == SIM_WEB_ALPHA_ON || code == SIM_WEB_ALPHA_OFF) {
+		const bool on = code == SIM_WEB_ALPHA_ON;
+		const qdos_pad_button* b = sim_alpha_button();
+		if (b != NULL && (st->face.layer == QDOS_PAD_ALPHA) != on) {
+			g_press_until = SDL_GetTicks() + SIM_WEB_PRESS_MS;
+			sim_hold(st, b);
+			sim_press(st, b, out);
+		}
 		return false;
 	}
 
@@ -506,11 +568,10 @@ static bool sim_web_key(sim_state* st, qdos_key_event* out) {
 		return false;
 	}
 
-	const qdos_pad_button* b = (out->key != QDOS_KEY_CHAR) ? sim_button_for(out->key) : NULL;
+	const qdos_pad_button* b = sim_button_for(out->key, out->ch);
 	if (b != NULL) {
-		st->pressed = b;
 		g_press_until = SDL_GetTicks() + SIM_WEB_PRESS_MS;
-		push_frame(st);
+		sim_hold(st, b);
 	}
 	return true;
 }
@@ -589,8 +650,7 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 
 			// Shown before the key is acted on, so the press lands even
 			// where the action itself changes nothing on screen
-			st->pressed = b;
-			push_frame(st);
+			sim_hold(st, b);
 
 			if (sim_press(st, b, out)) {
 				return true;
@@ -608,7 +668,7 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 		case SDL_EVENT_FINGER_DOWN:
 			st->pressed = sim_finger_button(st, &event);
 			if (st->pressed != NULL) {
-				push_frame(st);
+				sim_hold(st, st->pressed);
 			}
 			break;
 
@@ -763,6 +823,9 @@ static void sim_wait(qdos_hal* hal, int timeout_ms) {
 	const Uint64 start = SDL_GetTicks();
 	for (;;) {
 		sim_web_release(st);
+		if (st->ripple != NULL) {
+			push_frame(st);
+		}
 		if (sim_web_key_due()) {
 			return;
 		}

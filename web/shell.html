@@ -607,7 +607,7 @@
 	<div class="intro">
 		<h1>The RPN calculator you program in Quadrate.</h1>
 		<p class="lede">
-			r8 One is an open-source pocket calculator with an HP&nbsp;48-style keypad, a
+			r8 One is an open-source pocket calculator with a keypad laid out for RPN, a
 			memory LCD that needs no backlight, and a shell that runs the programs you
 			type on it. The one on this page is running its real firmware.
 		</p>
@@ -661,7 +661,7 @@
 		<section aria-labelledby="modes">
 			<h2 id="modes">Two ways to type</h2>
 			<p>
-				The calculator is RPN, as on an HP&nbsp;48: digits build a number, Enter
+				The calculator is RPN: digits build a number, Enter
 				pushes it, and an operator works at once. Undo takes back the last key, and
 				Esc never touches the stack.
 			</p>
@@ -671,10 +671,10 @@
 			</p>
 			<div class="try">
 				<button class="seq" type="button"
-					data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT1"},{"text":"def sq(x:i64 -- r:i64) { x x * }"},{"key":"ENTER"},{"text":"7 sq"},{"key":"ENTER"}]'
+					data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT1"},{"text":"fn sq(x:i64 -- r:i64) { dup * }"},{"key":"ENTER"},{"text":"7 sq"},{"key":"ENTER"}]'
 					aria-label="Type a definition of sq in a line, then 7 sq, on the calculator">
 					<span class="cap soft">LINE</span>
-					<span class="typed">def sq(x:i64 -- r:i64) { x x * }</span>
+					<span class="typed">fn sq(x:i64 -- r:i64) { dup * }</span>
 					<span class="cap enter">ENTER</span>
 					<span class="typed">7 sq</span>
 					<span class="cap enter">ENTER</span>
@@ -697,9 +697,9 @@
 					A word with a stack signature, a counted loop, and two locals named
 					with <code>-&gt;</code> each time round.
 				</p>
-<pre><code class="qd">def fib(n:i64 -- r:i64) {
-	0 1                 // the first two
-	0 n 1 for i {
+<pre><code class="qd">fn fib(n:i64 -- r:i64) {
+	0 1 rot             // the first two, under n
+	0 swap 1 for i {
 		-&gt; b -&gt; a       // name the pair
 		b a b +         // and step it along
 	}
@@ -719,7 +719,7 @@
 					Forty-two lines between the edges of the screen, and a parabola appears
 					in each corner where they cross.
 				</p>
-<pre><code class="qd">def art( -- ) {
+<pre><code class="qd">fn art( -- ) {
 	ui::cls
 	0 21 1 for i {
 		0 i 12 *  i 20 * 239  ui::line
@@ -746,13 +746,12 @@ art</code></pre>
 					after frame, asking <code>ui::frame</code> for sixty a second.
 				</p>
 <pre><code class="qd">// The speed, turned back at either wall
-def wall(p:d128 v:d128 hi:d128 -- r:d128) {
-	p 10.0 &lt; if { v abs return }
-	p hi &gt; if { v abs neg return }
-	v
+fn wall(p:d128 v:d128 hi:d128 -- r:d128) {
+	rot dup 10.0 &lt; if { drop drop abs return }
+	&lt; if { abs neg return }
 }
 
-def bounce( -- ) {
+fn bounce( -- ) {
 	200.0 -&gt; x  120.0 -&gt; y
 	3.0 -&gt; dx   2.0 -&gt; dy
 	loop {
@@ -780,7 +779,7 @@ bounce</code></pre>
 					A word that takes x and leaves y is a function to plot. On the graph,
 					TRACE follows the curve and CALC finds its zeros, extremes and areas.
 				</p>
-<pre><code class="qd">def f(x:d128 -- y:d128) { x sin x * }
+<pre><code class="qd">fn f(x:d128 -- y:d128) { dup sin * }
 
 -12.0 12.0 -12.0 12.0 ui::window
 "f" ui::plot</code></pre>
@@ -796,8 +795,8 @@ bounce</code></pre>
 					Take x and y, leave z, and <code>graph3</code> draws the surface as a
 					wireframe. The arrows turn and tilt it, and + and − zoom.
 				</p>
-<pre><code class="qd">def g(x:d128 y:d128 -- z:d128) {
-	x x * y y * + sqrt sin 4.0 *   // a ripple
+<pre><code class="qd">fn g(x:d128 y:d128 -- z:d128) {
+	dup * swap dup * + sqrt sin 4.0 *   // a ripple
 }
 
 "g" graph3</code></pre>
@@ -818,11 +817,11 @@ bounce</code></pre>
 			<ul class="features">
 				<li>
 					<strong>Scientific.</strong> Trigonometry, logarithms and powers, with each
-					inverse on shift, where a TI or an HP puts it. Whole quarter turns are
+					inverse on shift. Whole quarter turns are
 					exact, so the sine of 180 degrees is 0.
 				</li>
 				<li>
-					<strong>Complex numbers</strong>, entered the way an HP-42S does and shown
+					<strong>Complex numbers</strong>, made from two reals with one key and shown
 					as <code>a+bi</code> or in polar form.
 				</li>
 				<li>

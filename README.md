@@ -81,7 +81,7 @@ shifted, it does the same with e.
 
 ```
 6  Enter  7  *                          ->  42
-LINE  def sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
+LINE  fn sq(x:i64 -- r:i64) { dup * }    Enter    declared 'sq'
       7 sq                              Enter    -> 49
 ```
 
@@ -345,7 +345,7 @@ more than a quarter of a second, so a pause is not one huge step.
 `""` at once when there is none. `programs/system/spring` uses all of them.
 
 ```
-def f(x:f64 -- y:f64) { x sin x * }
+fn f(x:f64 -- y:f64) { dup sin * }
 fn main( -- ) {
 	"FROM?" ui::ask drop -> a
 	"TO?" ui::ask drop -> b

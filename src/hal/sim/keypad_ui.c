@@ -177,9 +177,9 @@ static const qdos_pad_button KEYPAD[QDOS_PAD_ROWS][QDOS_PAD_COLS] = {
  * one object rather than a screenshot with a toolbar under it.
  *
  * Keys are lit from above: a gradient down the face, a highlight on the top
- * edge, a shade on the bottom, and a shadow cast below. One accent only -- the
- * purple shift, which is purple to match the legends it switches on -- because
- * a second accent would leave neither of them reading as one.
+ * edge, a shade on the bottom, and a shadow cast below. Two accents only, the
+ * modifiers, each the colour of the legends it switches on: purple shift and
+ * green ALPHA.
  * ------------------------------------------------------------------------- */
 
 /* The shell the whole thing is moulded from, top to bottom */
@@ -216,9 +216,8 @@ static const uint8_t OP_BOTTOM[3] = {0x2A, 0x2F, 0x35};
 /*
  * The shift key, and the colour of everything it does.
  *
- * Exactly one key on the pad is coloured and it is this one: purple, blank,
- * and the same purple as the second function printed above every key it
- * reaches.
+ * Purple, blank, and the same purple as the second function printed above
+ * every key it reaches.
  * The colour is the cross-reference -- it says "the purple writing is what
  * this key gets you" without a word of explanation.
  */
@@ -240,7 +239,7 @@ static const uint8_t ALPHA_INK_DIM[3] = {0x45, 0x7A, 0x6C};
 static const uint8_t ENTER_TOP[3] = {0x6C, 0x70, 0x6B};
 static const uint8_t ENTER_BOTTOM[3] = {0x3C, 0x40, 0x3B};
 
-/* A modifier while its layer is the one showing */
+/* The ALPHA key, and the trace of it on keys its layer relabels */
 static const uint8_t LIVE_TOP[3] = {0x37, 0x6C, 0x60};
 static const uint8_t LIVE_BOTTOM[3] = {0x1A, 0x38, 0x31};
 
@@ -527,7 +526,8 @@ typedef enum {
 	GROUP_DIGIT, ///< Digits and the point
 	GROUP_OP,	 ///< Arithmetic
 	GROUP_ENTER,
-	GROUP_SHIFT ///< The one coloured key on the pad
+	GROUP_SHIFT, ///< Purple, the colour of what it switches on
+	GROUP_ALPHA	 ///< Green, likewise
 } key_group;
 
 static key_group group_of(const qdos_pad_button* b, int row) {
@@ -536,8 +536,13 @@ static key_group group_of(const qdos_pad_button* b, int row) {
 	}
 
 	qdos_pad_layer selects;
-	if (qdos_pad_modifier(b, &selects) && selects == QDOS_PAD_SYMBOL) {
-		return GROUP_SHIFT;
+	if (qdos_pad_modifier(b, &selects)) {
+		if (selects == QDOS_PAD_SYMBOL) {
+			return GROUP_SHIFT;
+		}
+		if (selects == QDOS_PAD_ALPHA) {
+			return GROUP_ALPHA;
+		}
 	}
 
 	switch (b->plain.key) {
@@ -598,6 +603,10 @@ static void face_colours(key_group group, key_tint tint, uint8_t top[3], uint8_t
 		base_top = SHIFT_TOP;
 		base_bottom = SHIFT_BOTTOM;
 		break;
+	case GROUP_ALPHA:
+		base_top = LIVE_TOP;
+		base_bottom = LIVE_BOTTOM;
+		break;
 	default:
 		base_top = FACE_TOP;
 		base_bottom = FACE_BOTTOM;
@@ -610,10 +619,9 @@ static void face_colours(key_group group, key_tint tint, uint8_t top[3], uint8_t
 		return;
 	}
 
-	// The shift key is already the colour of the layer it switches on, so
-	// holding it down brightens rather than recolours: turning it teal would
-	// break the one thing its colour is there to say
-	if (group == GROUP_SHIFT) {
+	// A modifier is already the colour of the layer it switches on, so
+	// holding it down brightens rather than recolours
+	if (group == GROUP_SHIFT || group == GROUP_ALPHA) {
 		static const uint8_t WHITE[3] = {0xFF, 0xFF, 0xFF};
 		mix(base_top, WHITE, 1, 3, top);
 		mix(base_bottom, WHITE, 1, 3, bottom);
@@ -807,6 +815,50 @@ void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer l
 			label(&cv, QDOS_PADFACE_CAP, x + (kw - width) / 2, y + (kh + cap) / 2, text, live ? TEXT : TEXT_DIM);
 		}
 	}
+}
+
+/* The ring a press sends out from its key */
+static const uint8_t RIPPLE[3] = {0xD8, 0xF0, 0xE4};
+
+/** @brief rounded_outline, laid over what is there rather than written */
+static void rounded_outline_blend(const canvas* cv, int x0, int y0, int w, int h, const uint8_t* c, int alpha) {
+	for (int y = 0; y < h; y++) {
+		const int in = inset_at(y, h);
+		if (y == 0 || y == h - 1 || inset_at(y - 1, h) > in || inset_at(y + 1, h) > in) {
+			for (int x = x0 + in; x < x0 + w - in; x++) {
+				px_blend(cv, x, y0 + y, c, alpha);
+			}
+			continue;
+		}
+		px_blend(cv, x0 + in, y0 + y, c, alpha);
+		px_blend(cv, x0 + w - 1 - in, y0 + y, c, alpha);
+	}
+}
+
+void qdos_pad_draw_ripple(uint8_t* rgb, int stride_px, int x0, int y0, const qdos_pad_button* b, int progress) {
+	if (b == NULL || progress < 0 || progress >= 256) {
+		return;
+	}
+	const canvas cv = {
+			.rgb = rgb,
+			.stride = stride_px,
+			.left = x0,
+			.right = x0 + QDOS_PAD_W,
+			.top = y0,
+			.bottom = y0 + QDOS_PAD_H,
+	};
+
+	int x, y, w, h;
+	qdos_pad_key_rect(b, &x, &y, &w, &h);
+	x += x0;
+	y += y0;
+
+	// Out fast and slowing, fading as it goes
+	const int left = 255 - progress;
+	const int grow = 1 + (255 - left * left / 255) * QDOS_RIPPLE_REACH / 255;
+	const int alpha = left * left / 255 * 3 / 4;
+	rounded_outline_blend(&cv, x - grow, y - grow, w + 2 * grow, h + 2 * grow, RIPPLE, alpha);
+	rounded_outline_blend(&cv, x - grow + 1, y - grow + 1, w + 2 * grow - 2, h + 2 * grow - 2, RIPPLE, alpha / 3);
 }
 
 /**

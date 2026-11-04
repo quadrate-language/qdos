@@ -151,6 +151,16 @@ bool qdos_pad_modifier(const qdos_pad_button* b, qdos_pad_layer* selects);
  */
 void qdos_pad_draw(uint8_t* rgb, int stride_px, int x0, int y0, qdos_pad_layer layer, const qdos_pad_button* pressed);
 
+/** @brief How far past its key a press's ring spreads, in pixels */
+#define QDOS_RIPPLE_REACH 10
+
+/**
+ * @brief Draw the ring a press of @p b sends out, @p progress of 256 of the way
+ *
+ * Over a keypad already drawn; nothing at 256 or past it.
+ */
+void qdos_pad_draw_ripple(uint8_t* rgb, int stride_px, int x0, int y0, const qdos_pad_button* b, int progress);
+
 /** @brief Draw the case around the panel and the keypad */
 void qdos_frame_draw(uint8_t* rgb, int stride_px);
 

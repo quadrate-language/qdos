@@ -52,7 +52,8 @@ Module.preRun.push(function () {
 // and the shell takes them one at a time, paced so they can be watched going
 // in. A step is {key: 'ENTER'} or {text: '7 sq'}, and a text step may carry
 // its own {gap} in milliseconds between characters, for a long one. Named keys travel as the
-// negative codes sim_sdl3.c's WEB_KEYS lists, characters as themselves.
+// negative codes sim_sdl3.c's WEB_KEYS lists, characters as themselves. Letters
+// are typed as on the keypad, with ALPHA put on before them and off after.
 (function () {
 	var KEYS = {
 		ENTER: -1, ESC: -2,
@@ -60,6 +61,8 @@ Module.preRun.push(function () {
 		MUL: -8, DIV: -9, ADD: -10, SUB: -11,
 		CPLX: -12, PWR: -13, DEL: -14,
 	};
+	var ALPHA_ON = -15;
+	var ALPHA_OFF = -16;
 	var KEY_GAP_MS = 190;
 	var CHAR_GAP_MS = 55;
 
@@ -69,16 +72,34 @@ Module.preRun.push(function () {
 
 	Module.qdosType = function (steps, onDone) {
 		queue = [];
+		var alpha = null; // not known until the first change
+		function wantAlpha(on, gap) {
+			if (alpha !== on) {
+				queue.push({code: on ? ALPHA_ON : ALPHA_OFF, gap: alpha === null ? 0 : gap});
+				alpha = on;
+			}
+		}
 		steps.forEach(function (step) {
 			if (step.key) {
+				wantAlpha(false, KEY_GAP_MS);
 				queue.push({code: KEYS[step.key], gap: KEY_GAP_MS});
 			} else {
 				var gap = step.gap || CHAR_GAP_MS;
 				for (var i = 0; i < step.text.length; i++) {
+					var ch = step.text.charAt(i);
+					// The digits work under ALPHA, so a name like i64 stays in it
+					if (ch >= 'a' && ch <= 'z') {
+						wantAlpha(true, gap);
+					} else if (!(ch >= '0' && ch <= '9')) {
+						wantAlpha(false, gap);
+					}
 					queue.push({code: step.text.charCodeAt(i), gap: gap});
 				}
 			}
 		});
+		if (alpha) {
+			wantAlpha(false, KEY_GAP_MS);
+		}
 		dueAt = 0;
 		done = onDone || null;
 		if (queue.length === 0 && done) {
