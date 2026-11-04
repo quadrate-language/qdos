@@ -75,8 +75,8 @@ brings it back. A key that fails changes nothing, so `UNDO` still takes back
 the one before it. `DEL` with nothing typed drops x, as on an HP 48.
 `EE` (beside ±, as an HP 42S has E) starts the exponent of the number being typed, `6.02 EE 23`,
 and ± after it is the exponent's sign; a keyboard's `e` does the same. A
-second point is ignored, and a number past the largest a double holds is
-refused as `OVERFLOW`. The `π` key pushes pi, or types it into a line;
+second point is ignored, and a number past the largest a decimal128 holds,
+just under 10^6145, is refused as `OVERFLOW`. The `π` key pushes pi, or types it into a line;
 shifted, it does the same with e.
 
 ```
