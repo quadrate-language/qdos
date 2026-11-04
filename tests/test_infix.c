@@ -80,7 +80,7 @@ static void test_postfix(void) {
 static void test_keypad_words(void) {
 	check_rpn("x pow 2", "x 2.0 pow");
 	check_rpn("x divide 2", "x 2.0 divide");
-	check_rpn("x plus 1 times 2", "x 1.0 2.0 * +");
+	check_rpn("x plus 1 multiply 2", "x 1.0 2.0 * +");
 }
 
 static void test_a_comma_leaves_values_side_by_side(void) {

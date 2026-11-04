@@ -14,9 +14,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Empty the stack, so a check reads only what its own source left */
+static qd_interp* emptied(qd_interp* interp) {
+	qd_context* ctx = qd_interp_context(interp);
+	while (!qd_stack_is_empty(ctx->st)) {
+		qd_drop(ctx);
+	}
+	return interp;
+}
+
 static qd_interp* fresh(void) {
 	qd_interp* interp = qd_interp_create(4096);
-	qd_interp_set_default_float(interp, qdos_decimal() ? QD_INTERP_FLOAT_F128 : QD_INTERP_FLOAT_F64);
+	qd_interp_set_default_float(interp, qdos_decimal() ? QD_INTERP_FLOAT_D128 : QD_INTERP_FLOAT_F64);
 	qdos_register_math(interp);
 	return interp;
 }
@@ -30,7 +39,7 @@ static double value_of(const char* source, bool* ok) {
 	qd_interp_value value;
 	if (*ok && qd_interp_peek(interp, 0, &value)) {
 		out = (value.type == QD_INTERP_VALUE_FLOAT)	 ? value.f
-			  : (value.type == QD_INTERP_VALUE_F128) ? strtod(value.text, NULL)
+			  : (value.type == QD_INTERP_VALUE_D128) ? strtod(value.text, NULL)
 													 : (double)value.i;
 	}
 
@@ -284,7 +293,7 @@ static void test_overflow_becomes_a_float(void) {
 	CHECK(fabs(value_of("9223372036854775807 1 plus", &ok) - 9223372036854775808.0) < 1e4);
 	CHECK(!is_whole("9223372036854775807 1 plus"));
 	CHECK(value_of("-9223372036854775808 1 minus", &ok) < -9.2e18);
-	CHECK(fabs(value_of("4294967296 4294967296 times", &ok) - 18446744073709551616.0) < 1e5);
+	CHECK(fabs(value_of("4294967296 4294967296 multiply", &ok) - 18446744073709551616.0) < 1e5);
 	CHECK(value_of("3037000500 sq", &ok) > 9.2e18);
 	CHECK(value_of("2097152 cb", &ok) > 9.2e18);
 	CHECK(value_of("-9223372036854775808 abs", &ok) > 9.2e18);
@@ -293,7 +302,7 @@ static void test_overflow_becomes_a_float(void) {
 	CHECK(value_of("170 fac", &ok) > 7.2e306);
 
 	// And whole where it fits
-	CHECK(is_whole("3 4 plus") && is_whole("3 4 minus") && is_whole("3 4 times"));
+	CHECK(is_whole("3 4 plus") && is_whole("3 4 minus") && is_whole("3 4 multiply"));
 	CHECK(is_whole("20 fac") && value_of("20 fac", &ok) == 2432902008176640000.0);
 	CHECK(is_whole("5.0 fac") && value_of("5.0 fac", &ok) == 120.0 && ok);
 	CHECK(refuses("5.5 fac") && refuses("\"x\" fac"));
@@ -344,7 +353,7 @@ static void test_radian_quarter_turns_are_exact(void) {
 	CHECK(value_of("pi sin", &ok) == 0.0);
 	CHECK(value_of("pi 2.0 divide cos", &ok) == 0.0);
 	CHECK(value_of("pi neg 2.0 divide sin", &ok) == -1.0);
-	CHECK(value_of("pi 2.0 times cos", &ok) == 1.0);
+	CHECK(value_of("pi 2.0 multiply cos", &ok) == 1.0);
 	CHECK(value_of("pi tan", &ok) == 0.0);
 	CHECK(refuses("pi 2.0 divide tan"));
 	CHECK(fabs(value_of("1.0 sin", &ok) - sin(1.0)) < 1e-15);
@@ -365,27 +374,27 @@ static void test_finite_only_refuses_and_restores(void) {
 	char line[64];
 	qd_interp* interp = fresh();
 	qdos_math_set_finite_only(true);
-	snprintf(line, sizeof(line), "%s 10 times", big);
+	snprintf(line, sizeof(line), "%s 10 multiply", big);
 	CHECK(!qd_interp_eval(interp, line));
 	CHECK(strstr(qd_interp_error(interp), "OVERFLOW") != NULL);
 	CHECK(qd_interp_depth(interp) == 2);
 	qd_interp_value v;
 	CHECK(qd_interp_peek(interp, 0, &v) && v.type == QD_INTERP_VALUE_INT && v.i == 10);
-	qd_f128_t kept, want;
+	qd_d128_t kept, want;
 	CHECK(qd_interp_peek(interp, 1, &v) &&
-			(qdos_decimal() ? qd_f128_parse(v.text, &kept) && qd_f128_parse(big, &want) &&
-									  qd_f128_compare(kept, want) == 0
+			(qdos_decimal() ? qd_d128_parse(v.text, &kept) && qd_d128_parse(big, &want) &&
+									  qd_d128_compare(kept, want) == 0
 							: v.f == 1e308));
 
-	CHECK(qd_interp_eval(interp, "clear -8 0.5 pow") == false);
+	CHECK(qd_interp_eval(emptied(interp), "-8 0.5 pow") == false);
 	CHECK(strstr(qd_interp_error(interp), "UNDEFINED") != NULL);
-	CHECK(qd_interp_eval(interp, "clear 20000 exp") == false);
-	CHECK(qd_interp_eval(interp, "clear 2 3 pow"));
+	CHECK(qd_interp_eval(emptied(interp), "20000 exp") == false);
+	CHECK(qd_interp_eval(emptied(interp), "2 3 pow"));
 	qdos_math_set_finite_only(false);
 
 	// Anywhere else infinity is a value like any other
-	snprintf(line, sizeof(line), "clear %s 10 times", big);
-	CHECK(qd_interp_eval(interp, line));
+	snprintf(line, sizeof(line), "%s 10 multiply", big);
+	CHECK(qd_interp_eval(emptied(interp), line));
 	CHECK(qd_interp_peek(interp, 0, &v) && isinf(qdos_decimal() ? strtod(v.text, NULL) : v.f));
 	qd_interp_destroy(interp);
 }
@@ -395,7 +404,7 @@ static void decimal_of(const char* source, char* out, size_t cap) {
 	qd_interp* interp = fresh();
 	qd_interp_value value;
 	out[0] = '\0';
-	if (qd_interp_eval(interp, source) && qd_interp_peek(interp, 0, &value) && value.type == QD_INTERP_VALUE_F128) {
+	if (qd_interp_eval(interp, source) && qd_interp_peek(interp, 0, &value) && value.type == QD_INTERP_VALUE_D128) {
 		snprintf(out, cap, "%s", value.text);
 	}
 	qd_interp_destroy(interp);
@@ -423,7 +432,7 @@ static void test_decimal_words(void) {
 			{"1.1 2 pow", "1.21"},
 	};
 
-	char got[QD_F128_STRING_MAX];
+	char got[QD_D128_STRING_MAX];
 	for (size_t i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
 		decimal_of(CASES[i].source, got, sizeof(got));
 		CHECK_STR(got, CASES[i].want);

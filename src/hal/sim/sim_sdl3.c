@@ -12,14 +12,26 @@
 
 #include <dirent.h>
 #include <errno.h>
-#include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/*
+ * In a browser there is no inotify to watch the card with, nor a thread to do
+ * the watching, and nothing but the page itself writes to it. The store is
+ * Emscripten's filesystem, its user scope kept in IndexedDB; see web/pre.js.
+ */
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#define SIM_WATCH 0
+#else
+#include <poll.h>
+#include <sys/inotify.h>
+#define SIM_WATCH 1
+#endif
 
 /**
  * @brief The panel is 1bpp and the kernel cuts at 128 (drm_fb_gray8_to_mono_line)
@@ -103,10 +115,11 @@ typedef struct {
 	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
 } sim_state;
 
-#define WATCH_EVENTS (IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE | IN_CREATE)
-
 static const char* dir_for(qdos_store_scope scope);
 static bool is_dir(const char* dir, const char* name);
+
+#if SIM_WATCH
+#define WATCH_EVENTS (IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE | IN_CREATE)
 
 /** @brief The card and every app folder on it; inotify does not recurse */
 static void sim_watch_inbox(sim_state* st) {
@@ -182,6 +195,7 @@ static int SDLCALL sim_watch_thread(void* data) {
 	}
 	return 0;
 }
+#endif // SIM_WATCH
 
 static bool sim_time_of_day(qdos_hal* hal, int* seconds) {
 	(void)hal;
@@ -253,7 +267,18 @@ static int sim_init(qdos_hal* hal) {
 		}
 	}
 
-	st->window = SDL_CreateWindow("QDOS", WINDOW_W * st->scale, WINDOW_H * st->scale, 0);
+#ifdef __EMSCRIPTEN__
+	// The page sizes the canvas (web/shell.html), and the case is letterboxed
+	// into whatever shape that comes to, at the screen's own pixel density
+	const SDL_WindowFlags window_flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+
+	// Keys go to the calculator only while it has focus, so the rest of the
+	// page still scrolls with the arrows and the space bar
+	SDL_SetHint(SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#canvas");
+#else
+	const SDL_WindowFlags window_flags = 0;
+#endif
+	st->window = SDL_CreateWindow("QDOS", WINDOW_W * st->scale, WINDOW_H * st->scale, window_flags);
 	if (!st->window) {
 		fprintf(stderr, "qdos: SDL_CreateWindow failed: %s\n", SDL_GetError());
 		return 1;
@@ -272,12 +297,22 @@ static int sim_init(qdos_hal* hal) {
 		return 1;
 	}
 
-#ifdef SDL_PLATFORM_ANDROID
+#if defined(SDL_PLATFORM_ANDROID) || defined(__EMSCRIPTEN__)
 	// A phone is rarely a whole multiple of the case, so it fills the width
-	// and the pixel-art filter keeps the stems even at the fraction
+	// and the pixel-art filter keeps the stems even at the fraction. A browser
+	// window is whatever size it was dragged to, which comes to the same.
 	SDL_SetRenderLogicalPresentation(st->renderer, WINDOW_W, WINDOW_H, SDL_LOGICAL_PRESENTATION_LETTERBOX);
 	SDL_SetTextureScaleMode(st->texture, SDL_SCALEMODE_PIXELART);
-#else
+#endif
+#ifdef __EMSCRIPTEN__
+	SDL_StartTextInput(st->window);
+
+	// A wheel over the calculator scrolls the page, which SDL would otherwise
+	// keep for itself. Any letterbox around the case is left transparent, for
+	// the page to show through.
+	SDL_SetEventEnabled(SDL_EVENT_MOUSE_WHEEL, false);
+	SDL_SetRenderDrawColor(st->renderer, 0, 0, 0, 0);
+#elif !defined(SDL_PLATFORM_ANDROID)
 	SDL_SetRenderLogicalPresentation(st->renderer, WINDOW_W, WINDOW_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
 
 	// Nearest-neighbour: real pixels, not smoothed.
@@ -290,11 +325,13 @@ static int sim_init(qdos_hal* hal) {
 
 	mkdir(dir_for(QDOS_SCOPE_INBOX), 0755);
 
+#if SIM_WATCH
 	st->watch_fd = inotify_init1(IN_CLOEXEC);
 	if (st->watch_fd >= 0 && pipe(st->wake_fd) == 0) {
 		sim_watch_inbox(st);
 		st->watcher = SDL_CreateThread(sim_watch_thread, "qdos-watch", st);
 	}
+#endif
 
 	st->running = true;
 	return 0;
@@ -316,6 +353,7 @@ static void sim_shutdown(qdos_hal* hal) {
 		SDL_DestroyWindow(st->window);
 	}
 
+#if SIM_WATCH
 	// Told to stop before being waited for: closing the descriptor it is
 	// blocked on leaves the read blocked and the wait below never returns
 	if (st->watcher != NULL) {
@@ -337,6 +375,7 @@ static void sim_shutdown(qdos_hal* hal) {
 		close(st->watch_fd);
 		st->watch_fd = -1;
 	}
+#endif
 
 	st->texture = NULL;
 	st->renderer = NULL;
@@ -378,6 +417,128 @@ static void sim_present(qdos_hal* hal, const uint8_t* fb) {
 	push_frame(st);
 }
 
+/**
+ * @brief Act on a press of @p b: a key, a text button, or a change of face
+ * @return true if it sent something, which is then in @p out
+ */
+static bool sim_press(sim_state* st, const qdos_pad_button* b, qdos_key_event* out) {
+	const qdos_pad_layer was = st->face.layer;
+	const qdos_pad_action* a = qdos_pad_press(&st->face, b);
+	if (was != st->face.layer) {
+		push_frame(st);
+	}
+	if (a == NULL) {
+		return false;
+	}
+
+	if (a->key != QDOS_KEY_NONE) {
+		out->key = a->key;
+		out->ch = 0;
+		return true;
+	}
+	st->pending = a->text;
+	out->key = QDOS_KEY_CHAR;
+	out->ch = *st->pending++;
+	return true;
+}
+
+#ifdef __EMSCRIPTEN__
+/*
+ * Keys the page presses: a sequence in the text can be typed into the
+ * calculator. web/pre.js queues them and paces them, so they can be watched
+ * going in; each is drawn held down for a moment, as a click would be.
+ */
+#define SIM_WEB_PRESS_MS 110
+
+/** @brief When the key the page pressed comes back up; 0 while none is down */
+static Uint64 g_press_until;
+
+/** @brief The named keys, by the negative codes web/pre.js gives them */
+static const qdos_key WEB_KEYS[] = {
+		QDOS_KEY_NONE,
+		QDOS_KEY_ENTER,
+		QDOS_KEY_CLEAR,
+		QDOS_KEY_SOFT1,
+		QDOS_KEY_SOFT2,
+		QDOS_KEY_SOFT3,
+		QDOS_KEY_SOFT4,
+		QDOS_KEY_SOFT5,
+		QDOS_KEY_MUL,
+		QDOS_KEY_DIV,
+		QDOS_KEY_ADD,
+		QDOS_KEY_SUB,
+		QDOS_KEY_COMPLEX,
+		QDOS_KEY_POWER,
+		QDOS_KEY_BACKSPACE,
+};
+
+static bool sim_web_key_due(void) {
+	return EM_ASM_INT({ return Module.qdosKeyDue ? Module.qdosKeyDue() : 0; }) != 0;
+}
+
+/** @brief The button that sends @p key, on any face, to be drawn pressed */
+static const qdos_pad_button* sim_button_for(qdos_key key) {
+	for (int row = 0; row < QDOS_PAD_ROWS; row++) {
+		for (int col = 0; col < qdos_pad_row_cols(row); col++) {
+			const qdos_pad_button* b = qdos_pad_button_at(col, row);
+			if (b != NULL && (b->plain.key == key || b->symbol.key == key)) {
+				return b;
+			}
+		}
+	}
+	return NULL;
+}
+
+static bool sim_web_key(sim_state* st, qdos_key_event* out) {
+	const int code = EM_ASM_INT({ return Module.qdosNextKey ? Module.qdosNextKey() : 0; });
+	if (code == 0) {
+		return false;
+	}
+
+	out->key = QDOS_KEY_NONE;
+	out->ch = 0;
+	if (code > 0 && code < 128) {
+		qdos_pad_typed((char)code, out);
+	} else if (code < 0 && (size_t)-code < sizeof(WEB_KEYS) / sizeof(WEB_KEYS[0])) {
+		out->key = WEB_KEYS[-code];
+	}
+	if (out->key == QDOS_KEY_NONE) {
+		return false;
+	}
+
+	const qdos_pad_button* b = (out->key != QDOS_KEY_CHAR) ? sim_button_for(out->key) : NULL;
+	if (b != NULL) {
+		st->pressed = b;
+		g_press_until = SDL_GetTicks() + SIM_WEB_PRESS_MS;
+		push_frame(st);
+	}
+	return true;
+}
+
+/** @brief The button under a finger, whose position SDL gives as a fraction of the window */
+static const qdos_pad_button* sim_finger_button(sim_state* st, const SDL_Event* event) {
+	int w = 0;
+	int h = 0;
+	SDL_GetWindowSize(st->window, &w, &h);
+
+	float x = 0.0f;
+	float y = 0.0f;
+	if (!SDL_RenderCoordinatesFromWindow(
+				st->renderer, event->tfinger.x * (float)w, event->tfinger.y * (float)h, &x, &y)) {
+		return NULL;
+	}
+	return qdos_pad_at((int)x, (int)y);
+}
+
+static void sim_web_release(sim_state* st) {
+	if (g_press_until != 0 && SDL_GetTicks() >= g_press_until) {
+		g_press_until = 0;
+		st->pressed = NULL;
+		push_frame(st);
+	}
+}
+#endif
+
 static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 	sim_state* st = (sim_state*)hal->impl;
 
@@ -388,6 +549,13 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 		return true;
 	}
 
+#ifdef __EMSCRIPTEN__
+	// After a text button's rest, so the two never interleave
+	if (sim_web_key(st, out)) {
+		return true;
+	}
+#endif
+
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
@@ -396,6 +564,11 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 		// the only acknowledgement the simulator can offer -- on the real
 		// machine there is a key under your finger doing it for you.
 		case SDL_EVENT_MOUSE_BUTTON_UP:
+#ifdef __EMSCRIPTEN__
+			if (event.button.which == SDL_TOUCH_MOUSEID) {
+				break; // the finger's own events have it
+			}
+#endif
 			if (st->pressed != NULL) {
 				st->pressed = NULL;
 				push_frame(st);
@@ -403,6 +576,11 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 			break;
 
 		case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+#ifdef __EMSCRIPTEN__
+			if (event.button.which == SDL_TOUCH_MOUSEID) {
+				break;
+			}
+#endif
 			SDL_ConvertEventToRenderCoordinates(st->renderer, &event);
 			const qdos_pad_button* b = qdos_pad_at((int)event.button.x, (int)event.button.y);
 			if (b == NULL) {
@@ -414,25 +592,46 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 			st->pressed = b;
 			push_frame(st);
 
-			const qdos_pad_layer was = st->face.layer;
-			const qdos_pad_action* a = qdos_pad_press(&st->face, b);
-			if (was != st->face.layer) {
-				push_frame(st);
-			}
-			if (a == NULL) {
-				break;
-			}
-
-			if (a->key != QDOS_KEY_NONE) {
-				out->key = a->key;
-				out->ch = 0;
+			if (sim_press(st, b, out)) {
 				return true;
 			}
-			st->pending = a->text;
-			out->key = QDOS_KEY_CHAR;
-			out->ch = *st->pending++;
-			return true;
+			break;
 		}
+
+#ifdef __EMSCRIPTEN__
+		/*
+		 * On a page, a finger on the keypad may be the start of a scroll. So
+		 * the key goes down with the finger but only acts when it lifts, still
+		 * over it; a scroll cancels the touch, and the key comes back up having
+		 * done nothing, as a button on a phone does.
+		 */
+		case SDL_EVENT_FINGER_DOWN:
+			st->pressed = sim_finger_button(st, &event);
+			if (st->pressed != NULL) {
+				push_frame(st);
+			}
+			break;
+
+		case SDL_EVENT_FINGER_CANCELED:
+			if (st->pressed != NULL) {
+				st->pressed = NULL;
+				push_frame(st);
+			}
+			break;
+
+		case SDL_EVENT_FINGER_UP: {
+			const qdos_pad_button* b = st->pressed;
+			if (b == NULL) {
+				break;
+			}
+			st->pressed = NULL;
+			push_frame(st);
+			if (sim_finger_button(st, &event) == b && sim_press(st, b, out)) {
+				return true;
+			}
+			break;
+		}
+#endif
 
 		case SDL_EVENT_QUIT:
 			st->running = false;
@@ -539,6 +738,69 @@ static uint32_t sim_ticks_ms(qdos_hal* hal) {
 	return (uint32_t)SDL_GetTicks();
 }
 
+#ifdef __EMSCRIPTEN__
+/** @brief Longest the shell sleeps between looks at the queue, in ms */
+#define SIM_WAIT_SLICE_MS 10
+
+/**
+ * @brief Has the page been hidden since this was last asked?
+ *
+ * Which may be the last the shell hears of it: a closed tab says nothing more,
+ * so the session is saved then, as Android's background is answered. Noted by
+ * web/pre.js, acted on here, between keys, as hal->save requires.
+ */
+static bool sim_page_hidden(void) {
+	return EM_ASM_INT({
+		const hidden = Module.qdosHidden ? 1 : 0;
+		Module.qdosHidden = false;
+		return hidden;
+	}) != 0;
+}
+
+/** @brief Hand the browser its thread back; Asyncify resumes us after */
+static void sim_wait(qdos_hal* hal, int timeout_ms) {
+	sim_state* st = (sim_state*)hal->impl;
+	const Uint64 start = SDL_GetTicks();
+	for (;;) {
+		sim_web_release(st);
+		if (sim_web_key_due()) {
+			return;
+		}
+
+		if (sim_page_hidden()) {
+			if (hal->save != NULL) {
+				hal->save(hal->save_user);
+			}
+		}
+
+		SDL_PumpEvents();
+		if (SDL_HasEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST)) {
+			return;
+		}
+
+		int slice = SIM_WAIT_SLICE_MS;
+		if (timeout_ms >= 0) {
+			const Uint64 spent = SDL_GetTicks() - start;
+			if (spent >= (Uint64)timeout_ms) {
+				return;
+			}
+			if ((Uint64)slice > (Uint64)timeout_ms - spent) {
+				slice = (int)((Uint64)timeout_ms - spent);
+			}
+		}
+		emscripten_sleep((unsigned)slice);
+	}
+}
+
+/** @brief The user scope is in memory until it is written back to IndexedDB */
+static void sim_store_persist(void) {
+	EM_ASM({
+		if (Module.qdosPersist) {
+			Module.qdosPersist();
+		}
+	});
+}
+#else
 static void sim_wait(qdos_hal* hal, int timeout_ms) {
 	(void)hal;
 	// A NULL event leaves it on the queue, so sim_poll_key still sees it.
@@ -548,6 +810,10 @@ static void sim_wait(qdos_hal* hal, int timeout_ms) {
 		SDL_WaitEventTimeout(NULL, timeout_ms);
 	}
 }
+
+static void sim_store_persist(void) {
+}
+#endif
 
 /**
  * @brief Build the on-disk path for a stored entry
@@ -649,6 +915,7 @@ static qdos_store_result sim_store_write(qdos_hal* hal, const char* name, const 
 
 	const size_t written = fwrite(buf, 1, len, f);
 	const bool ok = (fclose(f) == 0) && (written == len);
+	sim_store_persist();
 	return ok ? QDOS_STORE_OK : QDOS_STORE_IO_ERROR;
 }
 
@@ -661,6 +928,7 @@ static qdos_store_result sim_store_remove(qdos_hal* hal, const char* name) {
 	}
 
 	if (remove(path) == 0) {
+		sim_store_persist();
 		return QDOS_STORE_OK;
 	}
 	return (errno == ENOENT) ? QDOS_STORE_NOT_FOUND : QDOS_STORE_IO_ERROR;

@@ -24,7 +24,7 @@ bool qdos_decimal(void) {
 	return g_decimal;
 }
 
-qd_f128_t qdos_decimal_of_double(double v) {
+qd_d128_t qdos_decimal_of_double(double v) {
 	char text[40];
 	for (int digits = 15; digits <= 17; digits++) {
 		snprintf(text, sizeof(text), "%.*g", digits, v);
@@ -32,14 +32,14 @@ qd_f128_t qdos_decimal_of_double(double v) {
 			break;
 		}
 	}
-	qd_f128_t r;
-	if (!qd_f128_parse(text, &r)) {
-		r = qd_f128_from_f64(v); // inf and nan, which %g spells as f128 reads them anyway
+	qd_d128_t r;
+	if (!qd_d128_parse(text, &r)) {
+		r = qd_d128_from_f64(v); // inf and nan, which %g spells as d128 reads them anyway
 	}
 	return r;
 }
 
-bool qdos_decimal_peek(qd_context* ctx, size_t depth, qd_f128_t* out) {
+bool qdos_decimal_peek(qd_context* ctx, size_t depth, qd_d128_t* out) {
 	const size_t size = qd_stack_size(ctx->st);
 	if (depth >= size) {
 		return false;
@@ -49,11 +49,11 @@ bool qdos_decimal_peek(qd_context* ctx, size_t depth, qd_f128_t* out) {
 		return false;
 	}
 	switch (e.type) {
-	case QD_STACK_TYPE_F128:
-		*out = e.value.q;
+	case QD_STACK_TYPE_D128:
+		*out = e.value.d;
 		return true;
 	case QD_STACK_TYPE_INT:
-		*out = qd_f128_from_i64(e.value.i);
+		*out = qd_d128_from_i64(e.value.i);
 		return true;
 	case QD_STACK_TYPE_FLOAT:
 		*out = qdos_decimal_of_double(e.value.f);
@@ -63,10 +63,10 @@ bool qdos_decimal_peek(qd_context* ctx, size_t depth, qd_f128_t* out) {
 	}
 }
 
-// An array of f128 as a fresh array of f64, taking over the reference the slot held
+// An array of d128 as a fresh array of f64, taking over the reference the slot held
 static void array_to_f64(qd_stack_element_t* slot) {
 	qd_array_t* from = (qd_array_t*)slot->value.p;
-	if (from == NULL || !qd_array_is_valid(from) || from->elemType != QD_ARRAY_TYPE_F128) {
+	if (from == NULL || !qd_array_is_valid(from) || from->elemType != QD_ARRAY_TYPE_D128) {
 		return;
 	}
 	qd_array_t* to = qd_array_create(from->length, QD_ARRAY_TYPE_FLOAT);
@@ -74,9 +74,9 @@ static void array_to_f64(qd_stack_element_t* slot) {
 		return;
 	}
 	for (size_t i = 0; i < from->length; i++) {
-		qd_f128_t q;
-		qd_array_get_f128(from, i, &q);
-		qd_array_push_float(to, qd_f128_to_f64(q));
+		qd_d128_t q;
+		qd_array_get_d128(from, i, &q);
+		qd_array_push_float(to, qd_d128_to_f64(q));
 	}
 	slot->value.p = to;
 	qd_array_release(from);
@@ -93,8 +93,8 @@ int qdos_decimal_call(qd_context* ctx, size_t inputs, qd_interp_native_fn fn, vo
 	const size_t from = st->size - inputs;
 	for (size_t k = from; k < st->size; k++) {
 		qd_stack_element_t* e = &st->data[k];
-		if (e->type == QD_STACK_TYPE_F128) {
-			e->value.f = qd_f128_to_f64(e->value.q);
+		if (e->type == QD_STACK_TYPE_D128) {
+			e->value.f = qd_d128_to_f64(e->value.d);
 			e->type = QD_STACK_TYPE_FLOAT;
 		} else if (e->type == QD_STACK_TYPE_PTR) {
 			array_to_f64(e);
@@ -106,8 +106,8 @@ int qdos_decimal_call(qd_context* ctx, size_t inputs, qd_interp_native_fn fn, vo
 	for (size_t k = from; k < st->size; k++) {
 		qd_stack_element_t* e = &st->data[k];
 		if (e->type == QD_STACK_TYPE_FLOAT) {
-			e->value.q = qdos_decimal_of_double(e->value.f);
-			e->type = QD_STACK_TYPE_F128;
+			e->value.d = qdos_decimal_of_double(e->value.f);
+			e->type = QD_STACK_TYPE_D128;
 		}
 	}
 	return result;

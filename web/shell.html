@@ -1,0 +1,1067 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>r8 One</title>
+<meta name="description" content="r8 One is an open-source RPN calculator you program in Quadrate. Try the real firmware in your browser.">
+<meta name="theme-color" content="#c9cec6">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+	/*
+	 * The page is the panel: a Sharp memory LCD is silver paper and ink and
+	 * nothing else, so the page is too. The case's graphite and its keycap
+	 * colours appear only where a key is meant.
+	 */
+	:root {
+		--paper: #c9cec6;      /* PANEL_PAPER in sim_sdl3.c */
+		--paper-deep: #b9bfb5; /* the same paper in the keywell's shadow */
+		--ink: #1a1c1a;        /* PANEL_INK */
+		--ink-soft: #3d423c;
+		--rule: rgba(26, 28, 26, 0.18);
+		--case: #262826;       /* CASE_TOP in keypad_ui.c */
+		--cap-text: #e8ebe4;   /* TEXT */
+
+		--sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+		--mono: "IBM Plex Mono", ui-monospace, monospace;
+
+		--step: 1.0625rem;
+		--measure: 36rem;
+		--gutter: 16px;
+	}
+
+	*, *::before, *::after {
+		box-sizing: border-box;
+	}
+
+	html {
+		background: var(--paper);
+		color: var(--ink);
+		-webkit-text-size-adjust: 100%;
+	}
+
+	body {
+		margin: 0;
+		background: var(--paper);
+		font: 400 var(--step)/1.6 var(--sans);
+		font-variation-settings: "wdth" 100;
+		text-rendering: optimizeLegibility;
+	}
+
+	a {
+		color: inherit;
+		text-decoration-thickness: 1px;
+		text-underline-offset: 0.18em;
+	}
+
+	a:hover {
+		text-decoration-thickness: 2px;
+	}
+
+	:focus-visible {
+		outline: 3px solid var(--ink);
+		outline-offset: 3px;
+	}
+
+	/* --- Masthead ---------------------------------------------------------- */
+
+	.masthead {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 1.5rem;
+		max-width: 76rem;
+		margin: 0 auto;
+		padding: 20px var(--gutter) 0;
+	}
+
+	/* The nameplate on the case, set as the case sets it */
+	.wordmark {
+		font-weight: 800;
+		font-size: 1.25rem;
+		font-variation-settings: "wdth" 125;
+		letter-spacing: -0.01em;
+		text-decoration: none;
+	}
+
+	.masthead nav {
+		display: flex;
+		gap: 1.25rem;
+		font-size: 0.9375rem;
+	}
+
+	/* --- Layout ------------------------------------------------------------ */
+
+	.layout {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-areas:
+			"intro"
+			"device"
+			"rest";
+		max-width: 76rem;
+		margin: 0 auto;
+		padding: 0 var(--gutter);
+	}
+
+	.intro { grid-area: intro; }
+	.device-col { grid-area: device; }
+	.rest { grid-area: rest; }
+
+	.intro,
+	.rest {
+		max-width: var(--measure);
+	}
+
+	@media (min-width: 900px) {
+		.layout {
+			grid-template-columns: auto minmax(0, var(--measure));
+			grid-template-areas:
+				"device intro"
+				"device rest";
+			grid-template-rows: auto 1fr;
+			justify-content: center;
+			column-gap: clamp(3rem, 6vw, 6.5rem);
+		}
+	}
+
+	/* --- The calculator ---------------------------------------------------- */
+
+	.device-col {
+		margin: 2.5rem 0 1rem;
+	}
+
+	.device {
+		position: relative;
+		margin: 0 auto;
+		/* The case, 416 by 738, as large as the screen allows */
+		width: min(100%, calc(78svh * 416 / 738));
+		aspect-ratio: 416 / 738;
+	}
+
+	@media (min-width: 900px) {
+		.device-col {
+			margin: 0;
+			padding-top: 28px;
+		}
+
+		.device {
+			position: sticky;
+			top: 28px;
+			width: auto;
+			height: min(calc(100svh - 56px), 860px);
+		}
+	}
+
+	/* A silhouette of the case holds the place until the machine is up */
+	.device::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		background: var(--case);
+		box-shadow:
+			0 1px 0 rgba(255, 255, 255, 0.35) inset,
+			0 28px 48px -18px rgba(26, 28, 26, 0.55),
+			0 6px 14px -6px rgba(26, 28, 26, 0.4);
+	}
+
+	.device canvas {
+		position: absolute;
+		inset: 0;
+		display: block;
+		/* SDL writes the size it was created at onto the element */
+		width: 100% !important;
+		height: 100% !important;
+		/* A tap is a key; a swipe still scrolls the page past the calculator */
+		touch-action: pan-y !important;
+		opacity: 0;
+		transition: opacity 400ms ease-out;
+	}
+
+	.device.is-on canvas {
+		opacity: 1;
+	}
+
+	.device canvas:focus {
+		outline: none;
+	}
+
+	/* Reached with Tab, not a click: a click shows where it went on the keys */
+	.device canvas:focus-visible:not([data-clicked]) {
+		outline: 3px solid var(--ink);
+		outline-offset: 5px;
+	}
+
+	/* Where the panel sits on the case, while there is nothing on it yet */
+	.boot {
+		position: absolute;
+		left: calc(8 / 416 * 100%);
+		right: calc(8 / 416 * 100%);
+		top: calc(30 / 738 * 100%);
+		height: calc(240 / 738 * 100%);
+		display: grid;
+		place-items: center;
+		background: var(--paper);
+		color: var(--ink);
+		font-size: 0.875rem;
+		transition: opacity 400ms ease-out;
+	}
+
+	.device.is-on .boot {
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.device-hint {
+		margin: 1rem auto 0;
+		max-width: 26rem;
+		font-size: 0.875rem;
+		line-height: 1.5;
+		color: var(--ink-soft);
+		text-align: center;
+	}
+
+	@media (min-width: 900px) {
+		.device-hint {
+			display: none;
+		}
+	}
+
+	.only-touch { display: none; }
+
+	@media (hover: none) {
+		.only-touch { display: block; }
+		.only-pointer { display: none; }
+	}
+
+	/* --- Type -------------------------------------------------------------- */
+
+	h1 {
+		margin: 2.25rem 0 0;
+		font-weight: 760;
+		font-size: clamp(2.5rem, 1.6rem + 3.6vw, 4.25rem);
+		line-height: 0.98;
+		letter-spacing: -0.025em;
+		font-variation-settings: "wdth" 125;
+		text-wrap: balance;
+	}
+
+	@media (min-width: 900px) {
+		h1 {
+			margin-top: 4.5rem;
+		}
+	}
+
+	.lede {
+		margin: 1.5rem 0 0;
+		font-size: 1.25rem;
+		line-height: 1.5;
+		text-wrap: pretty;
+	}
+
+	h2 {
+		margin: 0 0 0.75rem;
+		font-weight: 720;
+		font-size: 1.625rem;
+		line-height: 1.15;
+		letter-spacing: -0.012em;
+		font-variation-settings: "wdth" 118;
+		text-wrap: balance;
+	}
+
+	p {
+		margin: 0 0 1rem;
+		text-wrap: pretty;
+	}
+
+	code {
+		font-family: var(--mono);
+		font-size: 0.9em;
+	}
+
+	section {
+		padding: 2.75rem 0 0.5rem;
+		border-top: 1px solid var(--rule);
+		margin-top: 2.75rem;
+	}
+
+	/* --- Key sequences ----------------------------------------------------- */
+
+	/*
+	 * A sequence is a button: it presses those keys on the calculator. The
+	 * caps are drawn as the keypad draws them, so what is read here is what
+	 * is found there.
+	 */
+	.try {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.875rem;
+		margin: 1.25rem 0 1.5rem;
+	}
+
+	.seq {
+		display: inline-flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		max-width: 100%;
+		margin: 0;
+		padding: 8px;
+		border: 0;
+		border-radius: 8px;
+		background: var(--paper-deep);
+		box-shadow: inset 0 2px 3px rgba(26, 28, 26, 0.18);
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	.seq:hover .cap {
+		transform: translateY(-1px);
+	}
+
+	.seq:active .cap,
+	.seq[aria-busy="true"] .cap {
+		transform: translateY(1px);
+		box-shadow: 0 0 0 1px #0d0e0d;
+	}
+
+	.cap {
+		display: inline-grid;
+		place-items: center;
+		min-width: 2.5rem;
+		height: 2rem;
+		padding: 0 0.625rem;
+		border-radius: 4px;
+		background: linear-gradient(#6a6e68, #3b3f3a);
+		box-shadow: 0 0 0 1px #0d0e0d, 0 2px 0 #0d0e0d;
+		color: var(--cap-text);
+		font-weight: 650;
+		font-size: 0.875rem;
+		line-height: 1;
+		transition: transform 80ms ease-out;
+	}
+
+	.cap.op { background: linear-gradient(#4c545d, #2a2f35); }
+	.cap.fn { background: linear-gradient(#5b5f5a, #2f322f); }
+	.cap.enter { background: linear-gradient(#6c706b, #3c403b); }
+	.cap.soft {
+		background: linear-gradient(#444846, #252827);
+		font-weight: 500;
+		font-variation-settings: "wdth" 110;
+	}
+	.cap.shift {
+		min-width: 2.75rem;
+		background: linear-gradient(#bb9af7, #876fb2);
+	}
+
+	/* Typed text, as it lands on the panel */
+	.typed {
+		display: inline-flex;
+		align-items: center;
+		min-height: 2rem;
+		max-width: 100%;
+		padding: 0.25rem 0.625rem;
+		background: var(--paper);
+		box-shadow: inset 0 0 0 1px var(--rule);
+		font-family: var(--mono);
+		font-size: 0.875rem;
+		line-height: 1.4;
+		text-align: left;
+		white-space: pre-wrap;
+	}
+
+	.result {
+		font-size: 0.9375rem;
+		color: var(--ink-soft);
+	}
+
+	/* --- Programs --------------------------------------------------------- */
+
+	/*
+	 * Code is set as the panel would set it: ink alone, with weight and slope
+	 * doing what colour does elsewhere. Keywords are bold, comments are soft
+	 * and slanted.
+	 */
+	.program {
+		margin: 2.25rem 0 0;
+	}
+
+	.program h3 {
+		margin: 0 0 0.375rem;
+		font-weight: 680;
+		font-size: 1.1875rem;
+		line-height: 1.25;
+		font-variation-settings: "wdth" 112;
+	}
+
+	.program pre {
+		margin: 1rem 0 0;
+		padding: 1rem 1.125rem;
+		overflow-x: auto;
+		background: var(--paper-deep);
+		border-radius: 8px;
+		box-shadow: inset 0 2px 3px rgba(26, 28, 26, 0.14);
+		font-family: var(--mono);
+		font-size: 0.875rem;
+		line-height: 1.6;
+		tab-size: 4;
+	}
+
+	.program pre code {
+		font-size: inherit;
+	}
+
+	.program .kw { font-weight: 600; }
+	.program .com { color: #59605a; font-style: italic; }
+
+	.program + p {
+		margin-top: 2.25rem;
+	}
+
+	@media (max-width: 480px) {
+		.program pre {
+			padding: 0.875rem;
+			font-size: 0.8125rem;
+		}
+	}
+
+	.run {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 1rem;
+		margin: 0.875rem 0 0;
+	}
+
+	/* A soft key on the case, sized for a finger */
+	.run-button {
+		min-height: 2.5rem;
+		padding: 0 1.125rem;
+		border: 0;
+		border-radius: 5px;
+		background: linear-gradient(#444846, #252827);
+		box-shadow: 0 0 0 1px #0d0e0d, 0 2px 0 #0d0e0d;
+		color: var(--cap-text);
+		font: 600 0.9375rem/1 var(--sans);
+		font-variation-settings: "wdth" 108;
+		cursor: pointer;
+		transition: transform 80ms ease-out;
+	}
+
+	.run-button:hover {
+		transform: translateY(-1px);
+	}
+
+	.run-button:active,
+	.run-button[aria-busy="true"] {
+		transform: translateY(1px);
+		box-shadow: 0 0 0 1px #0d0e0d;
+	}
+
+	.run-button[aria-busy="true"] {
+		cursor: progress;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.run-button,
+		.cap,
+		.device canvas,
+		.boot {
+			transition: none;
+		}
+	}
+
+	/* --- Lists and tables -------------------------------------------------- */
+
+	.features {
+		margin: 1.25rem 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.features li {
+		padding: 0.75rem 0;
+		border-top: 1px solid var(--rule);
+	}
+
+	.features li:first-child {
+		border-top: 0;
+		padding-top: 0;
+	}
+
+	.features strong {
+		font-weight: 650;
+	}
+
+	.apps {
+		display: grid;
+		grid-template-columns: minmax(5.5rem, max-content) 1fr;
+		gap: 0.625rem 1.25rem;
+		margin: 1.25rem 0 1.5rem;
+	}
+
+	.apps dt {
+		font-family: var(--mono);
+		font-weight: 500;
+		font-size: 0.9375rem;
+		padding-top: 0.1rem;
+	}
+
+	.apps dd {
+		margin: 0;
+	}
+
+	.specs {
+		width: 100%;
+		margin: 1.25rem 0 0;
+		border-collapse: collapse;
+	}
+
+	.specs th,
+	.specs td {
+		padding: 0.75rem 0;
+		border-top: 1px solid var(--rule);
+		text-align: left;
+		vertical-align: top;
+	}
+
+	.specs tr:first-child th,
+	.specs tr:first-child td {
+		border-top: 0;
+	}
+
+	.specs th {
+		width: 8.5rem;
+		padding-right: 1.25rem;
+		font-weight: 650;
+	}
+
+	@media (max-width: 480px) {
+		.specs th,
+		.specs td {
+			display: block;
+			width: auto;
+			padding: 0;
+		}
+
+		.specs th {
+			padding-top: 0.75rem;
+		}
+
+		.specs td {
+			padding-bottom: 0.75rem;
+			border-top: 0;
+		}
+
+		.apps {
+			grid-template-columns: 1fr;
+			gap: 0.125rem;
+		}
+
+		.apps dd {
+			margin-bottom: 0.75rem;
+		}
+	}
+
+	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem 1.75rem;
+		margin: 1.5rem 0 0;
+		padding: 0;
+		list-style: none;
+		font-weight: 600;
+	}
+
+	/* --- Footer ------------------------------------------------------------ */
+
+	footer {
+		max-width: 76rem;
+		margin: 5rem auto 0;
+		padding: 1.5rem var(--gutter) 2.5rem;
+		border-top: 1px solid var(--rule);
+		font-size: 0.875rem;
+		color: var(--ink-soft);
+	}
+
+	footer p {
+		margin: 0 0 0.25rem;
+	}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+	<a class="wordmark" href="#">r8 One</a>
+	<nav aria-label="Project">
+		<a href="https://github.com/quadrate-language/qdos">Source</a>
+		<a href="https://quad.r8.rs">Quadrate</a>
+	</nav>
+</header>
+
+<main class="layout">
+	<div class="intro">
+		<h1>The RPN calculator you program in Quadrate.</h1>
+		<p class="lede">
+			r8 One is an open-source pocket calculator with an HP&nbsp;48-style keypad, a
+			memory LCD that needs no backlight, and a shell that runs the programs you
+			type on it. The one on this page is running its real firmware.
+		</p>
+
+		<div class="try">
+			<button class="seq" type="button"
+				data-seq='[{"key":"ESC"},{"text":"6"},{"key":"ENTER"},{"text":"7"},{"key":"MUL"}]'
+				aria-label="Type 6, Enter, 7, times on the calculator">
+				<span class="cap">6</span>
+				<span class="cap enter">ENTER</span>
+				<span class="cap">7</span>
+				<span class="cap op">×</span>
+			</button>
+			<span class="result">leaves 42 on the stack</span>
+		</div>
+		<p class="only-pointer">
+			Press a sequence like this one to type it in, or click the calculator and use
+			your keyboard. Esc clears the line and F1 to F5 are the keys under the screen.
+		</p>
+		<p class="only-touch">
+			Tap a sequence like this one to type it in, or tap the keys yourself.
+		</p>
+	</div>
+
+	<div class="device-col">
+		<figure class="device" id="device">
+			<canvas id="canvas" tabindex="0" aria-label="The r8 One calculator, running" oncontextmenu="event.preventDefault()"></canvas>
+			<div class="boot" id="status" role="status">Starting QDOS</div>
+		</figure>
+		<p class="device-hint">
+			Your stack and programs are kept in this browser, so they are still here
+			when you come back.
+		</p>
+	</div>
+
+	<div class="rest">
+		<section aria-labelledby="screen">
+			<h2 id="screen">A screen that keeps its picture</h2>
+			<p>
+				The display is a 2.7-inch Sharp memory LCD, 400 by 240 pixels, each one
+				either ink or paper. It reflects the light around it instead of making its
+				own, and it holds its picture with no power at all, so a calculator left on
+				its stack costs next to nothing to keep showing it.
+			</p>
+			<p>
+				One bit per pixel is the whole colour budget. Everything the calculator
+				draws is designed for it, from the stack to the graphs.
+			</p>
+		</section>
+
+		<section aria-labelledby="modes">
+			<h2 id="modes">Two ways to type</h2>
+			<p>
+				The calculator is RPN, as on an HP&nbsp;48: digits build a number, Enter
+				pushes it, and an operator works at once. Undo takes back the last key, and
+				Esc never touches the stack.
+			</p>
+			<p>
+				A line takes whole Quadrate, with definitions, loops and strings. Define a
+				word in one and it works on the stack like any key.
+			</p>
+			<div class="try">
+				<button class="seq" type="button"
+					data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT1"},{"text":"def sq(x:i64 -- r:i64) { x x * }"},{"key":"ENTER"},{"text":"7 sq"},{"key":"ENTER"}]'
+					aria-label="Type a definition of sq in a line, then 7 sq, on the calculator">
+					<span class="cap soft">LINE</span>
+					<span class="typed">def sq(x:i64 -- r:i64) { x x * }</span>
+					<span class="cap enter">ENTER</span>
+					<span class="typed">7 sq</span>
+					<span class="cap enter">ENTER</span>
+				</button>
+				<span class="result">leaves 49</span>
+			</div>
+		</section>
+
+		<section aria-labelledby="programs">
+			<h2 id="programs">Write a program, then run it</h2>
+			<p>
+				On the r8 One you type these on the keypad. Here, Run types them in for you,
+				fast enough to watch, and leaves you on the result. Esc on the calculator
+				comes back out.
+			</p>
+
+			<article class="program">
+				<h3>Fibonacci, in a loop</h3>
+				<p>
+					A word with a stack signature, a counted loop, and two locals named
+					with <code>-&gt;</code> each time round.
+				</p>
+<pre><code class="qd">def fib(n:i64 -- r:i64) {
+	0 1                 // the first two
+	0 n 1 for i {
+		-&gt; b -&gt; a       // name the pair
+		b a b +         // and step it along
+	}
+	drop
+}
+
+30 fib</code></pre>
+				<div class="run">
+					<button class="run-button" type="button">Run fib</button>
+					<span class="result">leaves 832040</span>
+				</div>
+			</article>
+
+			<article class="program">
+				<h3>A curve from straight lines</h3>
+				<p>
+					Forty-two lines between the edges of the screen, and a parabola appears
+					in each corner where they cross.
+				</p>
+<pre><code class="qd">def art( -- ) {
+	ui::cls
+	0 21 1 for i {
+		0 i 12 *  i 20 * 239  ui::line
+		399 239 i 12 * -  399 i 20 * - 0  ui::line
+	}
+	ui::show
+	loop {
+		30 ui::frame drop
+		ui::pressed "" != if { return }   // any key leaves
+	}
+}
+
+art</code></pre>
+				<div class="run">
+					<button class="run-button" type="button">Run art</button>
+					<span class="result">any key leaves</span>
+				</div>
+			</article>
+
+			<article class="program">
+				<h3>A ball that bounces</h3>
+				<p>
+					Two words: one turns the ball back at a wall, the other draws it frame
+					after frame, asking <code>ui::frame</code> for sixty a second.
+				</p>
+<pre><code class="qd">// The speed, turned back at either wall
+def wall(p:d128 v:d128 hi:d128 -- r:d128) {
+	p 10.0 &lt; if { v abs return }
+	p hi &gt; if { v abs neg return }
+	v
+}
+
+def bounce( -- ) {
+	200.0 -&gt; x  120.0 -&gt; y
+	3.0 -&gt; dx   2.0 -&gt; dy
+	loop {
+		60 ui::frame drop
+		ui::pressed "" != if { return }
+		x dx + -&gt; x  y dy + -&gt; y
+		x dx 390.0 wall -&gt; dx
+		y dy 230.0 wall -&gt; dy
+		ui::cls
+		x y 10.0 1 ui::circle
+		ui::show
+	}
+}
+
+bounce</code></pre>
+				<div class="run">
+					<button class="run-button" type="button">Run bounce</button>
+					<span class="result">any key leaves</span>
+				</div>
+			</article>
+
+			<article class="program">
+				<h3>Any word can be graphed</h3>
+				<p>
+					A word that takes x and leaves y is a function to plot. On the graph,
+					TRACE follows the curve and CALC finds its zeros, extremes and areas.
+				</p>
+<pre><code class="qd">def f(x:d128 -- y:d128) { x sin x * }
+
+-12.0 12.0 -12.0 12.0 ui::window
+"f" ui::plot</code></pre>
+				<div class="run">
+					<button class="run-button" type="button">Plot f</button>
+					<span class="result">Esc leaves the graph</span>
+				</div>
+			</article>
+
+			<article class="program">
+				<h3>And turned in three dimensions</h3>
+				<p>
+					Take x and y, leave z, and <code>graph3</code> draws the surface as a
+					wireframe. The arrows turn and tilt it, and + and − zoom.
+				</p>
+<pre><code class="qd">def g(x:d128 y:d128 -- z:d128) {
+	x x * y y * + sqrt sin 4.0 *   // a ripple
+}
+
+"g" graph3</code></pre>
+				<div class="run">
+					<button class="run-button" type="button">Draw g</button>
+					<span class="result">Esc leaves</span>
+				</div>
+			</article>
+
+			<p>
+				A word made at the prompt lasts until the calculator is switched off. To
+				keep one, open APPS, press NEW and write it in the editor.
+			</p>
+		</section>
+
+		<section aria-labelledby="functions">
+			<h2 id="functions">The functions you reach for</h2>
+			<ul class="features">
+				<li>
+					<strong>Scientific.</strong> Trigonometry, logarithms and powers, with each
+					inverse on shift, where a TI or an HP puts it. Whole quarter turns are
+					exact, so the sine of 180 degrees is 0.
+				</li>
+				<li>
+					<strong>Complex numbers</strong>, entered the way an HP-42S does and shown
+					as <code>a+bi</code> or in polar form.
+				</li>
+				<li>
+					<strong>Statistics.</strong> Six lists, one- and two-variable statistics,
+					and linear, quadratic, exponential, power and log regressions.
+				</li>
+				<li>
+					<strong>Graphs.</strong> Plot functions and lists, or draw a surface as a
+					wireframe you turn with the arrow keys.
+				</li>
+			</ul>
+			<div class="try">
+				<button class="seq" type="button"
+					data-seq='[{"key":"ESC"},{"key":"ESC"},{"text":"3"},{"key":"ENTER"},{"text":"4"},{"key":"CPLX"}]'
+					aria-label="Type 3, Enter, 4, shift abs on the calculator">
+					<span class="cap">3</span>
+					<span class="cap enter">ENTER</span>
+					<span class="cap">4</span>
+					<span class="cap shift" aria-hidden="true"></span>
+					<span class="cap fn">abs</span>
+				</button>
+				<span class="result">makes 3+4i</span>
+			</div>
+		</section>
+
+		<section aria-labelledby="apps">
+			<h2 id="apps">Apps on the card</h2>
+			<p>These come with it, each a Quadrate program you can open and read.</p>
+			<dl class="apps">
+				<dt>clock</dt><dd>A stopwatch and a countdown timer, in large figures.</dd>
+				<dt>fin</dt><dd>Loan payments from any three of amount, rate, years and monthly payment.</dd>
+				<dt>mandel</dt><dd>The Mandelbrot set. Move with the arrows, zoom with +&nbsp;and&nbsp;−.</dd>
+				<dt>quad</dt><dd>Roots, vertex and graph of <i>ax</i>² + <i>bx</i> + <i>c</i>.</dd>
+				<dt>spring</dt><dd>A damped spring in real time, its height traced against time.</dd>
+				<dt>sudoku</dt><dd>Sudoku on the number keys, saved as you go.</dd>
+				<dt>triangle</dt><dd>Solve a triangle from any three of its parts.</dd>
+				<dt>units</dt><dd>A value in one unit, shown in every other unit of its kind.</dd>
+			</dl>
+			<div class="try">
+				<button class="seq" type="button"
+					data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT2"}]'
+					aria-label="Open the apps list on the calculator">
+					<span class="cap soft">APPS</span>
+				</button>
+				<span class="result">opens the list</span>
+			</div>
+			<p>
+				An app is a folder with a <code>main.qd</code> in it. Plug the calculator
+				into a computer and it shows up as a drive: drop the folder on it, and the
+				app is there when you unplug.
+			</p>
+		</section>
+
+		<section aria-labelledby="inside">
+			<h2 id="inside">Inside</h2>
+			<table class="specs">
+				<tr>
+					<th scope="row">Display</th>
+					<td>Sharp LS027B7DH01 memory LCD, 2.7&nbsp;inches, 400&nbsp;×&nbsp;240, reflective</td>
+				</tr>
+				<tr>
+					<th scope="row">Keypad</th>
+					<td>54 keys in 10 rows, with an Alpha face for letters and a Symbol face for Quadrate</td>
+				</tr>
+				<tr>
+					<th scope="row">Computer</th>
+					<td>Raspberry Pi Zero W: 1 GHz ARM11, 512 MB. The firmware also runs on an ESP32-S3.</td>
+				</tr>
+				<tr>
+					<th scope="row">Storage</th>
+					<td>microSD card</td>
+				</tr>
+				<tr>
+					<th scope="row">USB</th>
+					<td>One port. A keyboard plugs into it, and a computer sees the calculator as a drive.</td>
+				</tr>
+				<tr>
+					<th scope="row">Size</th>
+					<td>98.5&nbsp;×&nbsp;214.1&nbsp;×&nbsp;32&nbsp;mm</td>
+				</tr>
+				<tr>
+					<th scope="row">Software</th>
+					<td>QDOS, free software under the GNU GPL</td>
+				</tr>
+			</table>
+		</section>
+
+		<section aria-labelledby="status-heading">
+			<h2 id="status-heading">Where it stands</h2>
+			<p>
+				In development. The parts are chosen and the software runs: what you are
+				typing on is QDOS itself, compiled for the browser. No r8 One has been
+				built yet, so there is nothing to order.
+			</p>
+			<p>
+				Everything is open, from the firmware to the case. Follow along, or build
+				one with us.
+			</p>
+			<ul class="links">
+				<li><a href="https://github.com/quadrate-language/qdos">Read the source</a></li>
+				<li><a href="https://quad.r8.rs">Learn Quadrate</a></li>
+				<li><a href="https://github.com/quadrate-language/qdos/issues">Report an issue</a></li>
+			</ul>
+		</section>
+	</div>
+</main>
+
+<footer>
+	<p>QDOS is free software under the GNU General Public License, version 3.</p>
+	<p>Your stack and programs are kept in this browser and never leave it.</p>
+</footer>
+
+<script>
+	var device = document.getElementById('device');
+	var canvas = document.getElementById('canvas');
+	var statusEl = document.getElementById('status');
+	var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+	var Module = {
+		canvas: canvas,
+		print: function (text) { console.log(text); },
+		printErr: function (text) { console.error(text); },
+		setStatus: function (text) {
+			if (text) {
+				// Emscripten reports the download as "Downloading data... (n/m)"
+				var got = /\((\d+)\/(\d+)\)/.exec(text);
+				statusEl.textContent = got
+					? 'Loading ' + Math.round(100 * got[1] / got[2]) + '%'
+					: 'Starting QDOS';
+			}
+		},
+		onRuntimeInitialized: function () {
+			// The splash is drawn on the first frame; give it that frame
+			requestAnimationFrame(function () {
+				device.classList.add('is-on');
+			});
+		},
+		onAbort: function () {
+			statusEl.textContent = 'QDOS stopped. Reload the page to start it again.';
+		},
+	};
+
+	// SDL keeps the mouse to itself, so a press would not otherwise focus it
+	canvas.addEventListener('pointerdown', function () {
+		canvas.dataset.clicked = '';
+		canvas.focus({preventScroll: true});
+	});
+	canvas.addEventListener('blur', function () {
+		delete canvas.dataset.clicked;
+	});
+
+	function inView(el) {
+		var r = el.getBoundingClientRect();
+		return r.top >= 0 && r.bottom <= window.innerHeight;
+	}
+
+	/* Press @p steps on the calculator, @p button marked busy until they are in */
+	function type(button, steps) {
+		if (!Module.qdosType || !device.classList.contains('is-on')) {
+			return;
+		}
+		// On a phone the calculator may be off screen; bring it back to watch
+		if (!inView(device)) {
+			device.scrollIntoView({
+				behavior: reduceMotion.matches ? 'auto' : 'smooth',
+				block: 'center',
+			});
+		}
+		document.querySelectorAll('[aria-busy]').forEach(function (other) {
+			other.removeAttribute('aria-busy');
+		});
+		button.setAttribute('aria-busy', 'true');
+		Module.qdosType(steps, function () {
+			button.removeAttribute('aria-busy');
+		});
+	}
+
+	document.querySelectorAll('.seq').forEach(function (button) {
+		button.addEventListener('click', function () {
+			type(button, JSON.parse(button.dataset.seq));
+		});
+	});
+
+	// --- Programs -----------------------------------------------------------
+
+	var KEYWORDS = /^(def|fn|for|loop|if|else|return|break|continue)$/;
+
+	/* Ink-only highlighting: comments and keywords, nothing else */
+	function highlight(source) {
+		var out = '';
+		var token = /(\/\/[^\n]*)|("(?:[^"\\]|\\.)*")|([A-Za-z_][\w:]*)|([\s\S])/g;
+		var m;
+		function esc(t) {
+			return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+		}
+		while ((m = token.exec(source)) !== null) {
+			if (m[1]) {
+				out += '<span class="com">' + esc(m[1]) + '</span>';
+			} else if (m[2]) {
+				out += esc(m[2]); // a string is read whole, so a // in it is no comment
+			} else if (m[3] && KEYWORDS.test(m[3])) {
+				out += '<span class="kw">' + m[3] + '</span>';
+			} else {
+				out += esc(m[0]);
+			}
+		}
+		return out;
+	}
+
+	/*
+	 * What Run types: each block between blank lines is one entry, its
+	 * comments dropped and its lines joined, as the calculator's line is one
+	 * line of at most 255 characters
+	 */
+	function entries(source) {
+		return source.split(/\n\s*\n/).map(function (block) {
+			return block.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ').trim();
+		}).filter(function (line) {
+			return line.length > 0;
+		});
+	}
+
+	document.querySelectorAll('.program').forEach(function (program) {
+		var code = program.querySelector('code.qd');
+		var source = code.textContent;
+		code.innerHTML = highlight(source);
+
+		var button = program.querySelector('.run-button');
+		var steps = [{key: 'ESC'}, {key: 'ESC'}, {key: 'SOFT1'}];
+		entries(source).forEach(function (line) {
+			steps.push({text: line, gap: 14});
+			steps.push({key: 'ENTER'});
+		});
+		button.addEventListener('click', function () {
+			type(button, steps);
+		});
+	});
+
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

@@ -67,10 +67,9 @@ static const word_effect EFFECTS[] = {
 		{"%", 2, 1},
 		{"plus", 2, 1},
 		{"minus", 2, 1},
-		{"times", 2, 1},
+		{"multiply", 2, 1},
 		{"divide", 2, 1},
 		{"pow", 2, 1},
-		{"mod", 2, 1},
 		{"modulo", 2, 1},
 		{"fmod", 2, 1},
 		{"min", 2, 1},
@@ -91,8 +90,6 @@ static const word_effect EFFECTS[] = {
 		{"print", 1, 0},
 		{"nl", 0, 0},
 		{"within", 3, 1},
-		{"inc", 1, 1},
-		{"dec", 1, 1},
 		{"<", 2, 1},
 		{">", 2, 1},
 		{"<=", 2, 1},
@@ -264,7 +261,7 @@ static char word_operator(const char* text, size_t len) {
 	static const struct {
 		const char* word;
 		char op;
-	} WORDS[] = {{"plus", '+'}, {"minus", '-'}, {"times", '*'}, {"divide", '/'}, {"pow", '^'}};
+	} WORDS[] = {{"plus", '+'}, {"minus", '-'}, {"multiply", '*'}, {"divide", '/'}, {"pow", '^'}};
 
 	for (size_t i = 0; i < sizeof(WORDS) / sizeof(*WORDS); i++) {
 		if (strlen(WORDS[i].word) == len && strncmp(WORDS[i].word, text, len) == 0) {

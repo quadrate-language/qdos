@@ -161,7 +161,7 @@ reports anything, and the keypad makes both of them the easiest thing to type,
 so the shell recognises the shape — a number, an operator, a number, nothing
 else — and answers with the user's own numbers the right way round rather than
 running it. The check is deliberately narrow: numbers and operators taking
-turns — `2 plus 3 times 4` is what the keys make of `2+3*4` — or one token with
+turns — `2 plus 3 multiply 4` is what the keys make of `2+3*4` — or one token with
 an operator inside, and every other line goes through untouched. A line that
 fails with brackets or a glued operator in it is told how RPN writes it instead
 of the parser's complaint about `(`.
@@ -186,7 +186,7 @@ these:
 - **`%` is percent**, the one meaning either brand gives it. `modulo` is a word.
 - **`EE` exists.** Without it `6.02e23` could not be typed on the keypad at all,
   and the `e` of a keyboard was dropped without a word, leaving 6.0223.
-- **A line's `+ − ×` are the keys' `plus minus times`**, as `÷` already typed
+- **A line's `+ − ×` are the keys' `plus minus multiply`**, as `÷` already typed
   `divide`: the same keys must not give 1.6e19 on the stack and a wrapped
   negative number in a line.
 - **`ENTER` on a page is done.** On the settings page it stepped the value, so

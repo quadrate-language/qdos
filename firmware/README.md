@@ -236,7 +236,8 @@ buildroot/
   board/post-image.sh               assembles sdcard.img
 ```
 
-`package/quadrate` builds with `-Dbuild_tools=false`, which drops the
+`package/quadrate` downloads Quadrate 0.7.0, the release QDOS builds against,
+and builds it with `-Dbuild_tools=false -Dbuild_compiler=false`, which drops the
 command-line tools and with them the LLVM dependency. That is the interpreter
 tier paying off: the language runs on the device without its compiler.
 
@@ -244,13 +245,18 @@ tier paying off: the language runs on the device without its compiler.
 
 QDOS is rebuilt on every `build-image.sh` run, because Buildroot does not notice
 that a local package's source changed and would otherwise keep shipping whatever
-was built first. Changes to the **Quadrate** source are not picked up
-automatically:
+was built first.
+
+To try a local **Quadrate** tree instead of the release, set `QUADRATE_DIR`. Its
+subprojects have to be downloaded (`meson subprojects download` in it), and
+changes to it are not picked up automatically:
 
 ```bash
-./firmware/build-image.sh quadrate-rebuild
-./firmware/build-image.sh
+QUADRATE_DIR=../quadrate ./firmware/build-image.sh quadrate-dirclean
+QUADRATE_DIR=../quadrate ./firmware/build-image.sh
 ```
+
+Switching between the release and a local tree also needs `quadrate-dirclean`.
 
 ### Changing config.txt
 

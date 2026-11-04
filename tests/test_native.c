@@ -28,6 +28,15 @@
 
 #define STORE_MAX 8
 
+/* Empty the stack, so a check reads only what its own source left */
+static qd_interp* emptied(qd_interp* interp) {
+	qd_context* ctx = qd_interp_context(interp);
+	while (!qd_stack_is_empty(ctx->st)) {
+		qd_drop(ctx);
+	}
+	return interp;
+}
+
 static struct {
 	const char* name[STORE_MAX];
 	size_t count;
@@ -194,22 +203,22 @@ static void test_a_module_brings_words(void) {
 	CHECK(value.i == 42);
 
 	// Floats through the table, and a result computed inside the module
-	CHECK(qd_interp_eval(interp, "clear 3.0 4.0 demo::hypot"));
+	CHECK(qd_interp_eval(emptied(interp), "3.0 4.0 demo::hypot"));
 	CHECK(qd_interp_peek(interp, 0, &value));
 	CHECK(value.type == QD_INTERP_VALUE_FLOAT);
 	CHECK(value.f > 4.999 && value.f < 5.001);
 
 	// open() ran before any word did
-	CHECK(qd_interp_eval(interp, "clear demo::name"));
+	CHECK(qd_interp_eval(emptied(interp), "demo::name"));
 	CHECK(qd_interp_peek(interp, 0, &value));
 	CHECK(strstr(value.text, "opened") != NULL);
 
 	// Strings in, and the depth the module sees is the caller's
-	CHECK(qd_interp_eval(interp, "clear \"hello\" demo::sink"));
+	CHECK(qd_interp_eval(emptied(interp), "\"hello\" demo::sink"));
 	CHECK(qd_interp_peek(interp, 0, &value));
 	CHECK(value.i == 5);
 
-	CHECK(qd_interp_eval(interp, "clear 1 2 3 demo::deep"));
+	CHECK(qd_interp_eval(emptied(interp), "1 2 3 demo::deep"));
 	CHECK(qd_interp_peek(interp, 0, &value));
 	CHECK(value.i == 3);
 
@@ -532,7 +541,7 @@ static void test_two_modules_do_not_collide(void) {
 	CHECK(qdos_natives_register(&set, interp) == 12);
 
 	CHECK(qd_interp_eval(interp, "5 demo::double"));
-	CHECK(qd_interp_eval(interp, "clear 5 other::double"));
+	CHECK(qd_interp_eval(emptied(interp), "5 other::double"));
 
 	qd_interp_destroy(interp);
 	qdos_natives_unload(&set);

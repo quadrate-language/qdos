@@ -45,7 +45,9 @@ static void cpx_destroy(void* object) {
 }
 
 bool qdos_cpx_of(const qd_stack_element_t* element, double* re, double* im) {
-	if (element->type != QD_STACK_TYPE_PTR || element->value.p == NULL || !qd_struct_is_valid(element->value.p)) {
+	// Only a slot that says it holds a struct may have a header read: there is
+	// no registry to ask about any other pointer
+	if (element->type != QD_STACK_TYPE_PTR || element->ptr_kind != QD_PTR_STRUCT || element->value.p == NULL) {
 		return false;
 	}
 	const qd_struct_header_t* header = qd_struct_get_header(element->value.p);
@@ -67,7 +69,7 @@ int qdos_cpx_push(qd_context* ctx, double re, double im) {
 		re = 0.0;
 	}
 	if (im == 0.0) {
-		return qdos_decimal() ? qd_push_q(ctx, qdos_decimal_of_double(re)) : qd_push_f(ctx, re);
+		return qdos_decimal() ? qd_push_d(ctx, qdos_decimal_of_double(re)) : qd_push_f(ctx, re);
 	}
 
 	cpx* z = (cpx*)qd_struct_alloc(sizeof(cpx), cpx_destroy);
@@ -79,7 +81,7 @@ int qdos_cpx_push(qd_context* ctx, double re, double im) {
 	z->im = im;
 
 	// The one reference it was made with passes to the stack, as an array's does
-	if (qd_push_p(ctx, z) != 0) {
+	if (qd_push_struct(ctx, z) != 0) {
 		qd_struct_release(z);
 		return 1;
 	}
@@ -117,8 +119,8 @@ static bool peek(qd_context* ctx, size_t depth, double complex* out, bool* is_co
 		*out = CMPLX(element.value.f, 0.0);
 		return true;
 	}
-	if (element.type == QD_STACK_TYPE_F128) {
-		*out = CMPLX(qd_f128_to_f64(element.value.q), 0.0);
+	if (element.type == QD_STACK_TYPE_D128) {
+		*out = CMPLX(qd_d128_to_f64(element.value.d), 0.0);
 		return true;
 	}
 	return false;
@@ -130,9 +132,7 @@ static void drop(qd_context* ctx, size_t count) {
 		if (qd_stack_pop(ctx->st, &element) != QD_STACK_OK) {
 			return;
 		}
-		if (element.type == QD_STACK_TYPE_PTR) {
-			qd_ptr_release(element.value.p);
-		}
+		qd_release_slot(&element);
 	}
 }
 
@@ -147,7 +147,7 @@ static int answer(qd_context* ctx, const char* word, size_t arity, double comple
 
 static int real_answer(qd_context* ctx, size_t arity, double x) {
 	drop(ctx, arity);
-	return qdos_decimal() ? qd_push_q(ctx, qdos_decimal_of_double(x)) : qd_push_f(ctx, x);
+	return qdos_decimal() ? qd_push_d(ctx, qdos_decimal_of_double(x)) : qd_push_f(ctx, x);
 }
 
 /* Whether a real argument leaves the reals here, and the mode lets it */
@@ -190,7 +190,7 @@ bool qdos_cpx_apply(qd_context* ctx, const char* word, size_t arity, int* result
 		*result = answer(ctx, word, 2, a + b);
 	} else if (strcmp(word, "minus") == 0) {
 		*result = answer(ctx, word, 2, a - b);
-	} else if (strcmp(word, "times") == 0) {
+	} else if (strcmp(word, "multiply") == 0) {
 		*result = answer(ctx, word, 2, a * b);
 	} else if (strcmp(word, "divide") == 0) {
 		*result = (b == 0) ? qdos_math_error(ctx, word, "ZERO DIVISOR") : answer(ctx, word, 2, a / b);

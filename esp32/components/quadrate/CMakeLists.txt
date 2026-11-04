@@ -1,37 +1,26 @@
-# Quadrate, built from its own source tree as an ESP-IDF component.
+# Quadrate, built from source as an ESP-IDF component.
 #
 # The same libraries the Pi links -- the runtime, the compiler front-end, the
-# AST interpreter, u8t and the math module -- compiled here rather than taken
-# from dist/, because the archives `make release` produces are for the host.
-# Meson is Quadrate's build and stays its build; this file only lists sources.
-#
-# The tree is found at QUADRATE_SRC, which defaults to a checkout beside this
-# one, as the Meson build expects.
+# AST interpreter, u8t and the math and decimal modules -- compiled here rather
+# than taken from a release archive, because those are for the host. Which
+# release, and how it is fetched, is in cmake/quadrate.cmake. Meson is
+# Quadrate's build and stays its build; this file only lists sources.
 
-if(DEFINED ENV{QUADRATE_SRC})
-	set(QD "$ENV{QUADRATE_SRC}")
-else()
-	get_filename_component(QD "${CMAKE_CURRENT_LIST_DIR}/../../../../quadrate" ABSOLUTE)
+# IDF reads every component once early, only for its requirements, and this
+# one has none: the download waits for the real configure
+if(CMAKE_BUILD_EARLY_EXPANSION)
+	idf_component_register()
+	return()
 endif()
 
-if(NOT EXISTS "${QD}/lib/interp/src/interp.cc")
-	message(FATAL_ERROR "Quadrate source tree not found at ${QD}.\n"
-		"Check it out beside this project, or set QUADRATE_SRC.")
-endif()
-if(NOT EXISTS "${QD}/subprojects/u8t/src/scanner.c")
-	message(FATAL_ERROR "u8t is missing from ${QD}/subprojects.\n"
-		"Run `meson subprojects download` in the Quadrate tree, or build it once.")
-endif()
-if(NOT EXISTS "${QD}/subprojects/mpdecimal-4.0.1/libmpdec/mpdecimal.c")
-	message(FATAL_ERROR "libmpdec is missing from ${QD}/subprojects.\n"
-		"Run `meson subprojects download` in the Quadrate tree, or build it once.")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/quadrate.cmake")
 
 set(rt "${QD}/lib/rt/src")
-set(qc "${QD}/lib/qc/src")
-set(mpd "${QD}/subprojects/mpdecimal-4.0.1/libmpdec")
+# lib/qc is whatever its directory holds, as its meson.build lists all of it
+file(GLOB qc_sources CONFIGURE_DEPENDS "${QD}/lib/qc/src/*.cc")
+set(mpd "${QD_MPDEC}/libmpdec")
 
-# libmpdec, behind f128, in the portable ANSI C configuration Quadrate's Meson
+# libmpdec, behind d128, in the portable ANSI C configuration Quadrate's Meson
 # build picks, and the 32-bit one, as the S3 is
 set(mpd_sources
 	"${mpd}/basearith.c"
@@ -53,57 +42,41 @@ set(mpd_sources
 idf_component_register(
 	SRCS
 		# lib/rt, with the platform layer for a target that has no processes
-		# no dynamic linker and no C11 threads
-		"${rt}/f128.c"
+		# no dynamic linker and no C11 threads, so its mutex is a pthread one
+		"${rt}/d128.c"
 		"${rt}/natives.c"
 		"${rt}/runtime.c"
 		"${rt}/runtime_stack.c"
 		"${rt}/runtime_ops.c"
 		"${rt}/runtime_io.c"
-		"${rt}/runtime_f128.c"
+		"${rt}/runtime_d128.c"
 		"${rt}/stack.c"
-		"${rt}/memory.c"
 		"${rt}/qd_string.c"
 		"${rt}/qd_struct.c"
 		"${rt}/array.c"
-		"${rt}/platform/pthread/thread_pthread.c"
 		"${rt}/platform/pthread/mutex_pthread.c"
 		"${rt}/platform/none/dynlib_none.c"
 		"${rt}/platform/none/process_none.c"
 		"${rt}/platform/none/exe_path_none.c"
-		# lib/qc
-		"${qc}/ast.cc"
-		"${qc}/ast_statements.cc"
-		"${qc}/ast_expressions.cc"
-		"${qc}/ast_declarations.cc"
-		"${qc}/ast_types.cc"
-		"${qc}/ast_printer.cc"
-		"${qc}/colors.cc"
-		"${qc}/error_reporter.cc"
-		"${qc}/source_formatter.cc"
-		"${qc}/semantic_validator.cc"
-		"${qc}/semantic_validator_modules.cc"
-		"${qc}/semantic_validator_collect.cc"
-		"${qc}/semantic_validator_typecheck.cc"
-		"${qc}/semantic_validator_instructions.cc"
+		${qc_sources}
 		# lib/interp
 		"${QD}/lib/interp/src/interp.cc"
 		# u8t
-		"${QD}/subprojects/u8t/src/scanner.c"
+		"${QD_U8T}/src/scanner.c"
 		${mpd_sources}
 		# stdlib/math
 		"${QD}/stdlib/math/src/math.c"
-		# stdlib/f128
-		"${QD}/stdlib/f128/src/f128.c"
+		# stdlib/decimal
+		"${QD}/stdlib/decimal/src/decimal.c"
 	INCLUDE_DIRS
 		# newlib's gaps, filled for u8t's public header
 		"compat"
 		"${QD}/lib/rt/include"
 		"${QD}/lib/qc/include"
 		"${QD}/lib/interp/include"
-		"${QD}/subprojects/u8t/include"
+		"${QD_U8T}/include"
 		"${QD}/stdlib/math/include"
-		"${QD}/stdlib/f128/include"
+		"${QD}/stdlib/decimal/include"
 	PRIV_INCLUDE_DIRS
 		"${QD}/lib/rt"
 		"${QD}/lib/platform/include"
@@ -121,14 +94,14 @@ add_custom_command(
 	VERBATIM)
 target_sources(${COMPONENT_LIB} PRIVATE "${math_register}")
 
-set(f128_register "${CMAKE_CURRENT_BINARY_DIR}/f128_register.c")
+set(decimal_register "${CMAKE_CURRENT_BINARY_DIR}/decimal_register.c")
 add_custom_command(
-	OUTPUT "${f128_register}"
-	COMMAND "${python}" "${QD}/tools/gen_module_register.py" --module f128
-		"${QD}/stdlib/f128/qd/f128/f128.qd" "${f128_register}"
-	DEPENDS "${QD}/tools/gen_module_register.py" "${QD}/stdlib/f128/qd/f128/f128.qd"
+	OUTPUT "${decimal_register}"
+	COMMAND "${python}" "${QD}/tools/gen_module_register.py" --module decimal
+		"${QD}/stdlib/decimal/qd/decimal/decimal.qd" "${decimal_register}"
+	DEPENDS "${QD}/tools/gen_module_register.py" "${QD}/stdlib/decimal/qd/decimal/decimal.qd"
 	VERBATIM)
-target_sources(${COMPONENT_LIB} PRIVATE "${f128_register}")
+target_sources(${COMPONENT_LIB} PRIVATE "${decimal_register}")
 
 # mpdecimal.h is generated, as libmpdec's own build does it
 set(MPD_HEADER_CONFIG "/* ABI: 32-bit */\n#define MPD_CONFIG_32 1")
@@ -138,27 +111,12 @@ set_source_files_properties(${mpd_sources} PROPERTIES
 	COMPILE_DEFINITIONS "ANSI;CONFIG_32;NDEBUG"
 	COMPILE_OPTIONS "-w;-O2")
 
-# The version the runtime reports, from the tags as Meson takes it
-execute_process(
-	COMMAND git -C "${QD}" describe --tags --abbrev=0
-	OUTPUT_VARIABLE qd_version
-	OUTPUT_STRIP_TRAILING_WHITESPACE
-	ERROR_QUIET)
-if(NOT qd_version MATCHES "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)")
-	set(qd_version "0.0.0-unknown")
-endif()
-string(REGEX MATCH "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)" _ "${qd_version}")
-set(qd_major "${CMAKE_MATCH_1}")
-set(qd_minor "${CMAKE_MATCH_2}")
-set(qd_patch "${CMAKE_MATCH_3}")
-math(EXPR qd_api "${qd_major} * 10000 + ${qd_minor} * 100 + ${qd_patch}")
-
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-	QD_VERSION="${qd_version}"
-	QD_VERSION_MAJOR=${qd_major}
-	QD_VERSION_MINOR=${qd_minor}
-	QD_VERSION_PATCH=${qd_patch}
-	QD_VERSION_API=${qd_api}
+	QD_VERSION="${QD_VERSION}"
+	QD_VERSION_MAJOR=${QD_VERSION_MAJOR}
+	QD_VERSION_MINOR=${QD_VERSION_MINOR}
+	QD_VERSION_PATCH=${QD_VERSION_PATCH}
+	QD_VERSION_API=${QD_VERSION_API}
 	# No coverage on a calculator: the tables are 144 KB of static RAM
 	QD_MAX_COVERED_FUNCS=1
 	# Each level of the walk is about 1.25 KB of C stack on the S3, and the

@@ -1411,7 +1411,7 @@ static void test_open_line_continues(void) {
 	qdos_key_event script[128];
 	size_t n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
-	for (const char* p = "fn sq(x:i64 -- r:i64) { x"; *p; p++) {
+	for (const char* p = "def sq(x:i64 -- r:i64) { x"; *p; p++) {
 		script[n++] = (qdos_key_event){QDOS_KEY_CHAR, *p};
 	}
 	key(script, &n, QDOS_KEY_ENTER); // open: continues
@@ -1515,7 +1515,7 @@ static void test_forget_a_word(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	type_line(script, &n, "fn sqr(x:i64 -- r:i64) { x x * }");
+	type_line(script, &n, "def sqr(x:i64 -- r:i64) { x x * }");
 	type_line(script, &n, "7 sqr");
 	type_line(script, &n, "\"sqr\" forget");
 	type_line(script, &n, "clear 7 sqr");
@@ -1652,7 +1652,7 @@ static void test_graph_plots_a_word(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_line(script, &n, "def sq(x:f64 -- y:f64) { x x * }");
 	type_more(script, &n, "\"sq\" graph");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1682,7 +1682,7 @@ static void test_graph_leaves_the_stack_alone(void) {
 	size_t n = 0;
 	digits(script, &n, "42");
 	key(script, &n, QDOS_KEY_ENTER);
-	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_line(script, &n, "def sq(x:f64 -- y:f64) { x x * }");
 	type_more(script, &n, "\"sq\" graph");
 	key(script, &n, QDOS_KEY_CLEAR);
 
@@ -1703,7 +1703,7 @@ static void test_graph_trace_reads_the_curve(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	type_line(script, &n, "fn twice(x:f64 -- y:f64) { x 2 * }");
+	type_line(script, &n, "def twice(x:f64 -- y:f64) { x 2 * }");
 	type_more(script, &n, "\"twice\" graph");
 	key(script, &n, QDOS_KEY_TRACE);
 
@@ -1748,7 +1748,7 @@ static void test_graph_of_the_wrong_shape(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	type_line(script, &n, "fn two(x:f64 -- a:f64 b:f64) { x x }");
+	type_line(script, &n, "def two(x:f64 -- a:f64 b:f64) { x x }");
 	type_more(script, &n, "\"two\" graph");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1772,7 +1772,7 @@ static void test_graph3_plots_a_surface(void) {
 	size_t n = 0;
 	digits(script, &n, "42");
 	key(script, &n, QDOS_KEY_ENTER);
-	type_line(script, &n, "fn rip(x:f64 y:f64 -- z:f64) { x x * y y * + sqrt sin }");
+	type_line(script, &n, "def rip(x:f64 y:f64 -- z:f64) { x x * y y * + sqrt sin }");
 	type_more(script, &n, "\"rip\" graph3");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -1826,7 +1826,7 @@ static void test_graph3_of_the_wrong_shape(void) {
 
 	qdos_key_event script[128];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:f64 -- y:f64) { x x * }");
+	type_line(script, &n, "def sq(x:f64 -- y:f64) { x x * }");
 	type_more(script, &n, "\"sq\" graph3");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2202,7 +2202,7 @@ static void test_forget_outlives_the_reboot(void) {
 
 	qdos_key_event first[160];
 	size_t n = 0;
-	type_line(first, &n, "fn sqr(x:i64 -- r:i64) { x x * }");
+	type_line(first, &n, "def sqr(x:i64 -- r:i64) { x x * }");
 	type_line(first, &n, "\"sqr\" forget");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2283,7 +2283,7 @@ static void test_pixels_are_unambiguous(void) {
 
 	qdos_key_event script[200];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:i64 -- r:i64) { x dup * }");
+	type_line(script, &n, "def sq(x:i64 -- r:i64) { x dup * }");
 	type_more(script, &n, "7 sq");
 	type_more(script, &n, "1 0 /"); // an error, so the inverted path is drawn too
 
@@ -2738,7 +2738,7 @@ static void test_edit_check_finds_an_undefined_word(void) {
 	qdos_key_event script[200];
 	size_t n = 0;
 	type_line(script, &n, "\"boom\" edit");
-	type_partial(script, &n, "ok");
+	type_partial(script, &n, "nope");
 	key(script, &n, QDOS_KEY_CHECK);
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2746,7 +2746,7 @@ static void test_edit_check_finds_an_undefined_word(void) {
 
 	char row[QDOS_COLS + 1];
 	read_error(fb, row, sizeof(row));
-	CHECK(strstr(row, "'ok' NOT DEFINED") != NULL);
+	CHECK(strstr(row, "'nope' NOT DEFINED") != NULL);
 	CHECK(strstr(row, "COMPILES") == NULL);
 	CHECK(error_cell_is(fb, 0, row[0], true)); // inverted, so flagged
 
@@ -2987,7 +2987,7 @@ static void test_user_word_shadows_builtin(void) {
 
 	qdos_key_event script[200];
 	size_t n = 0;
-	type_line(script, &n, "fn sq(x:i64 -- r:i64) { x dup * 1000 + }");
+	type_line(script, &n, "def sq(x:i64 -- r:i64) { x dup * 1000 + }");
 	type_line(script, &n, "7 sq");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -2998,7 +2998,7 @@ static void test_user_word_shadows_builtin(void) {
 	CHECK(strstr(row, "1049") != NULL);
 
 	n = 0;
-	type_line(script, &n, "fn sq(x:i64 -- r:i64) { x dup * 1000 + }");
+	type_line(script, &n, "def sq(x:i64 -- r:i64) { x dup * 1000 + }");
 	type_line(script, &n, "\"sq\" forget");
 	type_line(script, &n, "clear 7 sq");
 	run_script(script, n, fb);
@@ -3184,8 +3184,8 @@ static void test_exp_and_asin_in_calculator_mode(void) {
 static void test_fatal_runtime_errors_are_survivable(void) {
 	static const char* const DEADLY[] = {
 			"1.5 2.5 and",
-			"1 2.5 mod",
-			"1.5 shl",
+			"1 2.5 %",
+			"1.5 2 bits::shl",
 			"\"s\" sqrt",
 			"\"s\" sin",
 			"0.0 0.0 fac",
@@ -3354,7 +3354,7 @@ static void test_keypad_types_into_the_line(void) {
 	key(script, &n, QDOS_KEY_MUL);
 	run_script(script, n, fb);
 	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
-	CHECK(strstr(row, ": 5 plus times") == row);
+	CHECK(strstr(row, ": 5 plus multiply") == row);
 
 	n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
@@ -3381,8 +3381,8 @@ static void test_minus_key_still_types_signs(void) {
 			{"1e-5", ": 1e-5"},
 			{"\"a-b", ": \"a-b"},
 			{"2-3", ": 2 minus 3"},
-			{"5 * 2", ": 5 times 2"},
-			{"x*+", ": x times plus"},
+			{"5 * 2", ": 5 multiply 2"},
+			{"x*+", ": x multiply plus"},
 	};
 
 	for (size_t c = 0; c < sizeof(CASES) / sizeof(*CASES); c++) {
@@ -3647,7 +3647,7 @@ static void test_a_restored_session_is_announced(void) {
 /** What lands on the card is a word, without anything being pressed. */
 static void test_an_uploaded_program_is_a_word(void) {
 	store_reset();
-	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { x 3 * }");
+	seed_inbox("triple", "def triple(x:i64 -- r:i64) { x 3 * }");
 
 	qdos_key_event script[64];
 	size_t n = 0;
@@ -3669,10 +3669,10 @@ static void test_an_uploaded_program_is_a_word(void) {
  */
 static void test_an_edit_outlives_the_upload_it_replaced(void) {
 	store_reset();
-	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { x 3 * }");
+	seed_inbox("triple", "def triple(x:i64 -- r:i64) { x 3 * }");
 
 	// What saving an edit leaves behind: a copy of your own over the upload
-	seed_scope(QDOS_SCOPE_USER, "triple", "fn triple(x:i64 -- r:i64) { x 30 * }");
+	seed_scope(QDOS_SCOPE_USER, "triple", "def triple(x:i64 -- r:i64) { x 30 * }");
 
 	qdos_key_event script[256];
 	size_t n = 0;
@@ -3774,11 +3774,11 @@ static void test_dropping_an_uploaded_program_is_refused(void) {
 /** Forgetting an override of an upload brings the card's copy back. */
 static void test_forget_reverts_to_the_card(void) {
 	store_reset();
-	seed_inbox("triple", "fn triple(x:i64 -- r:i64) { x 3 * }");
+	seed_inbox("triple", "def triple(x:i64 -- r:i64) { x 3 * }");
 
 	qdos_key_event script[256];
 	size_t n = 0;
-	type_line(script, &n, "fn triple(x:i64 -- r:i64) { x 30 * }");
+	type_line(script, &n, "def triple(x:i64 -- r:i64) { x 30 * }");
 	type_more(script, &n, "\"triple\" forget");
 	type_more(script, &n, "2 triple");
 
@@ -4754,7 +4754,7 @@ static void test_the_prompt_shows_the_keypad_layer(void) {
 static void test_a_program_calls_an_uploaded_module(void) {
 	store_reset();
 	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
-	seed_system("twice", "fn twice(n:i64 -- r:i64) { n demo::double }");
+	seed_system("twice", "def twice(n:i64 -- r:i64) { n demo::double }");
 
 	qdos_key_event script[64];
 	size_t n = 0;
@@ -4789,7 +4789,7 @@ static void test_a_module_word_is_callable_directly(void) {
 static void test_check_knows_about_module_words(void) {
 	store_reset();
 	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
-	seed_system("uses", "fn uses(n:i64 -- r:i64) { demo::double }");
+	seed_system("uses", "def uses(n:i64 -- r:i64) { demo::double }");
 
 	qdos_key_event script[128];
 	size_t n = 0;
@@ -4893,7 +4893,7 @@ static void test_no_modules_means_no_settings_row(void) {
 static void test_the_list_shows_modules(void) {
 	store_reset();
 	seed_raw(QDOS_SCOPE_INBOX, "libdemo.so", "");
-	seed_system("twice", "fn twice(n:i64 -- r:i64) { n demo::double }");
+	seed_system("twice", "def twice(n:i64 -- r:i64) { n demo::double }");
 
 	qdos_key_event script[8];
 	size_t n = 0;
@@ -5826,8 +5826,8 @@ static void test_calc_words(void) {
 
 	qdos_key_event script[256];
 	size_t n = 0;
-	type_line(script, &n, "fn f(x:f64 -- y:f64) { x x * 2 - }");
-	type_more(script, &n, "fn g(x:f64 -- y:f64) { x }");
+	type_line(script, &n, "def f(x:f64 -- y:f64) { x x * 2 - }");
+	type_more(script, &n, "def g(x:f64 -- y:f64) { x }");
 	type_more(script, &n, "\"f\" 0 5 root");
 	type_more(script, &n, "\"f\" 0 3 fnint");
 	type_more(script, &n, "\"f\" 1 nderiv");
@@ -5848,7 +5848,7 @@ static void test_calc_words(void) {
 
 	// No root is an error, and the arguments are gone
 	n = 0;
-	type_line(script, &n, "fn h(x:f64 -- y:f64) { x x * 1 + }");
+	type_line(script, &n, "def h(x:f64 -- y:f64) { x x * 1 + }");
 	type_more(script, &n, "\"h\" -5 5 root");
 	store_reset();
 	run_script(script, n, fb);
@@ -6398,8 +6398,8 @@ static void test_locals_and_for_at_the_prompt(void) {
 
 	qdos_key_event script[256];
 	size_t n = 0;
-	type_line(script, &n, "fn tri(n:i64 -- r:i64) { 0 1 n 1 + 1 for i { i + } }");
-	type_more(script, &n, "10 tri");
+	type_line(script, &n, "def trinum(n:i64 -- r:i64) { 0 1 n 1 + 1 for i { i + } }");
+	type_more(script, &n, "10 trinum");
 	type_more(script, &n, "5 -> k");
 	type_more(script, &n, "k k *");
 
@@ -6716,8 +6716,8 @@ static void test_delete_from_opts_asks_twice(void) {
 /** Dropping an override brings back what it covered, in the session too. */
 static void test_drop_an_override_reverts(void) {
 	store_reset();
-	seed_system("tri", "fn tri( -- r:i64) { 3 }");
-	seed_scope(QDOS_SCOPE_USER, "tri", "fn tri( -- r:i64) { 4 }");
+	seed_system("trio", "fn trio( -- r:i64) { 3 }");
+	seed_scope(QDOS_SCOPE_USER, "trio", "fn trio( -- r:i64) { 4 }");
 
 	qdos_key_event script[64];
 	size_t n = 0;
@@ -6733,7 +6733,7 @@ static void test_drop_an_override_reverts(void) {
 
 	key(script, &n, QDOS_KEY_BACKSPACE);
 	key(script, &n, QDOS_KEY_CLEAR);
-	type_line(script, &n, "tri");
+	type_line(script, &n, "trio");
 	run_script(script, n, fb);
 
 	read_row(fb, ROW_TOP_VALUE, row, sizeof(row));
@@ -6943,7 +6943,7 @@ static void test_an_apps_error_is_shown(void) {
 static void test_the_readme_ui_example_runs(void) {
 	store_reset();
 	seed_app(QDOS_SCOPE_INBOX, "area",
-			"fn f(x:f64 -- y:f64) { x sin x * }\n"
+			"def f(x:f64 -- y:f64) { x sin x * }\n"
 			"fn main( -- ) {\n"
 			"\t\"FROM?\" ui::ask drop -> a\n"
 			"\t\"TO?\" ui::ask drop -> b\n"
@@ -6974,7 +6974,7 @@ static void test_the_readme_ui_example_runs(void) {
 /** The graph words find an app's own functions, not only the session's. */
 static void test_calc_words_see_an_apps_own_words(void) {
 	store_reset();
-	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x 0.5 - }\nfn main( -- ) { \"f\" 0.0 1.0 root print }");
+	seed_app(QDOS_SCOPE_INBOX, "g", "def f(x:f64 -- y:f64) { x 0.5 - }\nfn main( -- ) { \"f\" 0.0 1.0 root print }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -6991,7 +6991,7 @@ static void test_calc_words_see_an_apps_own_words(void) {
 /** ui::plot shows the graph and holds the program until ESC. */
 static void test_ui_plot_waits_for_escape(void) {
 	store_reset();
-	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x x * }\nfn main( -- ) { \"f\" ui::plot \"BACK\" print }");
+	seed_app(QDOS_SCOPE_INBOX, "g", "def f(x:f64 -- y:f64) { x x * }\nfn main( -- ) { \"f\" ui::plot \"BACK\" print }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -7016,7 +7016,7 @@ static void test_ui_plot_waits_for_escape(void) {
 /** `graph` in an app waits the same way, its words being gone once it returns. */
 static void test_graph_in_an_app_waits(void) {
 	store_reset();
-	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x }\nfn main( -- ) { \"f\" graph \"BACK\" print }");
+	seed_app(QDOS_SCOPE_INBOX, "g", "def f(x:f64 -- y:f64) { x }\nfn main( -- ) { \"f\" graph \"BACK\" print }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -7034,7 +7034,7 @@ static void test_graph_in_an_app_waits(void) {
 /** PWR stops a program waiting on a page, and what came after never runs. */
 static void test_power_breaks_a_plot(void) {
 	store_reset();
-	seed_app(QDOS_SCOPE_INBOX, "g", "fn f(x:f64 -- y:f64) { x }\nfn main( -- ) { \"f\" ui::plot \"BACK\" print }");
+	seed_app(QDOS_SCOPE_INBOX, "g", "def f(x:f64 -- y:f64) { x }\nfn main( -- ) { \"f\" ui::plot \"BACK\" print }");
 
 	qdos_key_event script[32];
 	size_t n = 0;
@@ -7336,10 +7336,10 @@ static void test_sample_quad_refused_leaves_the_stack(void) {
 	CHECK(strstr(row, " 0") != NULL);
 }
 
-/** tri: a 3 4 5 triangle off the stack has its right angle opposite c. */
+/** triangle: a 3 4 5 triangle off the stack has its right angle opposite c. */
 static void test_sample_tri_takes_the_stack(void) {
 	store_reset();
-	seed_sample("tri");
+	seed_sample("triangle");
 
 	qdos_key_event script[64];
 	size_t n = 0;
@@ -7349,7 +7349,7 @@ static void test_sample_tri_takes_the_stack(void) {
 	key(script, &n, QDOS_KEY_ENTER);
 	digits(script, &n, "5");
 	key(script, &n, QDOS_KEY_ENTER);
-	type_line(script, &n, "tri");
+	type_line(script, &n, "triangle");
 	key(script, &n, QDOS_KEY_1); // SSS
 	key(script, &n, QDOS_KEY_CLEAR);
 
@@ -7498,14 +7498,14 @@ static void test_sample_fin(void) {
 	CHECK(row[0] == '\0');
 }
 
-/** tri: 3 4 5 is right-angled with area 6, and SSA can have two answers; what it found is left on the stack. */
+/** triangle: 3 4 5 is right-angled with area 6, and SSA can have two answers; what it found is left on the stack. */
 static void test_sample_tri(void) {
 	store_reset();
-	seed_sample("tri");
+	seed_sample("triangle");
 
 	qdos_key_event script[96];
 	size_t n = 0;
-	type_line(script, &n, "tri");
+	type_line(script, &n, "triangle");
 	key(script, &n, QDOS_KEY_1); // SSS
 	answer(script, &n, "3");
 	answer(script, &n, "4");
@@ -7528,9 +7528,9 @@ static void test_sample_tri(void) {
 
 	// 30 degrees in radians, typed as the calculator would take it
 	store_reset();
-	seed_sample("tri");
+	seed_sample("triangle");
 	n = 0;
-	type_line(script, &n, "tri");
+	type_line(script, &n, "triangle");
 	key(script, &n, QDOS_KEY_4); // SSA
 	answer(script, &n, "6");
 	answer(script, &n, "8");
@@ -7546,7 +7546,7 @@ static void test_sample_tri(void) {
 	CHECK(output_has(mid, "c 11.4003  C 1.8883"));
 	CHECK(output_has(mid, "--- OR ---"));
 	store_reset(); // the stack the last run left
-	seed_sample("tri");
+	seed_sample("triangle");
 	run_script_mid(script, n, scrolled, fb, mid);
 	CHECK(output_has(mid, "c 2.4561  C 0.2061"));
 
@@ -7693,7 +7693,7 @@ static void test_complex_mode_decides_sqrt(void) {
 /** Arithmetic, and an answer with nothing imaginary left is a real again. */
 static void test_complex_arithmetic(void) {
 	char row[EDIT_COLS_T + 1];
-	complex_top(0, "3 4 complex 1 2 complex times", row, sizeof(row));
+	complex_top(0, "3 4 complex 1 2 complex multiply", row, sizeof(row));
 	CHECK(strstr(row, "-5+10i") != NULL);
 
 	complex_top(0, "1 2 complex 3 4 complex divide", row, sizeof(row));
@@ -7987,8 +7987,8 @@ static void test_sample_sudoku_rules(void) {
 	// with one cell spoiled, then twenty deals a level with no given clashing
 	seed_raw(QDOS_SCOPE_INBOX, "sudoku/zcheck.qd",
 			"fn textbook( -- g:[]i64) { blank -> g 0 81 1 for i { g i i 9 / 3 * i 9 / 3 / + i 9 % + 9 % 1 + set } g }\n"
-			"fn legal(g:[]i64 -- ok:i64) { 0 81 1 for i { g i clash 1 == if { 0 return } } 1 }\n"
-			"fn givens(g:[]i64 -- n:i64) { 0 -> n 0 81 1 for i { g i nth 0 != if { n 1 + -> n } } n }\n");
+			"def legal(g:[]i64 -- ok:i64) { 0 81 1 for i { g i clash 1 == if { 0 return } } 1 }\n"
+			"def givens(g:[]i64 -- n:i64) { 0 -> n 0 81 1 for i { g i nth 0 != if { n 1 + -> n } } n }\n");
 	seed_raw(QDOS_SCOPE_USER, "sudoku/main.qd",
 			"fn main() {\n"
 			"\ttextbook solved print \" \" print\n"
@@ -8286,7 +8286,7 @@ static void test_infix_gets_an_rpn_hint(void) {
 	read_error(fb, row, sizeof(row));
 	CHECK(strstr(row, "TRY 2 sqrt") != NULL);
 
-	// 2+3*4 on the keys is 2 plus 3 times 4, which RPN would take and get wrong
+	// 2+3*4 on the keys is 2 plus 3 multiply 4, which RPN would take and get wrong
 	n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
 	digits(script, &n, "2");
@@ -8298,7 +8298,7 @@ static void test_infix_gets_an_rpn_hint(void) {
 	store_reset();
 	run_script(script, n, fb);
 	read_error(fb, row, sizeof(row));
-	CHECK(strcmp(row, "RPN: TRY 2 3 4 times plus") == 0);
+	CHECK(strcmp(row, "RPN: TRY 2 3 4 multiply plus") == 0);
 	read_level(fb, 0, row, sizeof(row));
 	CHECK(row[0] == '\0');
 }
@@ -8939,8 +8939,8 @@ static void test_area_word_counts_both_sides(void) {
 	qdos_key_event script[128];
 	size_t n = 0;
 	script[n++] = (qdos_key_event){QDOS_KEY_CHAR, ':'};
-	type_more(script, &n, "fn f(x:f64 -- r:f64) { x }");
-	type_more(script, &n, "fn g(x:f64 -- r:f64) { 0.0 }");
+	type_more(script, &n, "def f(x:f64 -- r:f64) { x }");
+	type_more(script, &n, "def g(x:f64 -- r:f64) { 0.0 }");
 	type_more(script, &n, "\"f\" \"g\" -1 1 area");
 
 	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
@@ -9006,7 +9006,7 @@ static void test_a_failed_line_stays_in_sight(void) {
 	read_row(fb, ROW_INPUT_LINE, row, sizeof(row));
 	CHECK(strstr(row, "2+3*4") != NULL);
 	read_error(fb, row, sizeof(row));
-	CHECK(strcmp(row, "RPN: TRY 2 3 4 times plus") == 0); // the whole of it, not 2 3 plus
+	CHECK(strcmp(row, "RPN: TRY 2 3 4 multiply plus") == 0); // the whole of it, not 2 3 plus
 }
 
 /** The catalog says what the word picked out takes, leaves and does. */
@@ -9051,7 +9051,7 @@ static void test_graph_arrows_move_a_cursor(void) {
 
 	qdos_key_event script[160];
 	size_t n = 0;
-	type_line(script, &n, "fn twice(x:f64 -- y:f64) { x 2 * }");
+	type_line(script, &n, "def twice(x:f64 -- y:f64) { x 2 * }");
 	type_more(script, &n, "\"twice\" graph");
 	key(script, &n, QDOS_KEY_RIGHT);
 

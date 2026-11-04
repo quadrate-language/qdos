@@ -3,19 +3,19 @@
 // angle mode; side a faces angle A. The three it found are left on the
 // calculator's stack, the first answer where there are two.
 
-fn half( -- h:f128) {
+fn half( -- h:d128) {
 	-1.0 acos
 }
 
-fn round4(x:f128 -- y:f128) {
-	x 10000.0 * round 10000.0 divide
+fn round4(x:d128 -- y:d128) {
+	10000.0 * round 10000.0 divide
 }
 
-fn side(name:str x:f128 angle:str y:f128 -- ) {
+def side(name:str x:d128 angle:str y:d128 -- ) {
 	name " " ui::cat x round4 ui::cat "  " ui::cat angle ui::cat " " ui::cat y round4 ui::cat print nl
 }
 
-fn report(a:f128 b:f128 c:f128 aa:f128 bb:f128 cc:f128 -- ) {
+def report(a:d128 b:d128 c:d128 aa:d128 bb:d128 cc:d128 -- ) {
 	"a" a "A" aa side
 	"b" b "B" bb side
 	"c" c "C" cc side
@@ -23,11 +23,11 @@ fn report(a:f128 b:f128 c:f128 aa:f128 bb:f128 cc:f128 -- ) {
 }
 
 // The angle facing side a
-fn facing(a:f128 b:f128 c:f128 -- aa:f128) {
+def facing(a:d128 b:d128 c:d128 -- aa:d128) {
 	b b * c c * + a a * - 2.0 b * c * divide acos
 }
 
-fn sss(a:f128 b:f128 c:f128 -- ok:i64) {
+def sss(a:d128 b:d128 c:d128 -- ok:i64) {
 	a b + c <= a c + b <= or b c + a <= or if { "NO SUCH TRIANGLE" print nl 0 return }
 	a b c facing -> aa
 	b a c facing -> bb
@@ -35,7 +35,7 @@ fn sss(a:f128 b:f128 c:f128 -- ok:i64) {
 	1
 }
 
-fn answer3(x:f128 y:f128 z:f128 -- ) {
+def answer3(x:d128 y:d128 z:d128 -- ) {
 	x ui::answer
 	y ui::answer
 	z ui::answer
@@ -43,7 +43,7 @@ fn answer3(x:f128 y:f128 z:f128 -- ) {
 
 // Three parts off the calculator's stack when all three are there, in the
 // order the case names them, else asked for one by one
-fn three(p:str q:str r:str -- x:f128 y:f128 z:f128 ok:i64) {
+def three(p:str q:str r:str -- x:d128 y:d128 z:d128 ok:i64) {
 	ui::args 3 >= if {
 		ui::arg drop ui::arg drop ui::arg drop -> x -> y -> z
 		x y z 1 return

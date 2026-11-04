@@ -43,3 +43,8 @@ esp32/sdkconfig.old
 *-backups/
 _autosave-*
 fp-info-cache
+
+# Meson unpacks the Quadrate release here; the wrap and its overlay are tracked
+subprojects/*/
+!subprojects/packagefiles/
+subprojects/packagecache/

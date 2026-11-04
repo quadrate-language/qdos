@@ -183,10 +183,10 @@ static void test_encode_decode_roundtrip(void) {
 	CHECK(out.type == QDOS_VALUE_EMPTY);
 	qdos_value decimal;
 	memset(&decimal, 0, sizeof(decimal));
-	decimal.type = QDOS_VALUE_F128;
+	decimal.type = QDOS_VALUE_D128;
 	snprintf(decimal.s, sizeof(decimal.s), "-9.876543210987654321098765432109876e-4321");
 	CHECK(qdos_value_encode(&decimal, buf, &len) && qdos_value_decode(buf, len, &out));
-	CHECK(out.type == QDOS_VALUE_F128 && strcmp(out.s, decimal.s) == 0);
+	CHECK(out.type == QDOS_VALUE_D128 && strcmp(out.s, decimal.s) == 0);
 }
 
 static void test_encoding_is_explicit(void) {
@@ -310,13 +310,13 @@ static void test_session_survives_a_restart(void) {
 	qd_interp_destroy(after);
 }
 
-// An f128 comes back as it was saved: every digit, the trailing zero of 1.10, the exponent
-static void test_session_keeps_f128_exactly(void) {
+// A d128 comes back as it was saved: every digit, the trailing zero of 1.10, the exponent
+static void test_session_keeps_d128_exactly(void) {
 	store_reset();
 	qdos_hal hal = make_hal();
 
 	qd_interp* before = qd_interp_create(256);
-	CHECK(qd_interp_eval(before, "1.10q 9.999999999999999999999999999999999e6144q -0q"));
+	CHECK(qd_interp_eval(before, "1.10d 9.999999999999999999999999999999999e6144d -0d"));
 	CHECK(qdos_storage_save_session(&hal, before) == QDOS_STORE_OK);
 	qd_interp_destroy(before);
 
@@ -324,12 +324,12 @@ static void test_session_keeps_f128_exactly(void) {
 	CHECK(qdos_storage_restore_session(&hal, after) == QDOS_STORE_OK);
 	CHECK(qd_interp_depth(after) == 3);
 	qd_interp_value value;
-	CHECK(qd_interp_peek(after, 0, &value) && value.type == QD_INTERP_VALUE_F128 && strcmp(value.text, "-0") == 0);
+	CHECK(qd_interp_peek(after, 0, &value) && value.type == QD_INTERP_VALUE_D128 && strcmp(value.text, "-0") == 0);
 	CHECK(qd_interp_peek(after, 1, &value) && strcmp(value.text, "9.999999999999999999999999999999999e+6144") == 0);
 	CHECK(qd_interp_peek(after, 2, &value) && strcmp(value.text, "1.10") == 0);
 
 	// Still decimal arithmetic after the restart
-	CHECK(qd_interp_eval(after, "drop drop 0.20q +"));
+	CHECK(qd_interp_eval(after, "drop drop 0.20d +"));
 	CHECK(qd_interp_peek(after, 0, &value) && strcmp(value.text, "1.30") == 0);
 	qd_interp_destroy(after);
 }
@@ -465,7 +465,7 @@ static void test_program_save_load_erase(void) {
 	store_reset();
 	qdos_hal hal = make_hal();
 
-	const char* source = "fn double(x:i64 -- r:i64) { 2 * }";
+	const char* source = "def double(x:i64 -- r:i64) { 2 * }";
 	CHECK(qdos_program_save(&hal, "double", source) == QDOS_STORE_OK);
 
 	char buf[QDOS_PROGRAM_MAX];
@@ -483,10 +483,10 @@ static void test_programs_survive_a_restart(void) {
 	qdos_hal hal = make_hal();
 
 	qd_interp* before = qd_interp_create(256);
-	CHECK(qd_interp_eval(before, "fn double(x:i64 -- r:i64) { 2 * }"));
+	CHECK(qd_interp_eval(before, "def double(x:i64 -- r:i64) { 2 * }"));
 	const char* declared = qd_interp_last_declared(before);
 	CHECK(declared && strcmp(declared, "double") == 0);
-	CHECK(qdos_program_save(&hal, declared, "fn double(x:i64 -- r:i64) { 2 * }") == QDOS_STORE_OK);
+	CHECK(qdos_program_save(&hal, declared, "def double(x:i64 -- r:i64) { 2 * }") == QDOS_STORE_OK);
 	qd_interp_destroy(before);
 
 	// Power cycle: a fresh interpreter knows nothing until the store is replayed
@@ -629,7 +629,9 @@ static void test_an_upload_never_overwrites_the_users_own(void) {
 		qd_interp_value value;
 		CHECK(qd_interp_eval(interp, "thing"));
 		CHECK(qd_interp_peek(interp, 0, &value) && value.i == 2);
-		qd_interp_eval(interp, "clear");
+		while (qd_interp_depth(interp) > 0) {
+			qd_drop(qd_interp_context(interp));
+		}
 	}
 	qd_interp_destroy(interp);
 }
@@ -724,9 +726,9 @@ static void test_restoring_drops_what_a_program_pushed(void) {
 
 static void test_rename_changes_only_the_word(void) {
 	char out[256];
-	CHECK(qdos_source_rename("// old here\nfn old(x:i64 -- r:i64) { x old_ \"old\" m::old old::f /* old */ old }",
+	CHECK(qdos_source_rename("// old here\ndef old(x:i64 -- r:i64) { x old_ \"old\" m::old old::f /* old */ old }",
 			"old", "neu", out, sizeof(out)));
-	CHECK(strcmp(out, "// old here\nfn neu(x:i64 -- r:i64) { x old_ \"old\" m::old old::f /* old */ neu }") == 0);
+	CHECK(strcmp(out, "// old here\ndef neu(x:i64 -- r:i64) { x old_ \"old\" m::old old::f /* old */ neu }") == 0);
 
 	// Too long for the buffer is refused rather than cut
 	CHECK(!qdos_source_rename("fn a( -- ) { }", "a", "aaaaaaaaaaaaaaaa", out, 16));
@@ -735,13 +737,13 @@ static void test_rename_changes_only_the_word(void) {
 static void test_copy_renames_a_loose_program(void) {
 	store_reset();
 	qdos_hal hal = make_hal();
-	seed_system("tri", "fn tri(x:i64 -- r:i64) { x 3 * }");
+	seed_system("trio", "def trio(x:i64 -- r:i64) { x 3 * }");
 
-	CHECK(qdos_program_copy(&hal, "tri", "quad") == QDOS_STORE_OK);
+	CHECK(qdos_program_copy(&hal, "trio", "quad") == QDOS_STORE_OK);
 
 	char buf[QDOS_PROGRAM_MAX];
 	CHECK(qdos_program_load(&hal, QDOS_SCOPE_USER, "quad", buf, sizeof(buf)) == QDOS_STORE_OK);
-	CHECK(strcmp(buf, "fn quad(x:i64 -- r:i64) { x 3 * }") == 0);
+	CHECK(strcmp(buf, "def quad(x:i64 -- r:i64) { x 3 * }") == 0);
 	CHECK(qdos_program_copy(&hal, "missing", "other") == QDOS_STORE_NOT_FOUND);
 }
 
@@ -761,7 +763,7 @@ int main(void) {
 	test_corrupt_store_reads_as_absent();
 	test_register_keys();
 	test_session_survives_a_restart();
-	test_session_keeps_f128_exactly();
+	test_session_keeps_d128_exactly();
 	test_no_session_is_not_an_error();
 	test_empty_session_roundtrips();
 	test_session_stops_at_a_value_it_cannot_encode();

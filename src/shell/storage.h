@@ -26,7 +26,7 @@ typedef enum {
 	QDOS_VALUE_FLOAT = 2,
 	QDOS_VALUE_STRING = 3,
 	QDOS_VALUE_COMPLEX = 4, ///< f is the real part, im the imaginary one
-	QDOS_VALUE_F128 = 5		///< s is the decimal text, which reads back exactly, trailing zeros and all
+	QDOS_VALUE_D128 = 5		///< s is the decimal text, which reads back exactly, trailing zeros and all
 } qdos_value_type;
 
 typedef struct {

@@ -49,7 +49,7 @@ bool qdos_word_effect(const char* name, int* takes, int* leaves);
  * argument in brackets, several of them split by commas, or without, `sin x`,
  * where it is one of the known functions of one argument. `sq`, `cb`, `inv`,
  * `fac` and `!` after a value apply to it, as the TI's x², x⁻¹ and ! keys do.
- * The keypad's words are its operators too: `plus`, `minus`, `times`,
+ * The keypad's words are its operators too: `plus`, `minus`, `multiply`,
  * `divide`, and `pow` between two values.
  *
  * Numbers are written as floats, so `1/2` is a half rather than the nought

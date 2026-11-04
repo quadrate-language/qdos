@@ -35,43 +35,58 @@ version_h = configure_file(
 # with (lib/qc, plus its u8t dependency) and the runtime (lib/rt). None of them
 # pull in LLVM: execution goes through the runtime's C operations rather than
 # generated code. See README.md.
+#
+# By default the libraries come from the Quadrate release in
+# subprojects/quadrate.wrap, which is prebuilt for an x86_64 Linux host. For any
+# other target, or to work on Quadrate and QDOS together, quadrate_src points at
+# a tree holding the same libraries in the same layout: a Quadrate checkout
+# after `make release`, or the firmware's staging directory.
 # ---------------------------------------------------------------------------
 
 quadrate_src = get_option('quadrate_src')
-if not quadrate_src.startswith('/')
-	quadrate_src = meson.current_source_dir() / quadrate_src
-endif
-quadrate_dist = quadrate_src / get_option('quadrate_dist')
 
-# Order matters: interp references qc and rt, math, f128 and qc reference rt and u8t
-quadrate_libs = []
-foreach name : ['interp', 'qc', 'math', 'f128', 'rt', 'u8t']
-	quadrate_libs += quadrate_dist / 'lib/quadrate/lib' + name + '.a'
-endforeach
-
-foreach lib : quadrate_libs
-	if not fs.exists(lib)
+if quadrate_src == ''
+	if host_machine.system() != 'linux' or host_machine.cpu_family() != 'x86_64'
 		error('\n'.join([
-			'Quadrate static library not found:',
-			'  ' + lib,
-			'',
-			'Check out the Quadrate source alongside this project and build it:',
-			'  git clone https://github.com/quadrate-language/quadrate',
-			'  cd quadrate && make release',
-			'',
-			'Or point at an existing tree:',
+			'The Quadrate release archive is for an x86_64 Linux host, and this',
+			'build is for ' + host_machine.cpu_family() + ' ' + host_machine.system() + '.',
+			'Build Quadrate for it and point at the tree:',
 			'  meson setup build -Dquadrate_src=/path/to/quadrate',
 		]))
 	endif
-endforeach
+	quadrate_dep = subproject('quadrate').get_variable('quadrate_dep')
+else
+	if not quadrate_src.startswith('/')
+		quadrate_src = meson.current_source_dir() / quadrate_src
+	endif
+	quadrate_dist = quadrate_src / get_option('quadrate_dist')
 
-# -isystem rather than include_directories: the Quadrate tree is outside this
-# project, which meson refuses to form absolute include paths into, and it also
-# keeps its headers from tripping this project's warning level.
-quadrate_dep = declare_dependency(
-		compile_args: ['-isystem' + (quadrate_dist / 'include')],
-		link_args: quadrate_libs + ['-lm'],
-)
+	# Order matters: interp references qc and rt, math, decimal and qc reference rt and u8t
+	quadrate_libs = []
+	foreach name : ['interp', 'qc', 'math', 'decimal', 'rt', 'u8t']
+		quadrate_libs += quadrate_dist / 'lib/quadrate/lib' + name + '.a'
+	endforeach
+
+	foreach lib : quadrate_libs
+		if not fs.exists(lib)
+			error('\n'.join([
+				'Quadrate static library not found:',
+				'  ' + lib,
+				'',
+				'Build the Quadrate tree first (`make release` in it), or leave',
+				'quadrate_src unset to use the release in subprojects/quadrate.wrap.',
+			]))
+		endif
+	endforeach
+
+	# -isystem rather than include_directories: the Quadrate tree is outside
+	# this project, which meson refuses to form absolute include paths into, and
+	# it also keeps its headers from tripping this project's warning level.
+	quadrate_dep = declare_dependency(
+			compile_args: ['-isystem' + (quadrate_dist / 'include')],
+			link_args: quadrate_libs + ['-lm'],
+	)
+endif
 
 # ---------------------------------------------------------------------------
 # QDOS

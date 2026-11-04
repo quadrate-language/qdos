@@ -1,5 +1,5 @@
-option('quadrate_src', type: 'string', value: '../quadrate',
-		description: 'Path to the Quadrate source tree (absolute, or relative to this project)')
+option('quadrate_src', type: 'string', value: '',
+		description: 'Path to a built Quadrate tree (absolute, or relative to this project). Empty takes the release in subprojects/quadrate.wrap.')
 
 option('quadrate_dist', type: 'string', value: 'dist',
 		description: 'Distribution directory inside the Quadrate tree (produced by `make release`)')

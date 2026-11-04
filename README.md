@@ -11,14 +11,11 @@ See [docs/design.md](./docs/design.md) for why it is built this way, and
 
 ## Building
 
-Requires Meson, Ninja, a C++20 compiler, SDL3 (simulator only), and the Quadrate
-source tree built alongside this one.
+Requires Meson, Ninja, a C++20 compiler and SDL3 (simulator only). QDOS builds
+against Quadrate 0.7.0: Meson downloads the release, prebuilt for x86_64 Linux,
+through `subprojects/quadrate.wrap`.
 
 ```bash
-git clone https://github.com/quadrate-language/quadrate
-cd quadrate && make release
-
-cd ../qdos
 meson setup build
 meson compile -C build
 ./build/qdos                    # SDL3 simulator
@@ -27,15 +24,40 @@ meson compile -C build
 Dependencies: `pacman -S meson ninja gcc sdl3` or
 `apt install build-essential meson ninja-build libsdl3-dev`.
 
+For another host, or to work on Quadrate alongside QDOS, build a Quadrate
+checkout (`make release` in it) and pass `-Dquadrate_src=../quadrate`.
+
 Options:
 
 ```
--Dquadrate_src=PATH     Quadrate source tree (default ../quadrate)
+-Dquadrate_src=PATH     A built Quadrate tree instead of the release (default unset)
 -Dquadrate_dist=PATH    dist directory inside it (default dist)
 -Dsim=true|false        SDL3 simulator backend (default true)
 -Ddevice=true|false     Linux framebuffer/evdev backend (default true)
 -Dstatic=true|false     Link statically, no runtime dependencies (default false)
 ```
+
+### In a browser
+
+The simulator also builds for the web with Emscripten and its SDL3 port. Like
+the ESP32 port, it compiles Quadrate from source: the configure step downloads
+the 0.7.0 source archive and the two libraries it needs (see
+`cmake/quadrate.cmake`). `QUADRATE_SRC` points it at a local tree instead.
+
+```bash
+emcmake cmake -S web -B build-web -G Ninja
+cmake --build build-web
+emrun build-web/qdos.html       # or serve build-web/ with any static server
+```
+
+The page is the r8 One's landing page, with the calculator running in it. The
+keypad responds to the mouse, touch and the keyboard, and the key sequences in
+the text type themselves into it when pressed. The shipped programs are packed into `qdos.data`. The user
+store is kept in the browser's IndexedDB, so programs and the session survive a
+reload. The session is also saved when the tab is hidden. PWR blanks the panel,
+and any key turns the calculator back on. The browser build has no inbox and no
+native modules, since nothing can be dropped onto the card and there is no
+`dlopen`. A module can still be linked in through `web/builtins.c`.
 
 ## Using it
 
@@ -59,12 +81,12 @@ shifted, it does the same with e.
 
 ```
 6  Enter  7  *                          ->  42
-LINE  fn sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
+LINE  def sq(x:i64 -- r:i64) { x x * }   Enter    declared 'sq'
       7 sq                              Enter    -> 49
 ```
 
 The `÷` key divides as a calculator does, `7 2 ÷` being 3.5, and in a line it
-types `divide`; `+`, `−` and `×` likewise type `plus`, `minus` and `times`, so
+types `divide`; `+`, `−` and `×` likewise type `plus`, `minus` and `multiply`, so
 a line does what the keys do on the stack. In a string or a comment they type
 themselves, and `−` starting a word and followed by a digit, `>` or another `−`
 is a sign, `->` or `--` rather than `minus`; glued to a number, `2−3`, it is
@@ -77,7 +99,7 @@ The `%` key is percent, as an HP's: `200 ENTER 15 %` leaves 200 and 30. Of a
 number alone it is a TI's, `15 %` being 0.15.
 `modulo`, a calculator's mod, takes decimals and has the sign of the divisor,
 `-7 3 modulo` being 2 where Quadrate's `mod` gives -1.
-The keypad's `+`, `−` and `×` are `plus`, `minus` and `times`: whole
+The keypad's `+`, `−` and `×` are `plus`, `minus` and `multiply`: whole
 numbers stay whole until a result will not fit 64 bits, and then it is a
 float, where Quadrate's own operators wrap as C does. `sq`, `cb`, `abs` and
 `fac` do the same, so `21 fac` is 5.1e19. A number typed on the keypad that is
@@ -147,7 +169,7 @@ In the editor `RUN` saves and runs without leaving, `SAVE` stays, `UNDO` swaps
 back the last run of edits, `CHECK` goes to the line it complains about, and
 compares a word's signature with what its body does to the stack where that
 can be counted -- `fn hyp( -- ) { sq swap sq plus sqrt }` is told it takes 2
-and leaves 1 and to write `stack fn hyp(f64 f64 -- r:f64)` -- and
+and leaves 1 and to write `fn hyp(f64 f64 -- r:f64)` -- and
 Enter keeps the indent. At the prompt, `edit` opens a program, `forget` removes
 one. Programs load from three scopes — system, inbox
 (uploaded over USB or on the card), user — and a user copy shadows the others.
@@ -285,7 +307,7 @@ spinning — a key cuts it short and is still there for `ui::key` — and
 a word handed to `ui::plot` or `root` reads what the app worked out, without
 touching the user's registers. `ui::answer ( x -- )` leaves x on the
 calculator's stack when the app ends, so an answer can be gone on with: `quad`
-leaves its roots, `fin` what it solved for, `tri` the three parts it found
+leaves its roots, `fin` what it solved for, `triangle` the three parts it found
 (the first triangle, where there are two), and `units` the conversion picked
 from its list. `ui::arg ( -- x ok )` is the other way in: the next
 number on the stack the app was run from, the top first, with ok 0 once there
@@ -323,7 +345,7 @@ more than a quarter of a second, so a pause is not one huge step.
 `""` at once when there is none. `programs/system/spring` uses all of them.
 
 ```
-fn f(x:f64 -- y:f64) { x sin x * }
+def f(x:f64 -- y:f64) { x sin x * }
 fn main( -- ) {
 	"FROM?" ui::ask drop -> a
 	"TO?" ui::ask drop -> b
@@ -335,7 +357,7 @@ fn main( -- ) {
 The firmware ships seven apps written this way, each small enough to read and
 edit on the calculator itself: `quad` (roots, complex ones included, and the
 parabola), `units` (a value in every other unit of its kind), `fin` (loan
-payment, amount, rate or term from the other three), `tri` (any triangle from
+payment, amount, rate or term from the other three), `triangle` (any triangle from
 three of its parts), `clock` (a stopwatch and a countdown timer), `mandel`
 (the Mandelbrot set, to pan and zoom) and `sudoku`.
 Sudoku takes three presses a cell, each digit standing where it sits on the
@@ -363,8 +385,8 @@ expensive part. What it did to the stack before it failed is put back. Infix is
 refused instead of run — `5 - 3` is valid Quadrate that pushes 5, subtracts it
 from whatever the stack was already holding, and pushes 3, which is a wrong
 answer with nothing to report it, so the shell says `RPN: TRY 5 3 minus` and
-evaluates nothing. `2+3*4` on the keys is `2 plus 3 times 4`, caught the same
-way and answered in full, `TRY 2 3 4 times plus`, and a line that fails with brackets in it, `sqrt(2)`, is told
+evaluates nothing. `2+3*4` on the keys is `2 plus 3 multiply 4`, caught the same
+way and answered in full, `TRY 2 3 4 multiply plus`, and a line that fails with brackets in it, `sqrt(2)`, is told
 `TRY 2 sqrt`. An error too long for the row takes the row above as well.
 
 ## Native modules

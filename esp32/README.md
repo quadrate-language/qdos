@@ -17,10 +17,9 @@ none of them.
 
 ## Building
 
-ESP-IDF 5.5 and the Quadrate source tree beside this one, as for the Pi. The
-component builds Quadrate's runtime, front-end and interpreter from source, so
-nothing needs to be built in the Quadrate tree first — except that u8t has to
-be fetched (`meson subprojects download` there, or any Meson build of it).
+ESP-IDF 5.5. The component builds Quadrate's runtime, front-end and interpreter
+from source: the first configure downloads the Quadrate 0.7.0 source archive,
+with u8t and libmpdec, into the build directory (see `../cmake/quadrate.cmake`).
 
 ```bash
 cd esp32
@@ -28,14 +27,15 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-Or with no ESP-IDF installed, from the directory holding both trees:
+Or with no ESP-IDF installed, from this repository's root:
 
 ```bash
-docker run --rm -it -u $(id -u):$(id -g) -e HOME=/tmp -v $PWD:/work \
+docker run --rm -it -u $(id -u):$(id -g) -e HOME=/tmp -v $PWD:/work/qdos \
     -w /work/qdos/esp32 espressif/idf:v5.5 idf.py build
 ```
 
-`QUADRATE_SRC` points at a Quadrate tree somewhere else. `idf.py menuconfig`,
+`QUADRATE_SRC` builds against a local Quadrate tree instead of the release; it
+needs `meson subprojects download` run in it once. `idf.py menuconfig`,
 under **QDOS**, has the pins, the shell's stack and the call depth.
 
 ### Under QEMU

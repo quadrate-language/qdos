@@ -69,7 +69,7 @@ int qdos_push_numbers(qd_context* ctx, const double* values, size_t n) {
 	for (size_t i = 0; i < n; i++) {
 		qd_array_push_float(array, values[i]);
 	}
-	return qd_push_p(ctx, array);
+	return qd_push_array(ctx, array);
 }
 
 /* Arguments off the top, the last of them first, as numbers */

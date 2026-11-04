@@ -2,19 +2,19 @@
 // A stopwatch and a countdown timer, in large figures. It only wakes up to
 // redraw while it is running; stopped, it waits for a key and nothing else.
 
-fn two(n:f128 -- s:str) {
-	n 10.0 < if { "0" n ui::cat return }
-	n ui::str
+fn two(n:d128 -- s:str) {
+	dup 10.0 < if { "0" swap ui::cat return }
+	ui::str
 }
 
-fn shown(ms:f128 -- s:str) {
-	ms 100.0 divide floor -> tenths
+fn shown(ms:d128 -- s:str) {
+	100.0 divide floor -> tenths
 	tenths 600.0 divide floor two ":" ui::cat
 	tenths 600.0 fmod 10.0 divide floor two ui::cat "." ui::cat
 	tenths 10.0 fmod ui::cat
 }
 
-fn face(title:str ms:f128 hint:str -- ) {
+def face(title:str ms:d128 hint:str -- ) {
 	ui::cls
 	0 0 title ui::text
 	3 ms shown 3 ui::big
@@ -24,7 +24,7 @@ fn face(title:str ms:f128 hint:str -- ) {
 
 // The next key's name: waiting for one while stopped, a tenth of a second at most while running
 fn next(running:i64 -- name:str) {
-	running 0 == if { ui::wait ui::keyname return }
+	0 == if { ui::wait ui::keyname return }
 	100 ui::sleep
 	ui::key 0 == if { drop drop "" return }
 	ui::keyname

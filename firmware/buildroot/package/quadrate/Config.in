@@ -5,7 +5,8 @@ config BR2_PACKAGE_QUADRATE
 	help
 	  The Quadrate language runtime, compiler front-end and AST
 	  interpreter, built without LLVM. Provides the static libraries
-	  QDOS links: libinterp, libqc, librt and libu8t.
+	  QDOS links: libinterp, libqc, librt, libu8t
+	  and the math and decimal modules.
 
 	  https://github.com/quadrate-language/quadrate
 

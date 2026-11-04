@@ -17,7 +17,7 @@ static int native_sto(qd_context* ctx, void* userdata) {
 static qd_interp* fresh(void) {
 	qd_interp* interp = qd_interp_create(4096);
 	qd_interp_register(interp, "sto", "(value:i64 slot:i64 -- )", native_sto, NULL);
-	qd_interp_eval(interp, "fn isqrt(n:i64 -- r:i64) {\n\t0\n}");
+	qd_interp_eval(interp, "def isqrt(n:i64 -- r:i64) {\n\t0\n}");
 	return interp;
 }
 
@@ -35,7 +35,7 @@ static void test_the_shipped_programs_are_clean(void) {
 
 	CHECK(!lint(interp,
 			"// Integer square root.\n"
-			"fn isqrt(n:i64 -- r:i64) {\n"
+			"def isqrt(n:i64 -- r:i64) {\n"
 			"\t0\n"
 			"\tloop {\n"
 			"\t\tdup 1 + dup *\n"
@@ -48,7 +48,7 @@ static void test_the_shipped_programs_are_clean(void) {
 
 	CHECK(!lint(interp,
 			"// Pythagoras.\n"
-			"fn hyp(a:i64 b:i64 -- r:i64) {\n"
+			"def hyp(a:i64 b:i64 -- r:i64) {\n"
 			"\ta a * b b * + isqrt\n"
 			"}",
 			message, sizeof(message)));
@@ -63,8 +63,8 @@ static void test_an_undefined_word_in_a_body_is_found(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(lint(interp, "fn hello() {\n\n\t\tok\n}", message, sizeof(message)));
-	CHECK_STR(message, "L3: 'ok' NOT DEFINED");
+	CHECK(lint(interp, "fn hello() {\n\n\t\tnope\n}", message, sizeof(message)));
+	CHECK_STR(message, "L3: 'nope' NOT DEFINED");
 
 	qd_interp_destroy(interp);
 }
@@ -114,7 +114,7 @@ static void test_the_whole_vocabulary_counts(void) {
 
 	CHECK(!lint(interp, "fn a() { dup drop swap over rot pick }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn b() { 1 2 sto }", message, sizeof(message)));			  // a registered native
-	CHECK(!lint(interp, "fn c(n:i64 -- r:i64) { isqrt }", message, sizeof(message))); // another program
+	CHECK(!lint(interp, "def c(n:i64 -- r:i64) { isqrt }", message, sizeof(message))); // another program
 
 	qd_interp_destroy(interp);
 }
@@ -124,7 +124,7 @@ static void test_recursion_is_not_a_find(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(!lint(interp, "fn down(n:i64 -- ) { dup 0 > if { 1 - down } }", message, sizeof(message)));
+	CHECK(!lint(interp, "def down(n:i64 -- ) { dup 0 > if { 1 - down } }", message, sizeof(message)));
 
 	qd_interp_destroy(interp);
 }
@@ -144,7 +144,7 @@ static void test_both_arms_of_an_if_are_read(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(lint(interp, "fn t(c:i64 -- ) {\n\tif { 1 } else {\n\t\tnope\n\t}\n}", message, sizeof(message)));
+	CHECK(lint(interp, "def t(c:i64 -- ) {\n\tif { 1 } else {\n\t\tnope\n\t}\n}", message, sizeof(message)));
 	CHECK_STR(message, "L3: 'nope' NOT DEFINED");
 
 	qd_interp_destroy(interp);
@@ -155,7 +155,7 @@ static void test_a_signature_is_not_read_as_words(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(!lint(interp, "fn t(alpha:i64 beta:str -- gamma:i64) { alpha }", message, sizeof(message)));
+	CHECK(!lint(interp, "def t(alpha:i64 beta:str -- gamma:i64) { alpha }", message, sizeof(message)));
 
 	qd_interp_destroy(interp);
 }
@@ -174,11 +174,6 @@ static void test_what_the_interpreter_cannot_run_is_reported(void) {
 	// And it really is only a check-time find: declaring it succeeded above
 	CHECK(!qd_interp_eval(interp, "t"));
 
-	// `while` parses again since the compiler readded it, and still does not run
-	CHECK(lint(interp, "fn w( -- ) {\n\t0 -> i\n\ti 5 < while {\n\t\ti 1 + -> i\n\t}\n}", message, sizeof(message)));
-	CHECK_STR(message, "L3: WHILE NOT SUPPORTED");
-	CHECK(!qd_interp_eval(interp, "w"));
-
 	qd_interp_destroy(interp);
 }
 
@@ -193,16 +188,23 @@ static void test_what_the_interpreter_now_runs_is_not_a_find(void) {
 	char message[80];
 
 	// A named parameter, which is how a word reads its arguments
-	CHECK(!lint(interp, "fn p(a:i64 -- r:i64) { a a + }", message, sizeof(message)));
+	CHECK(!lint(interp, "def p(a:i64 -- r:i64) { a a + }", message, sizeof(message)));
 
-	CHECK(!lint(interp, "fn l(a:i64 -- r:i64) { a -> x x x + }", message, sizeof(message)));
+	CHECK(!lint(interp, "def l(a:i64 -- r:i64) { a -> x x x + }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn fo( -- r:i64) { 0 0 5 1 for i { i + } }", message, sizeof(message)));
-	CHECK(!lint(interp, "fn sw(a:i64 -- r:i64) { a switch { 1 { 10 } _ { 20 } } }", message, sizeof(message)));
-	CHECK(!lint(interp, "fn re(a:i64 -- r:i64) { a 0 > if { 1 return } 2 }", message, sizeof(message)));
+	CHECK(!lint(interp, "def sw(a:i64 -- r:i64) { a switch { 1 { 10 } _ { 20 } } }", message, sizeof(message)));
+	CHECK(!lint(interp, "def re(a:i64 -- r:i64) { a 0 > if { 1 return } 2 }", message, sizeof(message)));
 	CHECK(!lint(interp, "const K = 7\nfn co( -- r:i64) { K }", message, sizeof(message)));
 	CHECK(!lint(interp, "enum C { Red, Blue }\nfn en( -- r:i64) { C::Blue }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn ca( -- r:f64) { 3 cast<f64> }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn ar( -- r:i64) { [1 2 3] -> a a 1 nth }", message, sizeof(message)));
+
+	// `while` and `until` leave a loop on a flag, and run
+	CHECK(!lint(interp, "fn wh( -- r:i64) { 0 -> i loop { i 5 < while i 1 + -> i } i }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn un( -- r:i64) { 0 -> i loop { i 1 + -> i i 3 >= until } i }", message, sizeof(message)));
+	CHECK(qd_interp_eval(interp, "wh un +"));
+	qd_interp_value value;
+	CHECK(qd_interp_peek(interp, 0, &value) && value.i == 8);
 
 	qd_interp_destroy(interp);
 }
@@ -216,7 +218,7 @@ static void test_inputs_bind_even_when_only_some_are_named(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(!lint(interp, "fn m(x:i64 y -- r:i64) { x x + }", message, sizeof(message)));
+	CHECK(!lint(interp, "def m(x:i64 y -- r:i64) { x x + }", message, sizeof(message)));
 
 	// It really does run, which is what makes a find here the wrong answer
 	CHECK(qd_interp_eval(interp, "3 4 m"));
@@ -225,14 +227,14 @@ static void test_inputs_bind_even_when_only_some_are_named(void) {
 }
 
 /**
- * `stack fn` is the exception: its inputs stay on the stack for the body to
+ * `fn` is the exception: its inputs stay on the stack for the body to
  * work on, so the names in its signature are documentation and not words.
  */
 static void test_a_stack_word_does_not_bind_its_parameter_names(void) {
 	qd_interp* interp = fresh();
 	char message[80];
 
-	CHECK(lint(interp, "stack fn s(x:i64 -- r:i64) { x x + }", message, sizeof(message)));
+	CHECK(lint(interp, "fn s(x:i64 -- r:i64) { x x + }", message, sizeof(message)));
 	CHECK_STR(message, "L1: 'x' NOT DEFINED");
 
 	// And the interpreter says the same thing once it gets there
@@ -241,7 +243,7 @@ static void test_a_stack_word_does_not_bind_its_parameter_names(void) {
 	CHECK(strstr(qd_interp_error(interp), "not defined") != NULL);
 
 	// A body that reads the stack instead of the names is the point of it
-	CHECK(!lint(interp, "stack fn d(i64 -- r:i64) { 2 * }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn d(i64 -- r:i64) { 2 * }", message, sizeof(message)));
 	CHECK(qd_interp_eval(interp, "3 d"));
 
 	qd_interp_destroy(interp);
@@ -280,8 +282,8 @@ static void test_a_body_that_takes_more_than_its_signature(void) {
 	char message[160];
 
 	CHECK(lint(interp, "fn hyp( -- ) { dup * swap dup * + }", message, sizeof(message)));
-	CHECK_STR(message, "L1: 'hyp' TAKES 2, LEAVES 1: stack fn hyp(f64 f64 -- r:f64)");
-	CHECK(lint(interp, "stack fn t(i64 -- r:i64) { * }", message, sizeof(message)));
+	CHECK_STR(message, "L1: 'hyp' TAKES 2, LEAVES 1: fn hyp(f64 f64 -- r:f64)");
+	CHECK(lint(interp, "fn t(i64 -- r:i64) { * }", message, sizeof(message)));
 	CHECK_STR(message, "L1: 't' TAKES 2, ITS SIGNATURE GIVES IT 1");
 
 	qd_interp_destroy(interp);
@@ -292,7 +294,7 @@ static void test_a_body_that_leaves_the_wrong_count(void) {
 	qd_interp* interp = fresh();
 	char message[160];
 
-	CHECK(lint(interp, "fn t(a:i64 -- r:i64 s:i64) { a }", message, sizeof(message)));
+	CHECK(lint(interp, "def t(a:i64 -- r:i64 s:i64) { a }", message, sizeof(message)));
 	CHECK_STR(message, "L1: 't' LEAVES 1, ITS SIGNATURE SAYS 2");
 	CHECK(lint(interp, "fn t2( -- ) {\n\t2\n}", message, sizeof(message)));
 	CHECK_STR(message, "L1: 't2' LEAVES 1, ITS SIGNATURE SAYS 0");
@@ -305,10 +307,10 @@ static void test_a_body_that_matches_or_cannot_be_counted(void) {
 	qd_interp* interp = fresh();
 	char message[160];
 
-	CHECK(!lint(interp, "stack fn twice(i64 -- r:i64) { 2 * }", message, sizeof(message)));
+	CHECK(!lint(interp, "fn twice(i64 -- r:i64) { 2 * }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn t( -- r:i64) { 1 -> a a a + }", message, sizeof(message)));
 	CHECK(!lint(interp, "fn t( -- ) { isqrt }", message, sizeof(message)));
-	CHECK(!lint(interp, "fn t(c:i64 -- ) { c if { 1 } }", message, sizeof(message)));
+	CHECK(!lint(interp, "def t(c:i64 -- ) { c if { 1 } }", message, sizeof(message)));
 
 	qd_interp_destroy(interp);
 }

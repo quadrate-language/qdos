@@ -6,7 +6,7 @@ fn kinds( -- names:[]str) {
 	["LENGTH" "MASS" "VOLUME" "SPEED" "ENERGY" "TEMPERATURE"]
 }
 
-fn units(kind:i64 -- names:[]str) {
+def units(kind:i64 -- names:[]str) {
 	kind 1 == if { ["M" "KM" "CM" "MM" "IN" "FT" "YD" "MI"] return }
 	kind 2 == if { ["KG" "G" "LB" "OZ" "T"] return }
 	kind 3 == if { ["L" "ML" "M3" "GAL US" "QT US" "CUP US"] return }
@@ -16,7 +16,7 @@ fn units(kind:i64 -- names:[]str) {
 }
 
 // How many of the kind's first unit one of each is
-fn sizes(kind:i64 -- xs:[]f128) {
+def sizes(kind:i64 -- xs:[]d128) {
 	kind 1 == if { [1.0 1000.0 0.01 0.001 0.0254 0.3048 0.9144 1609.344] return }
 	kind 2 == if { [1.0 0.001 0.45359237 0.028349523125 1000.0] return }
 	kind 3 == if { [1.0 0.001 1000.0 3.785411784 0.946352946 0.2365882365] return }
@@ -25,13 +25,13 @@ fn sizes(kind:i64 -- xs:[]f128) {
 }
 
 // Temperatures do not scale, so they go through Celsius
-fn to_c(v:f128 unit:i64 -- c:f128) {
+def to_c(v:d128 unit:i64 -- c:d128) {
 	unit 0 == if { v return }
 	unit 1 == if { v 32.0 - 5.0 * 9.0 divide return }
 	v 273.15 -
 }
 
-fn from_c(c:f128 unit:i64 -- v:f128) {
+def from_c(c:d128 unit:i64 -- v:d128) {
 	unit 0 == if { c return }
 	unit 1 == if { c 9.0 * 5.0 divide 32.0 + return }
 	c 273.15 +
@@ -39,7 +39,7 @@ fn from_c(c:f128 unit:i64 -- v:f128) {
 
 // The value off the calculator's stack the first time round, if there is one;
 // after that, or with none there, asked for
-fn amount(prompt:str -- v:f128 ok:i64) {
+def amount(prompt:str -- v:d128 ok:i64) {
 	0 ui::get 0.0 == ui::args 1 >= and if {
 		1.0 0 ui::put
 		ui::arg return
@@ -58,7 +58,7 @@ fn main() {
 			unit "?" ui::cat amount 0 == if { drop } else {
 				-> v
 				[]str -> shown
-				[]f128 -> values
+				[]d128 -> values
 				0 names len 1 for i {
 					i from 1 - != if {
 						kind 6 == if {

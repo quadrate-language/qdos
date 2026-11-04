@@ -7,7 +7,9 @@
 #
 # QDOS is rebuilt every time; the defconfig and the kernel config fragments are
 # reread when they change.
-# Changes to the Quadrate source are not picked up automatically -- run
+# Quadrate is the release pinned in buildroot/package/quadrate, which Buildroot
+# downloads. QUADRATE_DIR=/path/to/quadrate builds a local tree instead; changes
+# to it are not picked up automatically -- run
 # ./firmware/build-image.sh quadrate-dirclean first. Not quadrate-rebuild:
 # that reuses the build directory and its stale meson state.
 #
@@ -22,7 +24,7 @@
 set -euo pipefail
 
 QDOS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-QUADRATE_DIR=${QUADRATE_DIR:-$(cd "$QDOS_DIR/../quadrate" && pwd)}
+QUADRATE_DIR=${QUADRATE_DIR:-}
 BUILDROOT_VERSION=${BUILDROOT_VERSION:-2025.02.18}
 WORK="$QDOS_DIR/firmware"
 CACHE=${QDOS_BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/qdos-firmware}
@@ -44,16 +46,24 @@ esac
 mkdir -p "$OUT"
 
 echo "qdos:      $QDOS_DIR"
-echo "quadrate:  $QUADRATE_DIR"
+echo "quadrate:  ${QUADRATE_DIR:-release, as pinned in package/quadrate}"
 echo "buildroot: $BUILDROOT_VERSION"
 echo "board:     $BOARD"
 echo "output:    $OUT"
 echo
 
-if [ ! -d "$QUADRATE_DIR" ]; then
-	echo "Quadrate source not found at $QUADRATE_DIR" >&2
-	echo "Check it out alongside this project, or set QUADRATE_DIR." >&2
-	exit 1
+# A local Quadrate tree is mounted and named to Buildroot as the package's
+# override source; without one, Buildroot downloads the pinned release
+QUADRATE_MOUNT=()
+QUADRATE_OVERRIDE_SRCDIR=
+if [ -n "$QUADRATE_DIR" ]; then
+	if [ ! -f "$QUADRATE_DIR/lib/interp/src/interp.cc" ]; then
+		echo "No Quadrate source tree at QUADRATE_DIR ($QUADRATE_DIR)" >&2
+		exit 1
+	fi
+	QUADRATE_DIR=$(cd "$QUADRATE_DIR" && pwd)
+	QUADRATE_MOUNT=(-v "$QUADRATE_DIR:/work/quadrate")
+	QUADRATE_OVERRIDE_SRCDIR=/work/quadrate
 fi
 
 docker build -t qdos-firmware "$WORK"
@@ -61,12 +71,13 @@ docker build -t qdos-firmware "$WORK"
 if [ ! -d "$BUILDROOT_DIR" ]; then
 	echo "Fetching Buildroot $BUILDROOT_VERSION..."
 	git clone --depth 1 --branch "$BUILDROOT_VERSION" \
-		https://git.buildroot.net/buildroot "$BUILDROOT_DIR"
+		https://github.com/buildroot/buildroot "$BUILDROOT_DIR"
 fi
 
 mkdir -p "$OUT" "$CACHE"
 
-# The package .mk files read these to find the local source trees
+# The package .mk files read these to find the local source trees; an empty
+# QUADRATE_OVERRIDE_SRCDIR is no override
 TTY=$([ -t 0 ] && echo -it || echo -i)
 # Our pinned kernel tarball is not one Buildroot ships a hash for. Merge ours in
 # so BR2_DOWNLOAD_FORCE_CHECK_HASHES still holds for everything else.
@@ -81,12 +92,12 @@ fi
 
 docker run --rm $TTY \
 	-v "$QDOS_DIR:/work/qdos" \
-	-v "$QUADRATE_DIR:/work/quadrate" \
+	"${QUADRATE_MOUNT[@]}" \
 	-v "$BUILDROOT_DIR:/work/buildroot" \
 	-v "$OUT:/work/build" \
 	-u "$(id -u):$(id -g)" \
 	-e QDOS_SRC=/work/qdos \
-	-e QDOS_QUADRATE_SRC=/work/quadrate \
+	-e QUADRATE_OVERRIDE_SRCDIR="$QUADRATE_OVERRIDE_SRCDIR" \
 	-e BR2_EXTERNAL=/work/qdos/firmware/buildroot \
 	-w /work/buildroot \
 	qdos-firmware \

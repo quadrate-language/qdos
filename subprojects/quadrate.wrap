@@ -1,0 +1,9 @@
+# The Quadrate release QDOS builds against, prebuilt for an x86_64 Linux host.
+# cmake/quadrate.cmake and firmware/buildroot/package/quadrate pin the same
+# release for the builds that compile it from source; bump all three together.
+[wrap-file]
+directory = quadrate-0.7.0-linux-x86_64
+source_url = https://github.com/quadrate-language/quadrate/releases/download/0.7.0/quadrate-0.7.0-linux-x86_64-glibc.tar.gz
+source_filename = quadrate-0.7.0-linux-x86_64-glibc.tar.gz
+source_hash = 27932ab597df54b1a02c2437b32f86559d0f5178b746346ffcd3cffbec499178
+patch_directory = quadrate

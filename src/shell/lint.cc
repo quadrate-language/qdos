@@ -49,10 +49,6 @@ namespace {
 		case Type::DEFER_STATEMENT:
 			return "DEFER";
 
-		// The language has `while` again; the interpreter runs `loop` only
-		case Type::WHILE_STATEMENT:
-			return "WHILE";
-
 		// Methods come through here too: a receiver needs the struct it binds
 		// to, which is the thing above
 		case Type::STRUCT_DECLARATION:
@@ -183,14 +179,14 @@ namespace {
 			return;
 		}
 
-		// A stack fn has its inputs on the stack; any other has them as names
+		// A `def` has its inputs as names; any other has them on the stack
 		const int inputs = static_cast<int>(function->inputParameters().size());
 		const int outputs = static_cast<int>(function->outputParameters().size());
 		const int given = function->isStack() ? inputs : 0;
 		const std::string& name = function->name();
 		char text[160];
 
-		if (e.takes > given && !function->isStack() && inputs == 0) {
+		if (e.takes > given && inputs == 0) {
 			// Written as an RPN program is: say how to declare it that way
 			const int leaves = e.takes + e.depth;
 			std::string in, results;
@@ -200,7 +196,7 @@ namespace {
 			for (int i = 0; i < leaves; i++) {
 				results += (i ? " r" : "r") + (leaves > 1 ? std::to_string(i + 1) : std::string()) + ":f64";
 			}
-			std::snprintf(text, sizeof(text), "L%zu: '%.12s' TAKES %d, LEAVES %d: stack fn %.12s(%s --%s%s)",
+			std::snprintf(text, sizeof(text), "L%zu: '%.12s' TAKES %d, LEAVES %d: fn %.12s(%s --%s%s)",
 					function->line(), name.c_str(), e.takes, leaves, name.c_str(), in.c_str(), leaves ? " " : "",
 					results.c_str());
 		} else if (e.takes > given) {
@@ -228,6 +224,7 @@ namespace {
 		case Type::COMMENT:
 		case Type::VARIABLE_DECLARATION: // a parameter, recorded by the declaration
 		case Type::BREAK_STATEMENT:
+		case Type::CONDITIONAL_BREAK: // `while` / `until`
 		case Type::CONTINUE_STATEMENT:
 			return;
 
@@ -236,11 +233,6 @@ namespace {
 		// them is variant names rather than words.
 		case Type::CONSTANT_DECLARATION:
 		case Type::ENUM_DECLARATION:
-			return;
-
-		// `cast<f64>` names a type, which is not a word either. What it
-		// converts was pushed before it and is read on its own.
-		case Type::AS_CAST:
 			return;
 
 		case Type::INSTRUCTION: {
@@ -275,9 +267,9 @@ namespace {
 			const auto* function = static_cast<const Qd::AstNodeFunctionDeclaration*>(node);
 			names scope;
 
-			// Inputs bind as locals; `stack fn` is the one that leaves them on
-			// the stack, where the body reads them positionally and their names
-			// are documentation. The rule bindParameters follows.
+			// Inputs stay on the stack, where the body reads them positionally
+			// and their names are documentation; `def` binds them as locals.
+			// The rule bindParameters follows.
 			if (!function->hasReceiver() && !function->isStack()) {
 				for (const auto& input : function->inputParameters()) {
 					const auto* parameter = static_cast<const Qd::AstNodeParameter*>(input.get());

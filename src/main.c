@@ -23,6 +23,39 @@
 #include "hal/device/device_linux.h"
 #endif
 
+#ifdef __EMSCRIPTEN__
+/** @brief The panel goes blank and stays so until the next press */
+static void power_off(qdos_hal* hal) {
+	static uint8_t blank[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	memset(blank, 0xFF, sizeof(blank));
+	hal->present(hal, blank);
+
+	qdos_key_event ev;
+	for (;;) {
+		hal->wait(hal, -1);
+		if (hal->poll_key(hal, &ev)) {
+			break;
+		}
+	}
+	if (hal->modifier_reset != NULL) {
+		hal->modifier_reset(hal);
+	}
+}
+#endif
+
+/** @brief Until the machine is switched off; false if it never started */
+static bool run_shell(qdos_hal* hal) {
+	qdos_shell* shell = qdos_shell_create(hal);
+	if (!shell) {
+		fprintf(stderr, "qdos: out of memory\n");
+		return false;
+	}
+
+	qdos_shell_run(shell);
+	qdos_shell_destroy(shell);
+	return true;
+}
+
 static void usage(const char* argv0) {
 	fprintf(stderr,
 			"usage: %s [--sim | --device] [--splash]\n"
@@ -80,16 +113,19 @@ int main(int argc, char** argv) {
 		return 0;
 	}
 
-	qdos_shell* shell = qdos_shell_create(&hal);
-	if (!shell) {
-		fprintf(stderr, "qdos: out of memory\n");
-		hal.shutdown(&hal);
-		return 1;
+#ifdef __EMSCRIPTEN__
+	// A page has nothing to exit to. Off is a blank panel until a key, which
+	// starts the machine afresh, as waking the ESP32 from deep sleep does.
+	qdos_splash_draw(&hal);
+	while (run_shell(&hal)) {
+		power_off(&hal);
+		qdos_splash_draw(&hal);
 	}
+	const bool ok = false;
+#else
+	const bool ok = run_shell(&hal);
+#endif
 
-	qdos_shell_run(shell);
-
-	qdos_shell_destroy(shell);
 	hal.shutdown(&hal);
-	return 0;
+	return ok ? 0 : 1;
 }

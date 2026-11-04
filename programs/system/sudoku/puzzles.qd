@@ -2,7 +2,7 @@
 // The puzzle bank: ten a level, a row to a number, nought for a blank.
 // Each has one solution; main.qd shuffles one into a game of its own.
 
-fn bank(level:i64 -- rows:[]i64) {
+def bank(level:i64 -- rows:[]i64) {
 	level 1 == if {
 		[47900200 30708006 2604901 100503040 378040000 500000360 10060003 760080090 480097005
 		58000090 23019800 109030062 1000706 207651000 720000 345107080 82000071 6800030

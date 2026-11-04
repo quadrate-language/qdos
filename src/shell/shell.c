@@ -5,7 +5,7 @@
 
 #include <qdos/shell.h>
 
-#include <quadrate/f128/f128.h>
+#include <quadrate/decimal/decimal.h>
 #include <quadrate/interp/interp.h>
 #include <quadrate/rt/array.h>
 
@@ -734,17 +734,17 @@ static void tidy_exponent(char* text) {
 	memmove(digits, digits + zeros, strlen(digits + zeros) + 1);
 }
 
-/* A finite f128 as its digits, leading zeros gone, and how many of them come before the point */
+/* A finite d128 as its digits, leading zeros gone, and how many of them come before the point */
 typedef struct {
 	bool negative;
-	char digits[QD_F128_STRING_MAX];
+	char digits[QD_D128_STRING_MAX];
 	int count;
 	int point;
 } decimal_digits;
 
-static void decimal_digits_of(qd_f128_t q, decimal_digits* d) {
-	char text[QD_F128_STRING_MAX];
-	qd_f128_format(q, text, sizeof(text));
+static void decimal_digits_of(qd_d128_t q, decimal_digits* d) {
+	char text[QD_D128_STRING_MAX];
+	qd_d128_format(q, text, sizeof(text));
 	const char* p = text;
 	d->negative = (*p == '-');
 	if (*p == '-' || *p == '+') {
@@ -808,30 +808,30 @@ static void decimal_scientific(const decimal_digits* d, char* out, size_t cap) {
 }
 
 /* @p q rounded to @p digits significant digits, trailing zeros stripped */
-static qd_f128_t decimal_round(qd_f128_t q, int point, int digits) {
+static qd_d128_t decimal_round(qd_d128_t q, int point, int digits) {
 	char like[24];
 	snprintf(like, sizeof(like), "1e%d", point - digits);
-	qd_f128_t unit;
-	if (!qd_f128_parse(like, &unit)) {
+	qd_d128_t unit;
+	if (!qd_d128_parse(like, &unit)) {
 		return q;
 	}
-	return qd_f128_reduce(qd_f128_quantize(q, unit));
+	return qd_d128_reduce(qd_d128_quantize(q, unit));
 }
 
 /**
- * @brief An f128 as the settings say to show it, in @p room columns
+ * @brief A d128 as the settings say to show it, in @p room columns
  *
  * Shown plain while it fits and is not tiny or vast, then with as many digits as fit,
  * rounded, then in exponent form. A fixed number of decimals keeps the column.
  */
-static void format_decimal(const qdos_shell* sh, qd_f128_t q, char* out, size_t cap, size_t room) {
-	if (!qd_f128_is_finite(q)) {
-		qd_f128_format(q, out, cap);
+static void format_decimal(const qdos_shell* sh, qd_d128_t q, char* out, size_t cap, size_t room) {
+	if (!qd_d128_is_finite(q)) {
+		qd_d128_format(q, out, cap);
 		return;
 	}
-	const double near = qd_f128_to_f64(q);
+	const double near = qd_d128_to_f64(q);
 	// Past a double's range SCI and ENG are left to the exponent form below
-	if (sh->notation != NOTATION_NORMAL && isfinite(near) && (near != 0.0 || qd_f128_is_zero(q))) {
+	if (sh->notation != NOTATION_NORMAL && isfinite(near) && (near != 0.0 || qd_d128_is_zero(q))) {
 		format_exponent(near, sh->notation == NOTATION_ENG, sh->decimals, out, cap);
 		if (strlen(out) <= room) {
 			return;
@@ -839,9 +839,9 @@ static void format_decimal(const qdos_shell* sh, qd_f128_t q, char* out, size_t 
 	} else if (sh->decimals != DECIMALS_AUTO) {
 		char like[24];
 		snprintf(like, sizeof(like), "1e-%d", sh->decimals);
-		qd_f128_t unit;
-		const qd_f128_t fixed = qd_f128_parse(like, &unit) ? qd_f128_quantize(q, unit) : qd_f128_nan();
-		if (!qd_f128_is_nan(fixed)) {
+		qd_d128_t unit;
+		const qd_d128_t fixed = qd_d128_parse(like, &unit) ? qd_d128_quantize(q, unit) : qd_d128_nan();
+		if (!qd_d128_is_nan(fixed)) {
 			decimal_digits d;
 			decimal_digits_of(fixed, &d);
 			decimal_plain(&d, sh->decimals, out, cap);
@@ -852,7 +852,7 @@ static void format_decimal(const qdos_shell* sh, qd_f128_t q, char* out, size_t 
 	}
 
 	decimal_digits d;
-	decimal_digits_of(qd_f128_reduce(q), &d);
+	decimal_digits_of(qd_d128_reduce(q), &d);
 	for (int digits = d.count; digits >= 1; digits--) {
 		decimal_digits r;
 		decimal_digits_of(decimal_round(q, d.point, digits), &r);
@@ -870,9 +870,9 @@ static void format_decimal(const qdos_shell* sh, qd_f128_t q, char* out, size_t 
 }
 
 static void format_value(const qdos_shell* sh, const qd_interp_value* value, char* out, size_t cap, size_t room) {
-	if (value->type == QD_INTERP_VALUE_F128) {
-		qd_f128_t q;
-		if (qd_f128_parse(value->text, &q)) {
+	if (value->type == QD_INTERP_VALUE_D128) {
+		qd_d128_t q;
+		if (qd_d128_parse(value->text, &q)) {
 			format_decimal(sh, q, out, cap, room);
 			return;
 		}
@@ -917,8 +917,8 @@ static const char* array_type_name(qd_array_type type) {
 		return "str";
 	case QD_ARRAY_TYPE_PTR:
 		return "ptr";
-	case QD_ARRAY_TYPE_F128:
-		return "f128";
+	case QD_ARRAY_TYPE_D128:
+		return "d128";
 	case QD_ARRAY_TYPE_ANY:
 		return "any";
 	}
@@ -1255,8 +1255,8 @@ static bool value_at(qdos_shell* sh, size_t i, qdos_value* out) {
 		out->type = QDOS_VALUE_STRING;
 		snprintf(out->s, sizeof(out->s), "%s", text);
 		return strlen(text) < sizeof(out->s);
-	} else if (value.type == QD_INTERP_VALUE_F128) {
-		out->type = QDOS_VALUE_F128;
+	} else if (value.type == QD_INTERP_VALUE_D128) {
+		out->type = QDOS_VALUE_D128;
 		snprintf(out->s, sizeof(out->s), "%s", value.text);
 	} else {
 		return false;
@@ -1336,7 +1336,7 @@ static bool infix_operator(char ch) {
 
 /* An operator as a token of its own, including the words the keypad types */
 static bool infix_operator_token(const char* token, size_t len) {
-	static const char* const WORDS[] = {"plus", "minus", "times", "divide"};
+	static const char* const WORDS[] = {"plus", "minus", "multiply", "divide"};
 	if (len == 1) {
 		return infix_operator(token[0]);
 	}
@@ -1368,7 +1368,7 @@ static bool infix_number(const char* text, size_t len) {
 /**
  * @brief The whole of an infix line as RPN, in the words the keys type
  *
- * The Y= translator does the reading, so `2+3*4` comes out `2 3 4 times plus`
+ * The Y= translator does the reading, so `2+3*4` comes out `2 3 4 multiply plus`
  * and not only its first operation. Its floats are written back as they were
  * typed, and its operators as the keypad's, which are what can be pressed.
  */
@@ -1386,7 +1386,7 @@ static bool rpn_hint(const char* line, size_t len, char* out, size_t cap) {
 		return false;
 	}
 
-	static const char* const OPS[][2] = {{"+", "plus"}, {"-", "minus"}, {"*", "times"}};
+	static const char* const OPS[][2] = {{"+", "plus"}, {"-", "minus"}, {"*", "multiply"}};
 	size_t used = (size_t)snprintf(out, cap, "RPN: TRY");
 	for (char* token = strtok(rpn, " "); token != NULL && used < cap; token = strtok(NULL, " ")) {
 		const char* shown = token;
@@ -1446,7 +1446,7 @@ static bool infix_hint(const char* line, size_t len, char* out, size_t cap) {
 	const char* op = NULL;
 	size_t op_len = 0;
 
-	// 2 plus 3 times 4, as the keys type 2+3*4: a number between every operator
+	// 2 plus 3 multiply 4, as the keys type 2+3*4: a number between every operator
 	bool alternating = count >= 3 && count % 2 == 1;
 	for (size_t i = 0; alternating && i < count; i++) {
 		alternating =
@@ -1500,7 +1500,8 @@ static bool infix_word_char(char ch) {
  */
 static bool infix_explain(const char* line, char* out, size_t cap) {
 	// Real Quadrate has brackets of its own, and its errors say more than this would
-	if (strchr(line, '{') != NULL || strchr(line, '"') != NULL || strncmp(line, "fn ", 3) == 0) {
+	if (strchr(line, '{') != NULL || strchr(line, '"') != NULL || strncmp(line, "fn ", 3) == 0 ||
+			strncmp(line, "def ", 4) == 0) {
 		return false;
 	}
 
@@ -1690,7 +1691,7 @@ static bool entry_commit(qdos_shell* sh) {
 		len += (size_t)snprintf(text + len, sizeof(text) - len, "e%s", exponent);
 	}
 
-	// A whole number too big for an integer is a float -- in decimal an f128, which holds it
+	// A whole number too big for an integer is a float -- in decimal a d128, which holds it
 	// exactly -- not the nought Quadrate reads it as
 	if (strchr(text, '.') == NULL && strchr(text, 'e') == NULL) {
 		errno = 0;
@@ -1701,8 +1702,8 @@ static bool entry_commit(qdos_shell* sh) {
 	}
 
 	// Refused as the keys refuse a result past the largest number the stack can hold
-	qd_f128_t typed;
-	if (qdos_decimal() ? !qd_f128_parse(text, &typed) || !qd_f128_is_finite(typed) : !isfinite(strtod(text, NULL))) {
+	qd_d128_t typed;
+	if (qdos_decimal() ? !qd_d128_parse(text, &typed) || !qd_d128_is_finite(typed) : !isfinite(strtod(text, NULL))) {
 		set_message(sh, "OVERFLOW", true);
 		return false;
 	}
@@ -1751,7 +1752,7 @@ static void set_key_error(qdos_shell* sh, const char* error, const char* word, c
 /* Moves things about or brings a constant, so x is not an argument an HP keeps */
 static bool keeps_last_x(const char* word) {
 	static const char* const STACK_WORDS[] = {"dup", "drop", "swap", "rot", "over", "nip", "pi", "e", "i", "lastx",
-			"rolld", "rollu", "neg", "-1 times", "complex", "csplit"};
+			"rolld", "rollu", "neg", "-1 multiply", "complex", "csplit"};
 	for (size_t i = 0; i < sizeof(STACK_WORDS) / sizeof(*STACK_WORDS); i++) {
 		if (strcmp(STACK_WORDS[i], word) == 0) {
 			return false;
@@ -1872,7 +1873,7 @@ static const char* function_word(qdos_key key) {
 
 /* Flips the sign of the number being typed, or negates x when none is */
 static void entry_negate(qdos_shell* sh) {
-	// times, not neg, so the least integer turns into a float rather than itself
+	// multiply, not neg, so the least integer turns into a float rather than itself
 	if (sh->entry_len == 0) {
 		// neg refuses what is not a number without pushing anything first
 		qd_interp_value top;
@@ -1880,8 +1881,8 @@ static void entry_negate(qdos_shell* sh) {
 		double re, im;
 		const bool number = qd_interp_peek(sh->interp, 0, &top) &&
 							(top.type == QD_INTERP_VALUE_INT || top.type == QD_INTERP_VALUE_FLOAT ||
-									top.type == QD_INTERP_VALUE_F128 || qdos_cpx_of(&st->data[st->size - 1], &re, &im));
-		apply_word(sh, number ? "-1 times" : "neg");
+									top.type == QD_INTERP_VALUE_D128 || qdos_cpx_of(&st->data[st->size - 1], &re, &im));
+		apply_word(sh, number ? "-1 multiply" : "neg");
 		return;
 	}
 
@@ -1937,7 +1938,7 @@ static bool register_digit(qdos_shell* sh, const qdos_key_event* ev) {
 /* The keycap, where it is not the word itself */
 static const char* key_label(const char* word) {
 	static const char* const LABELS[][2] = {{"percent", "%"}, {"inv", "1/x"}, {"sq", "x^2"}, {"plus", "+"},
-			{"minus", "-"}, {"times", "*"}, {"divide", "/"}};
+			{"minus", "-"}, {"multiply", "*"}, {"divide", "/"}};
 	for (size_t i = 0; i < sizeof(LABELS) / sizeof(*LABELS); i++) {
 		if (strcmp(LABELS[i][0], word) == 0) {
 			return LABELS[i][1];
@@ -2059,7 +2060,7 @@ static void handle_calc_key(qdos_shell* sh, const qdos_key_event* ev) {
 		apply_key_word(sh, "minus", "-");
 		break;
 	case QDOS_KEY_MUL:
-		apply_key_word(sh, "times", "*");
+		apply_key_word(sh, "multiply", "*");
 		break;
 	// A calculator divides rather than truncating; the language keeps "/"
 	case QDOS_KEY_DIV:
@@ -2226,7 +2227,7 @@ static bool after_exponent(const qdos_shell* sh) {
  * operators do not wrap, so there the symbols are as good and shorter.
  */
 static const char* op_text(const qdos_shell* sh, const char* word) {
-	static const char* const SYMBOL[][2] = {{"plus", "+"}, {"minus", "-"}, {"times", "*"}};
+	static const char* const SYMBOL[][2] = {{"plus", "+"}, {"minus", "-"}, {"multiply", "*"}};
 	if (sh->mode == QDOS_MODE_PLOT_EDIT) {
 		for (size_t i = 0; i < sizeof(SYMBOL) / sizeof(*SYMBOL); i++) {
 			if (strcmp(SYMBOL[i][0], word) == 0) {
@@ -2361,7 +2362,7 @@ static void handle_line_key(qdos_shell* sh, const qdos_key_event* ev) {
 		if (line_is_literal(sh)) {
 			input_append(sh, "*");
 		} else {
-			input_word(sh, op_text(sh, "times"));
+			input_word(sh, op_text(sh, "multiply"));
 		}
 		break;
 	case QDOS_KEY_DIV:
@@ -3493,7 +3494,7 @@ static void handle_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 		edit_operator(sh, ev, '-', "minus");
 		break;
 	case QDOS_KEY_MUL:
-		edit_operator(sh, ev, '*', "times");
+		edit_operator(sh, ev, '*', "multiply");
 		break;
 	case QDOS_KEY_DIV:
 		edit_operator(sh, ev, '/', "divide");
@@ -3953,8 +3954,8 @@ static bool graph_run(
 	qd_context* ctx = qd_interp_context(interp);
 	const size_t before = qd_interp_depth(interp);
 	for (size_t k = 0; k < count; k++) {
-		// In decimal the word's own numbers are f128, which an f64 would not mix with
-		if ((qdos_decimal() ? qd_push_q(ctx, qdos_decimal_of_double(in[k])) : qd_push_f(ctx, in[k])) != 0) {
+		// In decimal the word's own numbers are d128, which an f64 would not mix with
+		if ((qdos_decimal() ? qd_push_d(ctx, qdos_decimal_of_double(in[k])) : qd_push_f(ctx, in[k])) != 0) {
 			while (qd_interp_depth(interp) > before && qdos_guarded_eval(interp, "drop")) {
 			}
 			return false;
@@ -3972,9 +3973,9 @@ static bool graph_run(
 			qd_interp_value v;
 			if (qd_interp_peek(interp, outs - 1 - k, &v) &&
 					(v.type == QD_INTERP_VALUE_INT || v.type == QD_INTERP_VALUE_FLOAT ||
-							v.type == QD_INTERP_VALUE_F128)) {
+							v.type == QD_INTERP_VALUE_D128)) {
 				out[k] = (v.type == QD_INTERP_VALUE_INT)	? (double)v.i
-						 : (v.type == QD_INTERP_VALUE_F128) ? strtod(v.text, NULL)
+						 : (v.type == QD_INTERP_VALUE_D128) ? strtod(v.text, NULL)
 															: v.f;
 			} else {
 				snprintf(sh->graph_error, sizeof(sh->graph_error), "'%.24s' MUST LEAVE A NUMBER", word);
@@ -5121,8 +5122,9 @@ static bool slot_declare(qdos_shell* sh, size_t i) {
 
 	static const char* const TAKES[] = {"", "x:f64", "x:f64 y:f64", "t:f64", "theta:f64"};
 	char source[PLOT_RPN_MAX + 64];
-	snprintf(source, sizeof(source), "fn %s(%s -- %s) { %s }", name, TAKES[slot->shape],
-			slot->shape == QDOS_GRAPH_PARAM ? "x:f64 y:f64" : "r:f64", body);
+	// The body reads its variables by name, so they are bound; with none there is nothing to bind
+	snprintf(source, sizeof(source), "%s %s(%s -- %s) { %s }", TAKES[slot->shape][0] ? "def" : "fn", name,
+			TAKES[slot->shape], slot->shape == QDOS_GRAPH_PARAM ? "x:f64 y:f64" : "r:f64", body);
 	slot->broken = !qdos_guarded_eval(sh->interp, source);
 	if (slot->broken) {
 		snprintf(sh->slot_why, sizeof(sh->slot_why), "%s", qdos_guarded_error(sh->interp));
@@ -5499,10 +5501,10 @@ static bool field_number(qdos_shell* sh, double* out) {
 	} else {
 		qd_interp_value v;
 		got = qd_interp_peek(interp, 0, &v) &&
-			  (v.type == QD_INTERP_VALUE_INT || v.type == QD_INTERP_VALUE_FLOAT || v.type == QD_INTERP_VALUE_F128);
+			  (v.type == QD_INTERP_VALUE_INT || v.type == QD_INTERP_VALUE_FLOAT || v.type == QD_INTERP_VALUE_D128);
 		if (got) {
 			*out = (v.type == QD_INTERP_VALUE_INT)	  ? (double)v.i
-				   : (v.type == QD_INTERP_VALUE_F128) ? strtod(v.text, NULL)
+				   : (v.type == QD_INTERP_VALUE_D128) ? strtod(v.text, NULL)
 													  : v.f;
 			got = isfinite(*out);
 		}
@@ -7728,13 +7730,13 @@ static bool pop_value(qd_context* ctx, qdos_value* out) {
 	case QD_STACK_TYPE_STR:
 		out->type = QDOS_VALUE_STRING;
 		return qd_pop_s(ctx, out->s, sizeof(out->s)) == 0;
-	case QD_STACK_TYPE_F128: {
-		qd_f128_t q;
-		if (qd_pop_q(ctx, &q) != 0) {
+	case QD_STACK_TYPE_D128: {
+		qd_d128_t q;
+		if (qd_pop_d(ctx, &q) != 0) {
 			return false;
 		}
-		out->type = QDOS_VALUE_F128;
-		qd_f128_format(q, out->s, sizeof(out->s));
+		out->type = QDOS_VALUE_D128;
+		qd_d128_format(q, out->s, sizeof(out->s));
 		return true;
 	}
 	case QD_STACK_TYPE_PTR: {
@@ -7745,7 +7747,7 @@ static bool pop_value(qd_context* ctx, qdos_value* out) {
 		if (qd_stack_pop(ctx->st, &taken) != QD_STACK_OK) {
 			return false;
 		}
-		qd_ptr_release(taken.value.p);
+		qd_release_slot(&taken);
 		out->type = QDOS_VALUE_COMPLEX;
 		return true;
 	}
@@ -7765,9 +7767,9 @@ static int push_value(qd_context* ctx, const qdos_value* value) {
 		return qd_push_s(ctx, value->s);
 	case QDOS_VALUE_COMPLEX:
 		return qdos_cpx_push(ctx, value->f, value->im);
-	case QDOS_VALUE_F128: {
-		qd_f128_t q;
-		return qd_f128_parse(value->s, &q) ? qd_push_q(ctx, q) : 1;
+	case QDOS_VALUE_D128: {
+		qd_d128_t q;
+		return qd_d128_parse(value->s, &q) ? qd_push_d(ctx, q) : 1;
 	}
 	case QDOS_VALUE_EMPTY:
 		break;
@@ -8409,9 +8411,9 @@ static void ui_text_of(const qdos_shell* sh, const qdos_value* v, char* out, siz
 		shown.type = QD_INTERP_VALUE_INT;
 		shown.i = v->i;
 		snprintf(shown.text, sizeof(shown.text), "%lld", (long long)v->i);
-	} else if (v->type == QDOS_VALUE_F128) {
-		shown.type = QD_INTERP_VALUE_F128;
-		snprintf(shown.text, sizeof(shown.text), "%.*s", QD_F128_STRING_MAX - 1, v->s);
+	} else if (v->type == QDOS_VALUE_D128) {
+		shown.type = QD_INTERP_VALUE_D128;
+		snprintf(shown.text, sizeof(shown.text), "%.*s", QD_D128_STRING_MAX - 1, v->s);
 	} else {
 		shown.type = QD_INTERP_VALUE_FLOAT;
 		shown.f = v->f;
@@ -8512,10 +8514,10 @@ static int native_arg(qd_context* ctx, void* userdata) {
 	const qd_stack* st = (sh->app_caller != NULL) ? sh->app_caller->st : NULL;
 	if (st != NULL && sh->ui_args_taken < st->size) {
 		const qd_stack_element_t* e = &st->data[st->size - 1 - sh->ui_args_taken];
-		if (e->type == QD_STACK_TYPE_F128) {
+		if (e->type == QD_STACK_TYPE_D128) {
 			// Handed over whole, every digit of it
 			sh->ui_args_taken++;
-			return (qd_push_q(ctx, e->value.q) != 0 || qd_push_i(ctx, 1) != 0) ? 1 : 0;
+			return (qd_push_d(ctx, e->value.d) != 0 || qd_push_i(ctx, 1) != 0) ? 1 : 0;
 		}
 		if (e->type == QD_STACK_TYPE_FLOAT || e->type == QD_STACK_TYPE_INT) {
 			x = (e->type == QD_STACK_TYPE_FLOAT) ? e->value.f : (double)e->value.i;
@@ -8538,7 +8540,7 @@ static int native_args(qd_context* ctx, void* userdata) {
 	const qd_stack* st = (sh->app_caller != NULL) ? sh->app_caller->st : NULL;
 	for (size_t i = sh->ui_args_taken; st != NULL && i < st->size; i++) {
 		const qd_stack_type type = st->data[st->size - 1 - i].type;
-		if (type != QD_STACK_TYPE_FLOAT && type != QD_STACK_TYPE_INT && type != QD_STACK_TYPE_F128) {
+		if (type != QD_STACK_TYPE_FLOAT && type != QD_STACK_TYPE_INT && type != QD_STACK_TYPE_D128) {
 			break;
 		}
 		n++;
@@ -9186,6 +9188,21 @@ static int native_cls(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+/** `clear` - ( ... -- ) empty the stack, as CLST does */
+static int native_clear(qd_context* ctx, void* userdata) {
+	(void)userdata;
+	while (!qd_stack_is_empty(ctx->st)) {
+		qd_drop(ctx);
+	}
+	return 0;
+}
+
+/** `depth` - ( -- n ) how many values are on the stack */
+static int native_depth(qd_context* ctx, void* userdata) {
+	(void)userdata;
+	return qd_push_i(ctx, (int64_t)qd_stack_size(ctx->st));
+}
+
 /** `lastx` - ( -- x ) what x was before the last function on the keys, as an HP's LASTx */
 static int native_lastx(qd_context* ctx, void* userdata) {
 	const qdos_shell* sh = userdata;
@@ -9243,9 +9260,9 @@ static void register_f64(
 }
 
 static void register_natives(qdos_shell* sh, qd_interp* interp) {
-	// Numbers typed with a point are decimal, and f128:: is there for a program to call
-	qd_interp_set_default_float(interp, qdos_decimal() ? QD_INTERP_FLOAT_F128 : QD_INTERP_FLOAT_F64);
-	qd_f128_register(qd_interp_context(interp));
+	// Numbers typed with a point are decimal, and decimal:: is there for a program to call
+	qd_interp_set_default_float(interp, qdos_decimal() ? QD_INTERP_FLOAT_D128 : QD_INTERP_FLOAT_F64);
+	qd_decimal_register(qd_interp_context(interp));
 
 	qd_interp_register(interp, "lastx", "( -- x:f64)", native_lastx, sh);
 	qd_interp_register(interp, "rolld", "( -- )", native_rolld, sh);
@@ -9258,6 +9275,8 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "graph", "(name:str -- )", native_graph, sh);
 	qd_interp_register(interp, "graph3", "(name:str -- )", native_graph3, sh);
 	qd_interp_register(interp, "cls", "( -- )", native_cls, sh);
+	qd_interp_register(interp, "clear", "( -- )", native_clear, NULL);
+	qd_interp_register(interp, "depth", "( -- n:i64)", native_depth, NULL);
 
 	// What CALC finds on a graph, for any word taking x and leaving y
 	register_f64(sh, interp, "root", "(f:str a:f64 b:f64 -- x:f64)", native_root);
