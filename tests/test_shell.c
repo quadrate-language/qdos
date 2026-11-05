@@ -9174,6 +9174,186 @@ static void test_ui_pressed_and_frame(void) {
 	CHECK(dt >= 1.0 / 30.0 - 0.001 && dt <= 0.25);
 }
 
+/* ---- tangent, cfg:: and gr:: ----------------------------------------------- */
+
+/** tangent leaves a and b of y = ax + b, as CALC's TANGENT does. */
+static void test_tangent_word(void) {
+	store_reset();
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "def f(x:f64 -- y:f64) { x x * }");
+	type_more(script, &n, "\"f\" 3 tangent");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 6") != NULL); // the slope
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "-9") != NULL); // and where it crosses x = 0
+}
+
+/** A setting set by a word is the setting: sin takes degrees, and the getter agrees. */
+static void test_cfg_angle(void) {
+	store_reset();
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"deg\" cfg::set_angle");
+	type_more(script, &n, "30 sin");
+	type_more(script, &n, "cfg::angle");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "0.5") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "DEG") != NULL);
+}
+
+/** The setters refuse what the settings page has no row for, and say what they take. */
+static void test_cfg_refuses(void) {
+	store_reset();
+	qdos_key_event script[64];
+	size_t n = 0;
+	type_line(script, &n, "7 cfg::set_autooff");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "cfg::set_autooff: 0, 5") == row);
+}
+
+/** Decimals, notation and the complex mode go there and back. */
+static void test_cfg_round_trip(void) {
+	store_reset();
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "3 cfg::set_decimals");
+	type_more(script, &n, "\"sci\" cfg::set_notation");
+	type_more(script, &n, "\"a+bi\" cfg::set_complex");
+	type_more(script, &n, "cfg::decimals");
+	type_more(script, &n, "cfg::notation");
+	type_more(script, &n, "cfg::complex");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "SCI") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "a+bi") != NULL);
+}
+
+/**
+ * A slot written from the prompt is the slot: Y1 is a word at once, switched
+ * on, and reads back. The line doing it runs in the interpreter Y1 is
+ * redeclared in.
+ */
+static void test_gr_set_slot(void) {
+	store_reset();
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "\"x^2\" 1 gr::set_slot");
+	type_more(script, &n, "3 Y1");
+	type_more(script, &n, "1 gr::on");
+	type_more(script, &n, "1 gr::slot");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 9") != NULL);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 1") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "x^2") != NULL);
+}
+
+/** Rewriting the slot a line is using, from inside that line, uses the new body after. */
+static void test_gr_set_slot_twice_in_a_line(void) {
+	store_reset();
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "\"x+1\" 2 gr::set_slot 1 Y2 \"x+2\" 2 gr::set_slot 1 Y2");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, " 2") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+}
+
+/** A body that will not declare is kept, as Y= keeps it, and the program is told why. */
+static void test_gr_set_slot_refuses_a_bad_body(void) {
+	store_reset();
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"x (\" 1 gr::set_slot");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "gr::set_slot") != NULL);
+}
+
+/** ZOOM's presets are words, and the window they leave reads back. */
+static void test_gr_zoom_and_window(void) {
+	store_reset();
+	qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, "-2 4 -1 3 gr::set_window");
+	type_more(script, &n, "gr::window");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 3, row, sizeof(row));
+	CHECK(strstr(row, "-2") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+
+	type_more(script, &n, "clear \"standard\" gr::zoom gr::window");
+	store_reset();
+	run_script(script, n, fb);
+	read_level(fb, 3, row, sizeof(row));
+	CHECK(strstr(row, "-10") != NULL);
+
+	type_more(script, &n, "\"fit\" gr::zoom");
+	store_reset();
+	run_script(script, n, fb);
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "gr::zoom: NO ZOOM") == row);
+}
+
+/** gr::graph is GRAPH: what is on Y= is drawn, and the graph's keys are offered. */
+static void test_gr_graph(void) {
+	store_reset();
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"x^2\" 1 gr::set_slot gr::graph");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script(script, n, fb);
+	char row[QDOS_COLS + 1];
+	read_row(fb, QDOS_ROWS - 1, row, sizeof(row));
+	CHECK(strstr(row, "ESC ZOOM CALC MENU TRACE") != NULL);
+
+	// With nothing on there is nothing to draw, and the line says so
+	store_reset();
+	n = 0;
+	type_line(script, &n, "gr::graph");
+	run_script(script, n, fb);
+	read_error(fb, row, sizeof(row));
+	CHECK(strstr(row, "NO CURVE IS ON") != NULL);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -9214,6 +9394,15 @@ int main(void) {
 	test_a_slot_reads_in_keycaps();
 	test_a_traced_slot_is_not_rounded();
 	test_calc_words();
+	test_tangent_word();
+	test_cfg_angle();
+	test_cfg_refuses();
+	test_cfg_round_trip();
+	test_gr_set_slot();
+	test_gr_set_slot_twice_in_a_line();
+	test_gr_set_slot_refuses_a_bad_body();
+	test_gr_zoom_and_window();
+	test_gr_graph();
 	test_stat_words();
 	test_lists_are_words();
 	test_stat_page_calculates();

@@ -240,6 +240,7 @@ word taking x and leaving y:
 "f" a b fmin        x where f is lowest    "f" a b fnint      the integral
 "f" a b fmax        x where f is highest   "f" "g" a b intersect
 "f" "g" a b area    between f and g, all of it counted positive
+"f" x tangent       a and b of the tangent y = ax + b at x
 ```
 
 `STAT` is the lists, `L1` to `L6`, three across, typed down like a
@@ -356,6 +357,39 @@ fn main( -- ) {
 	"f" a b fnint print
 	"f" ui::plot
 }
+```
+
+### Settings and the graphing pages: `cfg::` and `gr::`
+
+What a key does, a program can do. `cfg::` is the settings page and `gr::` the
+pages behind `PLOT`. Each setter takes what its getter gives back, so a program
+can change a setting and put it back as it found it; a setting changed this
+way is saved, as one changed on the page is.
+
+| Word | |
+|---|---|
+| `cfg::angle ( -- s )`, `cfg::set_angle ( s -- )` | `"DEG"` or `"RAD"` |
+| `cfg::decimals ( -- n )`, `cfg::set_decimals ( n -- )` | 0 to 9, or -1 for AUTO |
+| `cfg::notation ( -- s )`, `cfg::set_notation ( s -- )` | `"NORMAL"`, `"SCI"` or `"ENG"` |
+| `cfg::complex ( -- s )`, `cfg::set_complex ( s -- )` | `"REAL"`, `"a+bi"` or `"POLAR"` |
+| `cfg::autooff ( -- min )`, `cfg::set_autooff ( min -- )` | 0 for never, or 5, 10, 30, 60 |
+| `gr::slot ( n -- s )`, `gr::set_slot ( s n -- )` | What Yn holds; writing it is typing it on Y=, `""` empties it |
+| `gr::on ( n -- on )`, `gr::set_on ( on n -- )` | Whether GRAPH draws Yn |
+| `gr::window ( -- x0 x1 y0 y1 )`, `gr::set_window ( x0 x1 y0 y1 -- )` | The window GRAPH draws in |
+| `gr::zoom ( name -- )` | A ZOOM preset: `"STANDARD"`, `"DECIMAL"`, `"INTEGER"`, `"SQUARE"`, `"TRIG"`, `"IN"`, `"OUT"` or `"STAT"` |
+| `gr::grid ( -- on )`, `gr::set_grid ( on -- )`, `gr::axes`, `gr::set_axes` | FORMAT's grid and axes |
+| `gr::graph ( -- )` | GRAPH: draws what is on, waiting in an app until ESC |
+
+Names are taken in either case. A body `gr::set_slot` cannot declare is kept,
+marked `ERR` as Y= keeps it, and the word fails with the reason. `FIT` and
+`BOX` are not offered by `gr::zoom`: one fits what a graph on screen has drawn,
+the other is a cursor.
+
+```
+"deg" cfg::set_angle
+"x sin" 1 gr::set_slot
+"trig" gr::zoom
+gr::graph
 ```
 
 The firmware ships seven apps written this way, each small enough to read and

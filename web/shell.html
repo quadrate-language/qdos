@@ -831,6 +831,42 @@ pi sqrt                 // and the square root of pi</code></pre>
 			</article>
 
 			<article class="program">
+				<h3>A program that works the graph pages</h3>
+				<p>
+					Everything the keys do, a program can do: <code>cfg::</code> sets the angle
+					mode, and <code>gr::</code> writes the Y= slots, picks a zoom and presses
+					GRAPH. This one builds sine's Taylor series as text, a term longer each
+					time round the loop, and graphs all six. Every term hugs the curve a
+					little further out.
+				</p>
+<pre><code class="qd">// One term of the series, as a formula: -x^3/6, +x^5/120, ...
+def term(k:i64 -- s:str) {
+	k 2 * 1 + -&gt; n
+	k 2 % 1 == if { "-x^" } else { "+x^" }
+	n ui::str ui::cat  "/" ui::cat  n fac ui::str ui::cat
+}
+
+// sin in Y1, and in Y2 to Y6 its series, one term longer each
+fn taylor( -- ) {
+	"rad" cfg::set_angle
+	"sin(x)" 1 gr::set_slot
+	"x" -&gt; p
+	1 6 1 for k {
+		p k 1 + gr::set_slot      // x, then x-x^3/6, ...
+		p k term ui::cat -&gt; p
+	}
+	"trig" gr::zoom
+	gr::graph
+}
+
+taylor</code></pre>
+				<div class="run">
+					<button class="run-button" type="button">Run taylor</button>
+					<span class="result">Esc leaves the graph</span>
+				</div>
+			</article>
+
+			<article class="program">
 				<h3>And turned in three dimensions</h3>
 				<p>
 					Take x and y, leave z, and <code>graph3</code> draws the surface as a

@@ -30,6 +30,7 @@
 #include "wordhelp.h"
 #include "wordlist.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -5160,6 +5161,31 @@ static void slots_restore(qdos_shell* sh) {
 	}
 }
 
+static void trim(char* text);
+
+/**
+ * @brief Give slot @p i a new body, as ENTER in the Y= editor does
+ *
+ * Switched on when it gets a body it did not have, as a TI does, and off when
+ * emptied. A body that will not declare is kept, marked ERR, with why in
+ * slot_why; false then. The caller has checked it fits.
+ */
+static bool slot_write(qdos_shell* sh, size_t i, const char* body) {
+	plot_slot* slot = &sh->slots[i];
+	const bool was_empty = slot->shape == QDOS_GRAPH_NONE;
+	snprintf(slot->body, sizeof(slot->body), "%s", body);
+	trim(slot->body);
+	const bool declared = slot_declare(sh, i);
+	if (was_empty && slot->shape != QDOS_GRAPH_NONE) {
+		slot->on = true;
+	}
+	if (slot->shape == QDOS_GRAPH_NONE) {
+		slot->on = false;
+	}
+	slot_save(sh, i);
+	return declared;
+}
+
 static void plot_open(qdos_shell* sh) {
 	sh->mode = QDOS_MODE_PLOT;
 	set_message(sh, "", false);
@@ -5409,20 +5435,9 @@ static void handle_plot_edit_key(qdos_shell* sh, const qdos_key_event* ev) {
 			break;
 		}
 
-		// Switched on when it gets a body it did not have, as a TI does
-		const bool was_empty = slot->shape == QDOS_GRAPH_NONE;
-		memcpy(slot->body, sh->input, sh->input_len + 1);
-		trim(slot->body);
-		if (!slot_declare(sh, sh->slot_sel)) {
+		if (!slot_write(sh, sh->slot_sel, sh->input)) {
 			set_message(sh, sh->slot_why, true);
 		}
-		if (was_empty && slot->shape != QDOS_GRAPH_NONE) {
-			slot->on = true;
-		}
-		if (slot->shape == QDOS_GRAPH_NONE) {
-			slot->on = false;
-		}
-		slot_save(sh, sh->slot_sel);
 		input_clear(sh);
 		sh->mode = QDOS_MODE_PLOT;
 		break;
@@ -9240,6 +9255,394 @@ static int through_decimal(qd_context* ctx, void* userdata) {
 }
 
 /* A native written for f64, kept to decimals: one entry per native, shared by every interp */
+/* ---- tangent, cfg:: and gr:: ----------------------------------------------
+ *
+ * What a key does, a program can do. cfg:: is the settings page, gr:: the
+ * graphing pages behind PLOT: the Y= slots, the window GRAPH draws in, its
+ * format and the ZOOM presets. A setter takes what its getter gives back, so
+ * `cfg::angle ... cfg::set_angle` puts a setting back as it was.
+ * ------------------------------------------------------------------------- */
+
+/** `tangent` - ( name:str x:f64 -- a:f64 b:f64 ) the tangent y = ax + b of the word at x */
+static int native_tangent(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	char name[QDOS_PROGRAM_NAME_MAX];
+	double a[1], d, y;
+	if (!pop_word_and_numbers(ctx, "tangent", 1, a, name, sizeof(name))) {
+		return 1;
+	}
+	graph_call call = {sh, name, NULL};
+	sh->graph_error[0] = '\0';
+	if (!qdos_num_derivative(graph_eval, &call, a[0], &d) || !graph_eval(&call, a[0], &y)) {
+		return numeric_fail(ctx, sh, "tangent", "UNDEFINED THERE");
+	}
+	qd_push_f(ctx, d);
+	return qd_push_f(ctx, y - d * a[0]);
+}
+
+static int prefixed_fail(qd_context* ctx, const char* space, const char* word, const char* why) {
+	char message[96];
+	snprintf(message, sizeof(message), "%s::%s: %s", space, word, why);
+	qd_set_error_msg(ctx, message);
+	return 1;
+}
+
+/** @brief A whole number off the stack, however it was typed */
+static bool pop_whole(qd_context* ctx, int64_t* out) {
+	qdos_value v;
+	if (!pop_value(ctx, &v)) {
+		return false;
+	}
+	double x;
+	switch (v.type) {
+	case QDOS_VALUE_INT:
+		*out = v.i;
+		return true;
+	case QDOS_VALUE_FLOAT:
+		x = v.f;
+		break;
+	case QDOS_VALUE_D128:
+		x = strtod(v.s, NULL);
+		break;
+	default:
+		return false;
+	}
+	if (!isfinite(x) || x != floor(x) || fabs(x) > 1e15) {
+		return false;
+	}
+	*out = (int64_t)x;
+	return true;
+}
+
+/** @brief Which of @p names @p text is, case aside; -1 for none */
+static int name_index(const char* text, const char* const* names, int count) {
+	for (int i = 0; i < count; i++) {
+		const char* a = text;
+		const char* b = names[i];
+		while (*a != '\0' && toupper((unsigned char)*a) == toupper((unsigned char)*b)) {
+			a++;
+			b++;
+		}
+		if (*a == '\0' && *b == '\0') {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/** @brief A name off the stack, one of @p names; -1, and the word failed, if not */
+static int pop_name(qd_context* ctx, const char* space, const char* word, const char* const* names, int count,
+		const char* expected) {
+	char text[24];
+	if (qd_pop_s(ctx, text, sizeof(text)) != 0) {
+		prefixed_fail(ctx, space, word, expected);
+		return -1;
+	}
+	const int i = name_index(text, names, count);
+	if (i < 0) {
+		prefixed_fail(ctx, space, word, expected);
+	}
+	return i;
+}
+
+static const char* const ANGLE_NAMES[] = {"RAD", "DEG"};
+static const char* const NOTATION_NAMES[NOTATION__COUNT] = {"NORMAL", "SCI", "ENG"};
+static const char* const COMPLEX_NAMES[QDOS_CPX__COUNT] = {"REAL", "a+bi", "POLAR"};
+
+/** `cfg::angle` - ( -- s:str ) "DEG" or "RAD" */
+static int native_cfg_angle(qd_context* ctx, void* userdata) {
+	(void)userdata;
+	return qd_push_s(ctx, angle_text());
+}
+
+/** `cfg::set_angle` - ( s:str -- ) "DEG" or "RAD" */
+static int native_cfg_set_angle(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	const int i = pop_name(ctx, "cfg", "set_angle", ANGLE_NAMES, 2, "DEG OR RAD");
+	if (i < 0) {
+		return 1;
+	}
+	qdos_math_set_degrees(i == 1);
+	save_settings(sh);
+	return 0;
+}
+
+/** `cfg::decimals` - ( -- n:i64 ) digits after the point, -1 for AUTO */
+static int native_cfg_decimals(qd_context* ctx, void* userdata) {
+	return qd_push_i(ctx, ((qdos_shell*)userdata)->decimals);
+}
+
+/** `cfg::set_decimals` - ( n:i64 -- ) 0 to 9, or -1 for AUTO */
+static int native_cfg_set_decimals(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	int64_t n;
+	if (!pop_whole(ctx, &n) || n < DECIMALS_AUTO || n > DECIMALS_MAX) {
+		return prefixed_fail(ctx, "cfg", "set_decimals", "0 TO 9, OR -1 FOR AUTO");
+	}
+	sh->decimals = (int)n;
+	save_settings(sh);
+	return 0;
+}
+
+/** `cfg::notation` - ( -- s:str ) "NORMAL", "SCI" or "ENG" */
+static int native_cfg_notation(qd_context* ctx, void* userdata) {
+	return qd_push_s(ctx, NOTATION_NAMES[((qdos_shell*)userdata)->notation]);
+}
+
+/** `cfg::set_notation` - ( s:str -- ) */
+static int native_cfg_set_notation(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	const int i = pop_name(ctx, "cfg", "set_notation", NOTATION_NAMES, NOTATION__COUNT, "NORMAL, SCI OR ENG");
+	if (i < 0) {
+		return 1;
+	}
+	sh->notation = i;
+	save_settings(sh);
+	return 0;
+}
+
+/** `cfg::complex` - ( -- s:str ) "REAL", "a+bi" or "POLAR" */
+static int native_cfg_complex(qd_context* ctx, void* userdata) {
+	(void)userdata;
+	return qd_push_s(ctx, COMPLEX_NAMES[qdos_cpx_get_mode()]);
+}
+
+/** `cfg::set_complex` - ( s:str -- ) */
+static int native_cfg_set_complex(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	const int i = pop_name(ctx, "cfg", "set_complex", COMPLEX_NAMES, QDOS_CPX__COUNT, "REAL, a+bi OR POLAR");
+	if (i < 0) {
+		return 1;
+	}
+	qdos_cpx_set_mode((qdos_cpx_mode)i);
+	save_settings(sh);
+	return 0;
+}
+
+/** `cfg::autooff` - ( -- min:i64 ) idle minutes before the machine turns off, 0 for never */
+static int native_cfg_autooff(qd_context* ctx, void* userdata) {
+	return qd_push_i(ctx, AUTO_OFF_MINUTES[((qdos_shell*)userdata)->auto_off]);
+}
+
+/** `cfg::set_autooff` - ( min:i64 -- ) 0, 5, 10, 30 or 60 */
+static int native_cfg_set_autooff(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	int64_t minutes;
+	if (pop_whole(ctx, &minutes)) {
+		for (size_t i = 0; i < AUTO_OFF_COUNT; i++) {
+			if (AUTO_OFF_MINUTES[i] == minutes) {
+				sh->auto_off = i;
+				save_settings(sh);
+				return 0;
+			}
+		}
+	}
+	return prefixed_fail(ctx, "cfg", "set_autooff", "0, 5, 10, 30 OR 60");
+}
+
+/** @brief A slot number, 1 to 6, as the index it is */
+static bool pop_slot(qd_context* ctx, const char* word, size_t* out) {
+	int64_t n;
+	if (!pop_whole(ctx, &n) || n < 1 || n > PLOT_SLOTS) {
+		prefixed_fail(ctx, "gr", word, "SLOTS ARE 1 TO 6");
+		return false;
+	}
+	*out = (size_t)(n - 1);
+	return true;
+}
+
+/** `gr::slot` - ( n:i64 -- body:str ) what Yn holds, "" for an empty one */
+static int native_gr_slot(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	size_t i;
+	if (!pop_slot(ctx, "slot", &i)) {
+		return 1;
+	}
+	return qd_push_s(ctx, sh->slots[i].body);
+}
+
+/** `gr::set_slot` - ( body:str n:i64 -- ) give Yn a body, as typing it on Y= does; "" empties it */
+static int native_gr_set_slot(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	size_t i;
+	if (!pop_slot(ctx, "set_slot", &i)) {
+		return 1;
+	}
+	char body[PLOT_BODY_MAX + 1];
+	if (qd_pop_s(ctx, body, sizeof(body)) != 0) {
+		return prefixed_fail(ctx, "gr", "set_slot", "NEED A BODY");
+	}
+	if (strlen(body) >= sizeof(sh->slots[i].body)) {
+		return prefixed_fail(ctx, "gr", "set_slot", "TOO LONG FOR A SLOT");
+	}
+	// Kept, marked ERR, as Y= keeps it: the program is told why
+	if (!slot_write(sh, i, body)) {
+		return prefixed_fail(ctx, "gr", "set_slot", sh->slot_why);
+	}
+	return 0;
+}
+
+/** `gr::on` - ( n:i64 -- on:i64 ) whether GRAPH draws Yn */
+static int native_gr_on(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	size_t i;
+	if (!pop_slot(ctx, "on", &i)) {
+		return 1;
+	}
+	return qd_push_i(ctx, sh->slots[i].on ? 1 : 0);
+}
+
+/** `gr::set_on` - ( on:i64 n:i64 -- ) switch Yn on or off, as ON does */
+static int native_gr_set_on(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	size_t i;
+	int64_t on;
+	if (!pop_slot(ctx, "set_on", &i)) {
+		return 1;
+	}
+	if (!pop_whole(ctx, &on)) {
+		return prefixed_fail(ctx, "gr", "set_on", "1 FOR ON, 0 FOR OFF");
+	}
+	if (on != 0 && sh->slots[i].shape == QDOS_GRAPH_NONE) {
+		return prefixed_fail(ctx, "gr", "set_on", "THAT SLOT IS EMPTY");
+	}
+	sh->slots[i].on = on != 0;
+	slot_save(sh, i);
+	return 0;
+}
+
+/** `gr::window` - ( -- x0:f64 x1:f64 y0:f64 y1:f64 ) the edges GRAPH draws within */
+static int native_gr_window(qd_context* ctx, void* userdata) {
+	const qdos_graph_view* v = &((qdos_shell*)userdata)->plot_view;
+	qd_push_f(ctx, v->x0);
+	qd_push_f(ctx, v->x1);
+	qd_push_f(ctx, v->y0);
+	return qd_push_f(ctx, v->y1);
+}
+
+/** `gr::set_window` - ( x0:f64 x1:f64 y0:f64 y1:f64 -- ) as WINDOW types them */
+static int native_gr_set_window(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	double edge[4];
+	if (!pop_reals(ctx, edge, 4)) {
+		return prefixed_fail(ctx, "gr", "set_window", "NEED FOUR NUMBERS");
+	}
+	if (!(edge[0] < edge[1]) || !(edge[2] < edge[3])) {
+		return prefixed_fail(ctx, "gr", "set_window", "EDGES THE WRONG WAY ROUND");
+	}
+	qdos_graph_view* v = &sh->plot_view;
+	v->x0 = edge[0];
+	v->x1 = edge[1];
+	v->y0 = edge[2];
+	v->y1 = edge[3];
+	window_save(sh);
+	return 0;
+}
+
+/* The ZOOM presets that need no graph on screen: FIT takes what one has drawn, BOX a cursor */
+static const char* const ZOOM_NAMES[] = {"STANDARD", "DECIMAL", "INTEGER", "SQUARE", "TRIG", "IN", "OUT", "STAT"};
+
+/** `gr::zoom` - ( name:str -- ) one of ZOOM's windows, for GRAPH to draw in */
+static int native_gr_zoom(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	const int kind = pop_name(
+			ctx, "gr", "zoom", ZOOM_NAMES, (int)(sizeof(ZOOM_NAMES) / sizeof(*ZOOM_NAMES)), "NO ZOOM BY THAT NAME");
+	if (kind < 0) {
+		return 1;
+	}
+	qdos_graph_view* v = &sh->plot_view;
+	switch (kind) {
+	case 0:
+		qdos_graph_standard(v);
+		break;
+	case 1:
+		qdos_graph_decimal(v, QDOS_SCREEN_W, GRAPH_HEIGHT);
+		break;
+	case 2:
+		qdos_graph_integer(v, QDOS_SCREEN_W, GRAPH_HEIGHT);
+		break;
+	case 3:
+		qdos_graph_square(v, QDOS_SCREEN_W, GRAPH_HEIGHT);
+		break;
+	case 4:
+		qdos_graph_trig(v, QDOS_SCREEN_W, GRAPH_HEIGHT, qdos_math_degrees());
+		break;
+	case 5:
+	case 6:
+		qdos_graph_zoom(v, (v->x0 + v->x1) / 2.0, (v->y0 + v->y1) / 2.0, kind == 5 ? GRAPH_ZOOM : 1.0 / GRAPH_ZOOM);
+		break;
+	default:
+		stat_zoom(sh, v);
+		break;
+	}
+	window_save(sh);
+	return 0;
+}
+
+/** `gr::grid` - ( -- on:i64 ) whether FORMAT draws the grid */
+static int native_gr_grid(qd_context* ctx, void* userdata) {
+	return qd_push_i(ctx, ((qdos_shell*)userdata)->grid_on ? 1 : 0);
+}
+
+/** `gr::set_grid` - ( on:i64 -- ) */
+static int native_gr_set_grid(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	int64_t on;
+	if (!pop_whole(ctx, &on)) {
+		return prefixed_fail(ctx, "gr", "set_grid", "1 FOR ON, 0 FOR OFF");
+	}
+	sh->grid_on = on != 0;
+	save_settings(sh);
+	return 0;
+}
+
+/** `gr::axes` - ( -- on:i64 ) whether FORMAT draws the axes */
+static int native_gr_axes(qd_context* ctx, void* userdata) {
+	return qd_push_i(ctx, ((qdos_shell*)userdata)->axes_off ? 0 : 1);
+}
+
+/** `gr::set_axes` - ( on:i64 -- ) */
+static int native_gr_set_axes(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	int64_t on;
+	if (!pop_whole(ctx, &on)) {
+		return prefixed_fail(ctx, "gr", "set_axes", "1 FOR ON, 0 FOR OFF");
+	}
+	sh->axes_off = on == 0;
+	save_settings(sh);
+	return 0;
+}
+
+/**
+ * `gr::graph` - ( -- ) GRAPH, as the key on Y= does
+ *
+ * At the prompt the graph is left open for the user, as `graph` leaves one.
+ * An app is waited for until the user leaves it, its words being gone after.
+ */
+static int native_gr_graph(qd_context* ctx, void* userdata) {
+	qdos_shell* sh = userdata;
+	const qdos_mode home = sh->mode;
+	sh->mode = QDOS_MODE_PLOT;
+	plot_graph(sh);
+	if (sh->mode != QDOS_MODE_GRAPH && sh->mode != QDOS_MODE_GRAPH3) {
+		sh->mode = home;
+		return prefixed_fail(ctx, "gr", "graph", "NO CURVE IS ON");
+	}
+	sh->graph_return = home;
+
+	if (sh->app_interp == NULL) {
+		return 0;
+	}
+	sh->modal_home = home;
+	const bool finished = modal_run(sh, back_home);
+	sh->mode = home;
+	if (!finished) {
+		qd_set_error_msg(ctx, "BREAK");
+		return 1;
+	}
+	return 0;
+}
+
 static void register_f64(
 		qdos_shell* sh, qd_interp* interp, const char* name, const char* signature, qd_interp_native_fn fn) {
 	size_t k = 0;
@@ -9340,6 +9743,34 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	register_f64(sh, interp, "ui::at", "(x:f64 y:f64 -- px:f64 py:f64)", native_at);
 	register_f64(sh, interp, "ui::frame", "(fps:i64 -- dt:f64)", native_frame);
 	qd_interp_register(interp, "ui::pressed", "( -- name:str)", native_pressed, sh);
+	register_f64(sh, interp, "tangent", "(f:str x:f64 -- a:f64 b:f64)", native_tangent);
+
+	// The settings page
+	qd_interp_register(interp, "cfg::angle", "( -- s:str)", native_cfg_angle, sh);
+	qd_interp_register(interp, "cfg::set_angle", "(s:str -- )", native_cfg_set_angle, sh);
+	qd_interp_register(interp, "cfg::decimals", "( -- n:i64)", native_cfg_decimals, sh);
+	qd_interp_register(interp, "cfg::set_decimals", "(n:i64 -- )", native_cfg_set_decimals, sh);
+	qd_interp_register(interp, "cfg::notation", "( -- s:str)", native_cfg_notation, sh);
+	qd_interp_register(interp, "cfg::set_notation", "(s:str -- )", native_cfg_set_notation, sh);
+	qd_interp_register(interp, "cfg::complex", "( -- s:str)", native_cfg_complex, sh);
+	qd_interp_register(interp, "cfg::set_complex", "(s:str -- )", native_cfg_set_complex, sh);
+	qd_interp_register(interp, "cfg::autooff", "( -- min:i64)", native_cfg_autooff, sh);
+	qd_interp_register(interp, "cfg::set_autooff", "(min:i64 -- )", native_cfg_set_autooff, sh);
+
+	// The graphing pages behind PLOT
+	qd_interp_register(interp, "gr::slot", "(n:i64 -- body:str)", native_gr_slot, sh);
+	qd_interp_register(interp, "gr::set_slot", "(body:str n:i64 -- )", native_gr_set_slot, sh);
+	qd_interp_register(interp, "gr::on", "(n:i64 -- on:i64)", native_gr_on, sh);
+	qd_interp_register(interp, "gr::set_on", "(on:i64 n:i64 -- )", native_gr_set_on, sh);
+	qd_interp_register(interp, "gr::window", "( -- x0:f64 x1:f64 y0:f64 y1:f64)", native_gr_window, sh);
+	register_f64(sh, interp, "gr::set_window", "(x0:f64 x1:f64 y0:f64 y1:f64 -- )", native_gr_set_window);
+	qd_interp_register(interp, "gr::zoom", "(name:str -- )", native_gr_zoom, sh);
+	qd_interp_register(interp, "gr::grid", "( -- on:i64)", native_gr_grid, sh);
+	qd_interp_register(interp, "gr::set_grid", "(on:i64 -- )", native_gr_set_grid, sh);
+	qd_interp_register(interp, "gr::axes", "( -- on:i64)", native_gr_axes, sh);
+	qd_interp_register(interp, "gr::set_axes", "(on:i64 -- )", native_gr_set_axes, sh);
+	qd_interp_register(interp, "gr::graph", "( -- )", native_gr_graph, sh);
+
 	qdos_register_math(interp);
 	qdos_register_complex(interp);
 }
