@@ -200,8 +200,26 @@ target_compile_options(qdos PRIVATE --use-port=sdl3 -Wall -Wextra -Wno-format-tr
 # shell finds them at the path the desktop simulator reads them from
 set(system_dir "${QDOS}/programs/system")
 file(GLOB_RECURSE system_files CONFIGURE_DEPENDS "${system_dir}/*")
+# The keys the page can press, by name, numbered as keys.h numbers them: one
+# entry per line of its enum, in order, so a key added there is a key here
+set(keys_h "${QDOS}/include/qdos/keys.h")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${keys_h}")
+file(STRINGS "${keys_h}" key_lines REGEX "^\tQDOS_KEY_[A-Z0-9_]+")
+set(key_entries "")
+set(key_number 0)
+foreach(line IN LISTS key_lines)
+	string(REGEX MATCH "QDOS_KEY_([A-Z0-9_]+)" _ "${line}")
+	set(key_name "${CMAKE_MATCH_1}")
+	if(NOT key_name STREQUAL "_COUNT")
+		string(APPEND key_entries "\t\"${key_name}\": ${key_number},\n")
+		math(EXPR key_number "${key_number} + 1")
+	endif()
+endforeach()
+set(keys_js "${CMAKE_CURRENT_BINARY_DIR}/keys.js")
+file(WRITE "${keys_js}" "// Generated from include/qdos/keys.h by web/CMakeLists.txt\nvar QDOS_KEYS = {\n${key_entries}};\n")
+
 set_property(TARGET qdos APPEND PROPERTY LINK_DEPENDS
-	${system_files} "${CMAKE_CURRENT_LIST_DIR}/pre.js" "${CMAKE_CURRENT_LIST_DIR}/shell.html")
+	${system_files} "${keys_js}" "${CMAKE_CURRENT_LIST_DIR}/pre.js" "${CMAKE_CURRENT_LIST_DIR}/shell.html")
 
 set_target_properties(qdos PROPERTIES SUFFIX ".html")
 
@@ -209,6 +227,7 @@ target_link_libraries(qdos PRIVATE quadrate)
 target_link_options(qdos PRIVATE
 	--use-port=sdl3
 	"--shell-file=${CMAKE_CURRENT_LIST_DIR}/shell.html"
+	"--pre-js=${keys_js}"
 	"--pre-js=${CMAKE_CURRENT_LIST_DIR}/pre.js"
 	"--preload-file=${system_dir}@/programs/system"
 	-lidbfs.js

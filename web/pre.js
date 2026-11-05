@@ -51,18 +51,25 @@ Module.preRun.push(function () {
 // Keys the page presses for the reader: Module.qdosType(steps) queues them,
 // and the shell takes them one at a time, paced so they can be watched going
 // in. A step is {key: 'ENTER'} or {text: '7 sq'}, and a text step may carry
-// its own {gap} in milliseconds between characters, for a long one. Named keys travel as the
-// negative codes sim_sdl3.c's WEB_KEYS lists, characters as themselves. Letters
-// are typed as on the keypad, with ALPHA put on before them and off after.
+// its own {gap} in milliseconds between characters, for a long one. A named
+// key is any of keys.h's, without the QDOS_KEY_ (NEG, UP, CALC, SOFT3, ...), or
+// one of the short names below, and travels as minus its number; characters
+// travel as themselves. Letters are typed as on the keypad, with ALPHA put on
+// before them and off after.
 (function () {
-	var KEYS = {
-		ENTER: -1, ESC: -2,
-		SOFT1: -3, SOFT2: -4, SOFT3: -5, SOFT4: -6, SOFT5: -7,
-		MUL: -8, DIV: -9, ADD: -10, SUB: -11,
-		CPLX: -12, PWR: -13, DEL: -14,
-	};
-	var ALPHA_ON = -15;
-	var ALPHA_OFF = -16;
+	// What the keys are called on the keypad, where keys.h says otherwise
+	var ALIASES = {ESC: 'CLEAR', DEL: 'BACKSPACE', PWR: 'POWER', CPLX: 'COMPLEX'};
+	var ALPHA_ON = -1000;
+	var ALPHA_OFF = -1001;
+
+	function keyCode(name) {
+		var number = QDOS_KEYS[ALIASES[name] || name];
+		if (number === undefined || number === QDOS_KEYS.NONE || number === QDOS_KEYS.CHAR) {
+			console.error('qdos: no key named ' + name);
+			return null;
+		}
+		return -number;
+	}
 	var KEY_GAP_MS = 190;
 	var CHAR_GAP_MS = 55;
 
@@ -81,8 +88,11 @@ Module.preRun.push(function () {
 		}
 		steps.forEach(function (step) {
 			if (step.key) {
-				wantAlpha(false, KEY_GAP_MS);
-				queue.push({code: KEYS[step.key], gap: KEY_GAP_MS});
+				var code = keyCode(step.key);
+				if (code !== null) {
+					wantAlpha(false, KEY_GAP_MS);
+					queue.push({code: code, gap: KEY_GAP_MS});
+				}
 			} else {
 				var gap = step.gap || CHAR_GAP_MS;
 				for (var i = 0; i < step.text.length; i++) {

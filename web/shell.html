@@ -791,6 +791,46 @@ bounce</code></pre>
 			</article>
 
 			<article class="program">
+				<h3>The area under a curve</h3>
+				<p>
+					<code>fnint</code> integrates any word between two bounds. The whole bell
+					curve <i>e</i><sup>−<i>x</i>²</sup> has an area of exactly √π, and from
+					−6 to 6 the calculator finds it to sixteen digits.
+				</p>
+<pre><code class="qd">fn bell(x:d128 -- y:d128) { sq neg exp }
+
+"bell" -6.0 6.0 fnint   // the area under it
+
+pi sqrt                 // and the square root of pi</code></pre>
+				<div class="run">
+					<button class="run-button" type="button">Run bell</button>
+					<span class="result">leaves 1.7724538509055159 over 1.7724538509055160…</span>
+				</div>
+				<p>
+					Or on the graph, as a TI does it: type a curve into Y1, graph it, and
+					CALC finds the integral between two bounds and shades it.
+				</p>
+				<div class="try">
+					<button class="seq" type="button"
+						data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT5"},{"text":"9-x^2"},{"key":"ENTER"},{"key":"SOFT5"},{"key":"SOFT3"},{"text":"7"},{"text":"3"},{"key":"NEG"},{"key":"ENTER"},{"text":"3"},{"key":"ENTER"}]'
+						aria-label="On the calculator: PLOT, type 9-x^2, Enter, GRAPH, CALC, 7 for the integral, 3, plus-minus, Enter, 3, Enter">
+						<span class="cap soft">PLOT</span>
+						<span class="typed">9-x^2</span>
+						<span class="cap enter">ENTER</span>
+						<span class="cap soft">GRAPH</span>
+						<span class="cap soft">CALC</span>
+						<span class="cap">7</span>
+						<span class="cap">3</span>
+						<span class="cap">±</span>
+						<span class="cap enter">ENTER</span>
+						<span class="cap">3</span>
+						<span class="cap enter">ENTER</span>
+					</button>
+					<span class="result">shades the hump: INTEGRAL=36</span>
+				</div>
+			</article>
+
+			<article class="program">
 				<h3>And turned in three dimensions</h3>
 				<p>
 					Take x and y, leave z, and <code>graph3</code> draws the surface as a

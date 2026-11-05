@@ -543,28 +543,13 @@ static bool sim_press(sim_state* st, const qdos_pad_button* b, qdos_key_event* o
 /** @brief When the key the page pressed comes back up; 0 while none is down */
 static Uint64 g_press_until;
 
-/** @brief Put ALPHA on or off, past the end of WEB_KEYS */
-#define SIM_WEB_ALPHA_ON (-15)
-#define SIM_WEB_ALPHA_OFF (-16)
-
-/** @brief The named keys, by the negative codes web/pre.js gives them */
-static const qdos_key WEB_KEYS[] = {
-		QDOS_KEY_NONE,
-		QDOS_KEY_ENTER,
-		QDOS_KEY_CLEAR,
-		QDOS_KEY_SOFT1,
-		QDOS_KEY_SOFT2,
-		QDOS_KEY_SOFT3,
-		QDOS_KEY_SOFT4,
-		QDOS_KEY_SOFT5,
-		QDOS_KEY_MUL,
-		QDOS_KEY_DIV,
-		QDOS_KEY_ADD,
-		QDOS_KEY_SUB,
-		QDOS_KEY_COMPLEX,
-		QDOS_KEY_POWER,
-		QDOS_KEY_BACKSPACE,
-};
+/*
+ * A key the page names travels as minus its qdos_key number, which keys.h
+ * keeps stable, so any key there is can be pressed; web/CMakeLists.txt gives
+ * the page the names. ALPHA on and off are past the end of them.
+ */
+#define SIM_WEB_ALPHA_ON (-1000)
+#define SIM_WEB_ALPHA_OFF (-1001)
 
 static bool sim_web_key_due(void) {
 	return EM_ASM_INT({ return Module.qdosKeyDue ? Module.qdosKeyDue() : 0; }) != 0;
@@ -626,8 +611,8 @@ static bool sim_web_key(sim_state* st, qdos_key_event* out) {
 	out->ch = 0;
 	if (code > 0 && code < 128) {
 		qdos_pad_typed((char)code, out);
-	} else if (code < 0 && (size_t)-code < sizeof(WEB_KEYS) / sizeof(WEB_KEYS[0])) {
-		out->key = WEB_KEYS[-code];
+	} else if (code < 0 && -code < QDOS_KEY__COUNT && -code != QDOS_KEY_CHAR) {
+		out->key = (qdos_key)-code;
 	}
 	if (out->key == QDOS_KEY_NONE) {
 		return false;
