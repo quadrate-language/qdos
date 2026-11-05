@@ -1,32 +1,31 @@
 # Hardware
 
-What the calculator is made of. The choices were already in the tree — in
-`config.txt`, the kernel fragment, the panel overlay and the HAL constants —
-but nowhere in one place, which is what this file is for.
-
-**Nothing here has been powered on.** A part is *chosen* when something in the
-build depends on it: a driver enabled, an overlay written, a screen size
-compiled in. That is a stronger commitment than a shortlist and a weaker one
-than a working machine. What is still open is listed at the end.
+What the calculator is made of. A part is *chosen* when something in the build
+depends on it: a driver written, a pin assigned, a screen size compiled in.
+What is still open is listed at the end.
 
 ## The board
 
-| | | arch | cross target |
-|---|---|---|---|
-| **Zero W** (default) | BCM2835, ARM1176JZF-S at 1 GHz, 512 MB | ARMv6 | `armv6` |
-| Zero 2 W (second target) | BCM2710A1, quad Cortex-A53 | ARMv8 | `aarch64` |
+An **ESP32-S3** on an **ESP32-S3-WROOM-1-N16R8** module: two Xtensa LX7 cores
+at 240 MHz, 512 KB of internal RAM, 8 MB of octal PSRAM and 16 MB of flash. The
+ESP32-S3-DevKitC-1-N16R8 carries the same module, and is the development board
+for it. How it is built and flashed is in [esp32/README.md](../esp32/README.md).
 
-An **ESP32-S3** with 8 MB of octal PSRAM (an N8R8 or N16R8 module) is a third
-target, outside `QDOS_BOARD`: it is an ESP-IDF project of its own, takes the same
-panel and pad wired straight to its GPIOs with no expander, and is described in
-[esp32/README.md](../esp32/README.md).
+**Not Linux, as the machine.** A calculator is on the moment a key is pressed,
+and a Pi is not: its GPU firmware alone takes on the order of a second before
+the kernel starts, a tuned boot still lands around two, and with no
+suspend-to-RAM the only way to save power is to be off and boot again. The
+Raspberry Pi stays as a second target, [below](#the-raspberry-pi-second-target).
 
-`QDOS_BOARD` picks the target throughout and defaults to `zerow`. **The Zero W
-is the machine** — reaffirmed 2026-09-19. The Zero 2 W stays supported for one
-reason: it is the only one QEMU can boot, so it is where the software path gets
-exercised. That makes ARMv6 the architecture every part choice has to suit, and
-it means the hardware is the first place the real target runs at all. See
-`firmware/README.md`.
+**The PSRAM is not optional.** The shell's state, a parsed program and the value
+stack take 0.5–0.9 MB, far past the S3's internal RAM; the numbers are in
+[esp32/README.md](../esp32/README.md#memory). An N8R8 runs the shell too, but
+DOOM's system store needs the 16 MB of flash.
+
+**The radio goes unused.** Every ESP32-S3 has Wi-Fi and Bluetooth, and nothing
+turns them on. The module's radio is certified as it is, so that costs no radio
+certification of our own; the EMC testing every electronic product needs is
+still ours.
 
 ## The display
 
@@ -36,7 +35,7 @@ Ordered as DigiKey 13157994. Decided 2026-09-19.
 
 The bare panel wants 5 V with 3 V logic, which is the reason for taking the
 breakout rather than the panel: it adds a 3 V regulator, a 5 V boost converter
-and level shifting, so a 3.3 V Pi can drive it directly. The panel slots into a
+and level shifting, so 3.3 V logic drives it directly. The panel slots into a
 ZIF socket on the board, and there are four mounting holes.
 
 That geometry is compiled in, not configured: `QDOS_SCREEN_W`/`QDOS_SCREEN_H` in
@@ -51,6 +50,107 @@ Three properties earn it the slot:
   not the processor.
 - One bit per pixel is the whole colour budget, which is why the UI is drawn the
   way it is.
+
+| | |
+|---|---|
+| Bus | SPI2, 2 MHz |
+| Chip select | **Active high** — the opposite of every other SPI device |
+| VCOM | Software mode: the driver toggles it once a second |
+| Driver | `esp32/main/sharp_lcd.c`. Only the lines that changed are sent |
+| Supply | 3V3. On a DevKitC-1 powered from USB the panel stayed blank from 5V |
+
+`EIN` (EXTMODE) is pulled low on the breakout, which *is* software VCOM mode,
+and the cheaper one: driving EXTCOMIN externally at 1 Hz is reported to roughly
+double the panel's draw. `DISP` is pulled high, so it needs no pin unless the
+panel is to be blanked from software. `3Vo` is the regulator's output, not an
+input: leave it open.
+
+The pins are in [esp32/README.md](../esp32/README.md#wiring) and in menuconfig.
+
+## The keypad
+
+**54 keys in 10 rows**, three layers: the plain face, an ALPHA lock
+for letters, and a SYMBOL one-shot for Quadrate's syntax. `QDOS_PAD_COLS` and
+`QDOS_PAD_ROWS` in `src/hal/sim/keypad_ui.h` are the simulator's mirror of the
+physical pad, and `src/hal/sim/keypad_ui.c` holds the legend for every key.
+The soft row and the five rows of the numeric block are five keys wide; the
+four function rows between them are six, with the arrows an inverted T at
+their right, as on an HP 48.
+
+A 6×10 matrix wired straight to the S3's GPIOs: ten open-drain rows and six
+pulled-up columns, 16 pins, with no expander. The columns must be RTC GPIOs
+(0–21), because they are what wakes the chip from deep sleep. The five-key rows
+leave their sixth column unwired. The scanner is `esp32/main/keymatrix.c`.
+
+A diode per key is needed if three keys at the corners of a rectangle might ever
+be down together.
+
+## USB
+
+The S3's own USB port (GPIO 19 and 20), as a serial console:
+
+- **A keyboard** — a terminal typed at it is the keypad, with a keyboard's
+  extras for typing a long line.
+- **Uploads** — `qdosctl` writes programs and app folders into the inbox over
+  the same port. See `src/hal/serial_console.c`, which the simulator serves
+  on a pseudo-terminal too, and qdosctl(1).
+
+It is not a USB drive. The S3 has a device controller and TinyUSB has a
+mass-storage class, so that is possible, but it is not done.
+
+## Storage
+
+The module's flash, in two FAT partitions beside the firmware:
+
+| partition | | |
+|---|---|---|
+| `system` | 512 KB, read-only | `programs/system`, built into an image and flashed with the firmware. 6 MB in the DOOM build |
+| `data` | 4 MB, wear-levelled | `user/` — everything QDOS writes; `inbox/` — uploads |
+
+## Power
+
+Off is deep sleep: the session is saved, every key row is held low, and any key
+wakes the chip. Waking is a fresh start that restores the session from flash.
+Auto-off goes the same way.
+
+No battery, charger or regulator has been chosen.
+
+## The enclosure
+
+A front plate carrying the keys, the panel and every standoff, and a back shell
+that is structurally a lid. The 98.5 × 214.1 × 32 mm worked out for the Pi was
+set by the Pi and its expander stacked behind the panel (see the Pi's own
+section); the S3 needs neither stacked, so the depth wants working out again.
+
+## Still open
+
+| | what is missing |
+|---|---|
+| **Wake time** | Under QEMU the shell is up 1.3 s after reset. It has to be timed on the chip, from a key to the stack on screen: if it is near that, the fix is in what the shell does at start, not in the part. |
+| **Panel in sleep** | VCOM stops while the chip sleeps, and the panel is still powered. Either the panel's supply gets a switch, or the ULP coprocessor keeps toggling VCOM through sleep. |
+| **Power** | Battery, charging and regulation, and the current drawn in deep sleep. |
+| **Clock** | The RTC keeps the time through deep sleep, but nothing sets it. |
+| **Enclosure** | No model, and the dimensions above are the Pi's. |
+
+## The Raspberry Pi (second target)
+
+| | | arch | cross target |
+|---|---|---|---|
+| **Zero W** | BCM2835, ARM1176JZF-S at 1 GHz, 512 MB | ARMv6 | `armv6` |
+| Zero 2 W | BCM2710A1, quad Cortex-A53 | ARMv8 | `aarch64` |
+
+The same panel and pad on a Linux backend (`src/hal/device`), built into a
+Buildroot image; see `firmware/README.md`. `QDOS_BOARD` picks the board and
+defaults to `zerow`. The Zero 2 W is there because it is the only one QEMU can
+boot, so it is where the Linux path gets exercised. **Nothing here has been
+powered on.**
+
+### The display on the Pi
+
+The bare panel wants 5 V with 3 V logic, which is the reason for taking the
+breakout rather than the panel: it adds a 3 V regulator, a 5 V boost converter
+and level shifting, so a 3.3 V Pi can drive it directly. The panel slots into a
+ZIF socket on the board, and there are four mounting holes.
 
 | | |
 |---|---|
@@ -93,15 +193,7 @@ stops being an emulation of HDMI's DRM/KMS and becomes the panel's own.
 `/dev/fb0` too, so the device backend needs no changes for either. The lines for
 it are in `config.txt`, commented.
 
-## The keypad
-
-**54 keys in 10 rows**, three layers: the plain face, an ALPHA lock
-for letters, and a SYMBOL one-shot for Quadrate's syntax. `QDOS_PAD_COLS` and
-`QDOS_PAD_ROWS` in `src/hal/sim/keypad_ui.h` are the simulator's mirror of the
-physical pad, and `src/hal/sim/keypad_ui.c` holds the legend for every key.
-The soft row and the five rows of the numeric block are five keys wide; the
-four function rows between them are six, with the arrows an inverted T at
-their right, as on an HP 48.
+### The keypad on the Pi
 
 | | |
 |---|---|
@@ -123,7 +215,7 @@ Until the pad exists, input is a **USB keyboard**. `QDOS_KEYMAP` selects `us` or
 `se`; the firmware image sets `se`, because on a Swedish layout the braces
 Quadrate needs are on AltGr and a US table makes declaring a function impossible.
 
-## USB
+### USB
 
 One OTG port, dual role: `dtoverlay=dwc2,dr_mode=otg`.
 
@@ -132,7 +224,7 @@ One OTG port, dual role: `dtoverlay=dwc2,dr_mode=otg`.
   the PC drops `.qd` files on it and the shell declares them when it is handed
   back. `CONFIG_USB_F_MASS_STORAGE`, which costs nothing while unplugged.
 
-## Storage
+### Storage
 
 One microSD card. MBR, four partitions — all an MBR holds:
 
@@ -143,14 +235,14 @@ One microSD card. MBR, four partitions — all an MBR holds:
 | data | ext4 | 16 M | everything QDOS writes — session, registers, user programs |
 | inbox | FAT32 (LBA) | 32 M | `QDOS-INBOX`, the partition the gadget hands to a PC |
 
-## Console
+### Console
 
 Serial on `ttyAMA0` at 115200 (`dtoverlay=miniuart-bt`, `enable_uart=1`,
 `console=ttyAMA0,115200` in `cmdline.txt`). The console stays off the panel
 deliberately — QDOS holds the VT in `KD_GRAPHICS` so nothing draws over the
 calculator.
 
-## The enclosure
+### The enclosure
 
 A front plate carrying the keys, the panel and every standoff, and a back shell
 that is structurally a lid. 98.5 × 214.1 × 32 mm, which is an HP-48 that gained
@@ -161,7 +253,7 @@ front, so the Pi lives behind the panel, and the case is then as deep as the
 tallest thing on the Pi's header. Moving the MCP23017 onto the pad board instead
 takes the case to 24.5 mm.
 
-## Power — the undecided one
+### Power — the undecided one
 
 No battery, charger, regulator or switch has been chosen. What is known:
 
@@ -179,7 +271,7 @@ No battery, charger, regulator or switch has been chosen. What is known:
 The panel helps here: it keeps its image unpowered, so what is on screen when
 the rail is cut stays readable.
 
-## Still open
+### Still open
 
 | | what is missing |
 |---|---|
@@ -190,4 +282,4 @@ the rail is cut stays readable.
 | **Enclosure** | No model. The dimensions above are estimates until the parts are in hand and a caliper has been on them. |
 
 See [design.md](./design.md) for why the machine is built this way, and
-`firmware/README.md` for how the image is produced.
+`firmware/README.md` for how the Pi's image is produced.

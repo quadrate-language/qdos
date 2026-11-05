@@ -133,6 +133,7 @@ qdos_core = static_library('qdos_core',
 			'src/hal/device/framebuffer.c',
 			'src/hal/device/keypad.c',
 			'src/hal/filestore.c',
+			'src/hal/serial_console.c',
 			'src/hal/storename.c',
 			'src/hal/wallclock.c',
 		],
@@ -151,6 +152,10 @@ qdos_args = []
 if get_option('sim')
 	qdos_deps += dependency('sdl3', required: true)
 	qdos_sources += 'src/hal/sim/sim_sdl3.c'
+	# The serial console qdosctl talks to; a phone has no qdosctl
+	if host_machine.system() != 'android'
+		qdos_sources += 'src/hal/sim/sim_serial.c'
+	endif
 	qdos_args += '-DQDOS_WITH_SIM'
 endif
 

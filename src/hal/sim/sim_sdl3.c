@@ -20,7 +20,7 @@
 #include <unistd.h>
 
 /*
- * In a browser there is no inotify to watch the card with, nor a thread to do
+ * In a browser there is no inotify to watch the inbox with, nor a thread to do
  * the watching, and nothing but the page itself writes to it. The store is
  * Emscripten's filesystem, its user scope kept in IndexedDB; see web/pre.js.
  */
@@ -32,6 +32,24 @@
 #include <sys/inotify.h>
 #define SIM_WATCH 1
 #endif
+
+/*
+ * The serial console qdosctl talks to, on a pseudo-terminal. Not in a browser,
+ * which has no terminals, nor on a phone, where there is no qdosctl to reach
+ * it: there the inbox is a folder a file manager writes, and the watch above
+ * notices.
+ */
+#if !defined(__EMSCRIPTEN__) && !defined(SDL_PLATFORM_ANDROID)
+#include "sim_serial.h"
+#include <stdint.h>
+#define SIM_SERIAL 1
+#else
+#define SIM_SERIAL 0
+#endif
+
+/** @brief What an SDL_EVENT_USER is for: waking the loop, or a key from the console */
+#define SIM_EVENT_WAKE 0
+#define SIM_EVENT_KEY 1
 
 /**
  * @brief The panel is 1bpp and the kernel cuts at 128 (drm_fb_gray8_to_mono_line)
@@ -68,12 +86,11 @@ static const uint8_t PANEL_PAPER[3] = {0xC9, 0xCE, 0xC6};
 /* The shipped programs as they sit in the source tree; the device installs
  * them to /usr/share/qdos/programs. */
 #define SIM_SYSTEM_DIR "programs/system"
-/* Stands in for the card a PC drops .qd files onto. There is no gadget to hand
- * it over with, so sharing it here means the shell stops reading it and says
- * so, and your own file manager is the PC. */
+/* The inbox: what qdosctl uploads into, over the serial console, as on the
+ * device. Anything written to it directly is noticed too. */
 #define SIM_INBOX_DIR "qdos-inbox"
 
-/** @brief As many app folders as the card is watched into */
+/** @brief As many app folders as the inbox is watched into */
 #define QDOS_WATCH_SUBS 16
 
 typedef struct {
@@ -81,9 +98,6 @@ typedef struct {
 	SDL_Renderer* renderer;
 	SDL_Texture* texture;
 	bool running;
-
-	/** The card is a PC's to write, and so nothing the shell may read */
-	bool shared;
 	int scale;
 	const char* pending; ///< Rest of a text button still to be delivered
 	qdos_pad_face face;	 ///< Which keypad face is showing
@@ -98,7 +112,7 @@ typedef struct {
 	bool background;
 
 	/*
-	 * SDL_WaitEvent takes no extra descriptor, so the card's watch gets a
+	 * SDL_WaitEvent takes no extra descriptor, so the inbox's watch gets a
 	 * thread that pushes an event to wake the loop. A timeout on the wait
 	 * would have cost the wakeups an idle machine is not supposed to have.
 	 */
@@ -114,6 +128,10 @@ typedef struct {
 	SDL_Thread* watcher;
 	volatile bool store_dirty;
 
+#if SIM_SERIAL
+	sim_serial* serial;
+#endif
+
 	/** Staging buffer: the HAL speaks 8-bit gray, the texture wants RGB. */
 	uint8_t rgb[WINDOW_W * WINDOW_H * 3];
 } sim_state;
@@ -124,7 +142,7 @@ static bool is_dir(const char* dir, const char* name);
 #if SIM_WATCH
 #define WATCH_EVENTS (IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE | IN_CREATE)
 
-/** @brief The card and every app folder on it; inotify does not recurse */
+/** @brief The inbox and every app folder in it; inotify does not recurse */
 static void sim_watch_inbox(sim_state* st) {
 	if (st->watch_fd < 0) {
 		return;
@@ -194,11 +212,37 @@ static int SDLCALL sim_watch_thread(void* data) {
 		SDL_Event wake;
 		SDL_zero(wake);
 		wake.type = SDL_EVENT_USER;
+		wake.user.code = SIM_EVENT_WAKE;
 		SDL_PushEvent(&wake);
 	}
 	return 0;
 }
 #endif // SIM_WATCH
+
+#if SIM_SERIAL
+/* On the console's thread: SDL's queue is the one thing it may touch */
+static void sim_serial_key(void* user, const qdos_key_event* ev) {
+	(void)user;
+	SDL_Event event;
+	SDL_zero(event);
+	event.type = SDL_EVENT_USER;
+	event.user.code = SIM_EVENT_KEY;
+	event.user.data1 = (void*)(intptr_t)ev->key;
+	event.user.data2 = (void*)(intptr_t)(unsigned char)ev->ch;
+	SDL_PushEvent(&event);
+}
+
+static void sim_serial_touched(void* user) {
+	sim_state* st = (sim_state*)user;
+	st->store_dirty = true;
+
+	SDL_Event wake;
+	SDL_zero(wake);
+	wake.type = SDL_EVENT_USER;
+	wake.user.code = SIM_EVENT_WAKE;
+	SDL_PushEvent(&wake);
+}
+#endif // SIM_SERIAL
 
 static bool sim_time_of_day(qdos_hal* hal, int* seconds) {
 	(void)hal;
@@ -336,6 +380,22 @@ static int sim_init(qdos_hal* hal) {
 	}
 #endif
 
+#if SIM_SERIAL
+	const sim_serial_config serial = {
+			.inbox = dir_for(QDOS_SCOPE_INBOX),
+			.key = sim_serial_key,
+			.touched = sim_serial_touched,
+			.user = st,
+	};
+	st->serial = sim_serial_start(&serial);
+	if (st->serial != NULL) {
+		printf("qdos: serial console on %s -- qdosctl finds it\n", sim_serial_path(st->serial));
+	} else {
+		printf("qdos: no serial console: %s\n", strerror(errno));
+	}
+	fflush(stdout);
+#endif
+
 	st->running = true;
 	return 0;
 }
@@ -355,6 +415,11 @@ static void sim_shutdown(qdos_hal* hal) {
 	if (st->window) {
 		SDL_DestroyWindow(st->window);
 	}
+
+#if SIM_SERIAL
+	sim_serial_stop(st->serial);
+	st->serial = NULL;
+#endif
 
 #if SIM_WATCH
 	// Told to stop before being waited for: closing the descriptor it is
@@ -697,6 +762,15 @@ static bool sim_poll_key(qdos_hal* hal, qdos_key_event* out) {
 			st->running = false;
 			return false;
 
+		// A key typed at the serial console; a wake carries nothing
+		case SDL_EVENT_USER:
+			if (event.user.code == SIM_EVENT_KEY) {
+				out->key = (qdos_key)(intptr_t)event.user.data1;
+				out->ch = (char)(intptr_t)event.user.data2;
+				return true;
+			}
+			break;
+
 		// The surface was lost, and nothing else would repaint an idle shell
 		case SDL_EVENT_WINDOW_RESTORED:
 		case SDL_EVENT_WINDOW_EXPOSED:
@@ -898,11 +972,6 @@ static const char* dir_for(qdos_store_scope scope) {
 	}
 }
 
-/** @brief The device unmounts the inbox while a gadget has it; same answer */
-static bool scope_is_reachable(const sim_state* st, qdos_store_scope scope) {
-	return !(st->shared && scope == QDOS_SCOPE_INBOX);
-}
-
 static bool store_path(const char* dir, const char* name, char* buf, size_t cap) {
 	if (!qdos_store_name_ok(name)) {
 		return false;
@@ -924,9 +993,7 @@ static bool is_dir(const char* dir, const char* name) {
 
 static qdos_store_result sim_store_read(
 		qdos_hal* hal, qdos_store_scope scope, const char* name, void* buf, size_t cap, size_t* len) {
-	if (!scope_is_reachable((sim_state*)hal->impl, scope)) {
-		return QDOS_STORE_NOT_FOUND;
-	}
+	(void)hal;
 
 	char path[512];
 	if (!store_path(dir_for(scope), name, path, sizeof(path))) {
@@ -998,38 +1065,13 @@ static qdos_store_result sim_store_remove(qdos_hal* hal, const char* name) {
 }
 
 static bool sim_store_path(qdos_hal* hal, qdos_store_scope scope, const char* name, char* buf, size_t cap) {
-	if (!scope_is_reachable((sim_state*)hal->impl, scope)) {
-		return false;
-	}
+	(void)hal;
 	return store_path(dir_for(scope), name, buf, cap);
-}
-
-/**
- * @brief Hand the card over, or take it back
- *
- * No gadget to simulate, but the half the shell copes with is real: the inbox
- * goes quiet, and is read afresh when it comes back.
- */
-static int sim_usb_export(qdos_hal* hal, bool on) {
-	sim_state* st = (sim_state*)hal->impl;
-
-	st->shared = on;
-	if (on) {
-		printf("qdos: card shared -- drop .qd, lib*.so or an app folder in %s/\n", dir_for(QDOS_SCOPE_INBOX));
-	} else {
-		printf("qdos: card taken back\n");
-	}
-	fflush(stdout);
-
-	return 0;
 }
 
 static qdos_store_result sim_store_list(
 		qdos_hal* hal, qdos_store_scope scope, const char* folder, qdos_store_visit visit, void* user) {
-	// An empty mount point rather than an error
-	if (!scope_is_reachable((sim_state*)hal->impl, scope)) {
-		return QDOS_STORE_OK;
-	}
+	(void)hal;
 
 	char root[512];
 	if (folder == NULL || *folder == '\0') {
@@ -1088,7 +1130,6 @@ void qdos_sim_hal(qdos_hal* hal) {
 	hal->store_remove = sim_store_remove;
 	hal->store_list = sim_store_list;
 	hal->store_path = sim_store_path;
-	hal->usb_export = sim_usb_export;
 	hal->store_changed = sim_store_changed;
 	hal->time_of_day = sim_time_of_day;
 	hal->battery = sim_battery;

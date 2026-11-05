@@ -50,6 +50,7 @@ idf_component_register(
 		"${QDOS}/src/ui/font8x16.c"
 		"${QDOS}/src/ui/splash.c"
 		"${QDOS}/src/hal/filestore.c"
+		"${QDOS}/src/hal/serial_console.c"
 		"${QDOS}/src/hal/storename.c"
 		"${QDOS}/src/hal/wallclock.c"
 	INCLUDE_DIRS

@@ -7,8 +7,13 @@ The OS is C. The shell is [Quadrate](https://quad.r8.rs) — a stack language, o
 device whose natural input model is RPN. The calculator's input language and its
 system language are the same thing.
 
-Target: **Raspberry Pi Zero W** (ARMv6 / ARM1176JZF-S at 1 GHz, 512 MB). The
-Zero 2 W (ARMv8 / Cortex-A53) is kept as a second target — see
+Target: **ESP32-S3** (two Xtensa LX7 cores at 240 MHz, 512 KB of RAM and 8 MB
+of PSRAM), with no operating system underneath — see [On the
+ESP32-S3](#on-the-esp32-s3). A calculator is on the moment a key is pressed,
+and a Linux board takes seconds to boot with no suspend to hide them behind.
+
+The **Raspberry Pi Zero W** (ARMv6 / ARM1176JZF-S at 1 GHz, 512 MB) is a second
+target, on Linux, with the Zero 2 W (ARMv8 / Cortex-A53) beside it — see
 [Cross-compiling for the Pi](#cross-compiling-for-the-pi).
 
 ## Architecture
@@ -50,7 +55,8 @@ interpreter in the low hundreds of microseconds. One of those is a calculator.
 
 The footprint column matters as much as the latency: the JIT path needs a C
 toolchain present at run time, because `qd_build()` spawns one, and a 164 MB
-`libLLVM.so` against the board's 512 MB is its own argument.
+`libLLVM.so` against the board's 512 MB is its own argument. On the ESP32-S3,
+with 8 MB of PSRAM and no toolchain, the interpreter is the only path there is.
 
 ### Errors must not power the machine off
 
@@ -207,7 +213,12 @@ about fifty lines behind a boundary that does not move, which is also what keeps
 the option of a different loader open: if the firmware ever goes static and
 `dlopen` goes with it, the module's source does not change.
 
-Which raises the question of whether it should be static. The two build paths
+The ESP32-S3 is that case: it has no dynamic linker, so its modules are linked
+into the firmware and listed in `esp32/main/builtins.c` (`QDOS_NO_DLOPEN`). The
+app folder still holds a file of the module's name, and opening it is a lookup
+instead of `dlopen`. The browser build does the same.
+
+On the Pi, that raises the question of whether it should be static. The two build paths
 already answer differently and both are right: `stage-to-raspios.sh` copies one
 binary onto a rootfs it does not control, which is what `-Dstatic=true` is for,
 while the Buildroot image builds the binary and its libc together and has no
@@ -313,7 +324,11 @@ there is only a battery, once a minute to look at it. One wakeup a minute
 against none. With the clock unset and no battery -- the Pi has no RTC -- the
 band says nothing and the wait goes back to having no timeout.
 
-Auto-off is the only thing here that saves real power, because the Pi Zero W has
+On the ESP32-S3, off is deep sleep: the session is saved, any key wakes the
+chip, and waking is a fresh start that restores it. Auto-off and PWR both go
+there, and that is what saves power.
+
+On the Pi, auto-off is the only thing here that saves real power, because the Pi Zero W has
 no usable suspend: blanking the display would save microwatts against an SoC
 floor of something like half a watt. After ten minutes idle (a setting; `NEVER`,
 5, 10, 30 or 60) the machine warns for ten seconds and then saves the session and
@@ -350,6 +365,21 @@ Default behaviour is unchanged throughout — an embedder that never arms recove
 still gets the diagnostic and `_exit(1)`. Quadrate's suite passes: 2060 tests.
 
 ## Running on hardware
+
+### On the ESP32-S3
+
+The firmware is an ESP-IDF project of its own, in `esp32/`: the same shell and
+interpreter, compiled with Quadrate from source, over a backend that drives the
+panel on SPI, scans the key matrix and puts the chip into deep sleep for off.
+[esp32/README.md](../esp32/README.md) has the build, the wiring, the memory
+budget and the partition layout.
+
+`make esp32-qemu` boots it under Espressif's QEMU, which covers the shell on
+the real architecture but not the panel, the key matrix or deep-sleep wake.
+
+Programs reach its inbox over the USB serial console, through `qdosctl`. The
+console is `src/hal/serial_console.c`, which the desktop simulator also serves
+on a pseudo-terminal, so `qdosctl` can be pointed at either.
 
 ### Cross-compiling for the Pi
 

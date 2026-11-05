@@ -3,8 +3,8 @@
 #
 # qdosctl - talk to a QDOS calculator over its USB serial console
 #
-# The other end is esp32/main/serial_keys.c and esp32/main/upload.c. See
-# qdosctl(1).
+# The other end is src/hal/serial_console.c, which the calculator serves on its
+# USB port and the simulator on a pseudo-terminal. See qdosctl(1).
 
 set -uo pipefail
 
@@ -76,7 +76,7 @@ EOF
 # ---- the port ---------------------------------------------------------------
 
 # The calculator's own USB serial unit, by its stable name, or else the first
-# CDC ACM device
+# CDC ACM device, or else a running simulator's pseudo-terminal
 find_port() {
 	local dev
 	for dev in /dev/serial/by-id/usb-Espressif*; do
@@ -85,12 +85,14 @@ find_port() {
 	for dev in /dev/ttyACM*; do
 		[[ -e "$dev" ]] && { printf '%s\n' "$dev"; return 0; }
 	done
+	dev="${XDG_RUNTIME_DIR:-/tmp}/qdos-sim-tty"
+	[[ -e "$dev" ]] && { readlink -f "$dev"; return 0; }
 	return 1
 }
 
 open_port() {
 	if [[ -z "$PORT" ]]; then
-		PORT=$(find_port) || die "$EX_PORT" "no calculator found; plug it in by its USB port, or give --port"
+		PORT=$(find_port) || die "$EX_PORT" "no calculator found; plug it in by its USB port, start the simulator, or give --port"
 	fi
 	[[ -e "$PORT" ]] || die "$EX_PORT" "$PORT: no such device"
 

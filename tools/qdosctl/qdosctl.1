@@ -121,7 +121,7 @@ The serial port. Without it, the calculator is found by its USB name under
 .IR /dev/serial/by\-id ,
 and failing that the first
 .I /dev/ttyACM*
-is taken.
+is taken, and failing that a running simulator's.
 .TP
 .BR \-q ", " \-\-quiet
 Print only errors.
@@ -187,6 +187,18 @@ qdosctl key f2 enter
 .TP
 .I /dev/serial/by\-id/usb\-Espressif*
 The calculator, as udev names it.
+.TP
+.I $XDG_RUNTIME_DIR/qdos\-sim\-tty
+The simulator's serial console, a link to the pseudo\-terminal it serves the
+same protocol on, there while it runs; in
+.I /tmp
+when
+.B XDG_RUNTIME_DIR
+is unset. Everything above works against it, uploading into its
+.IR qdos\-inbox/ ,
+except
+.BR log ,
+since the simulator logs to its own terminal.
 .SH NOTES
 Using the port needs membership of the group that owns it:
 .B uucp
@@ -207,7 +219,7 @@ or
 the file's bytes. The calculator answers each with a line beginning
 .BR "QDUP " ,
 among its log. See
-.I esp32/main/upload.c
+.I src/hal/serial_console.c
 in the QDOS sources.
 .PP
 Native modules cannot be uploaded: the calculator has no dynamic linker, so

@@ -11,7 +11,7 @@ _qdosctl() {
 
 	case "$prev" in
 	-p | --port)
-		local -a ports=(/dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB*)
+		local -a ports=(/dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB* "${XDG_RUNTIME_DIR:-/tmp}/qdos-sim-tty")
 		local p
 		COMPREPLY=()
 		for p in "${ports[@]}"; do

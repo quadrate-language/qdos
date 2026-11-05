@@ -112,12 +112,28 @@ test('native', test_native, depends: module_deps)
 # The simulator backend is only built where the simulator is, and it needs SDL
 # and a video driver -- the dummy one, since this never shows a window.
 if get_option('sim')
-	test_simhal = executable('test_simhal', ['test_simhal.c', '../src/hal/sim/sim_sdl3.c'],
+	test_simhal = executable('test_simhal',
+			['test_simhal.c', '../src/hal/sim/sim_sdl3.c', '../src/hal/sim/sim_serial.c'],
 			include_directories: qdos_inc,
 			dependencies: [qdos_core_dep, dependency('sdl3')],
 			link_language: 'cpp')
-	test('simhal', test_simhal, env: {'SDL_VIDEODRIVER': 'dummy'}, timeout: 30)
+	# Its own runtime directory, so the serial console's link is not taken
+	# from a simulator someone is running
+	test('simhal', test_simhal,
+			env: {
+				'SDL_VIDEODRIVER': 'dummy',
+				'XDG_RUNTIME_DIR': meson.current_build_dir(),
+				'QDOS_INBOX': meson.current_build_dir() / 'simhal-inbox',
+			},
+			timeout: 30)
 endif
+
+test_serial = executable('test_serial', 'test_serial.c',
+		include_directories: qdos_inc,
+		dependencies: [qdos_core_dep],
+		c_args: ['-DINBOX_DIR="' + meson.current_build_dir() / 'serial-inbox' + '"'],
+		link_language: 'cpp')
+test('serial', test_serial)
 
 test_lint = executable('test_lint', 'test_lint.c',
 		include_directories: qdos_inc,

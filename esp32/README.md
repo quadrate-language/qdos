@@ -4,16 +4,16 @@ The calculator on a microcontroller instead of a Pi: no Linux, no boot, and
 deep sleep between sessions. The shell, the interpreter and the programs are
 the same; only the backend underneath is new.
 
-**Target: an ESP32-S3 with 8 MB of octal PSRAM** — an N8R8 or N16R8 module,
-such as the ESP32-S3-DevKitC-1-N16R8. A chip without PSRAM cannot hold it: the
+**Target: an ESP32-S3 with 8 MB of octal PSRAM** — the ESP32-S3-WROOM-1-N16R8
+module, which the ESP32-S3-DevKitC-1-N16R8 carries; an N8R8 runs it too, short
+of DOOM. A chip without PSRAM cannot hold it: the
 shell's state and a parsed program need well over the 320 KB a plain ESP32
 has. The numbers are below.
 
-**Nothing here has run on a real chip.** It builds, and it runs under
-Espressif's QEMU: arithmetic, recursion to the depth limit, every system app,
-power-off, and the session coming back on the next boot. The panel driver, the
-key matrix and deep-sleep wake are written but untested, because QEMU emulates
-none of them.
+It runs on the chip, and under Espressif's QEMU, which covers arithmetic,
+recursion to the depth limit, every system app, power-off, and the session
+coming back on the next boot, though not the panel, the key matrix or
+deep-sleep wake.
 
 ## Building
 
@@ -108,7 +108,8 @@ The shell reads the inbox again as soon as a file lands, so a new app is in
 APPS without a restart. Nothing else may have the port open meanwhile, a
 monitor included. An upload is a Ctrl-B and a command line, which typing never
 sends, then the file's bytes; each file is checked against its CRC-32 and
-renamed into place whole. See `main/upload.c` and qdosctl(1). A native module
+renamed into place whole. See `src/hal/serial_console.c`, which the simulator
+serves too, and qdosctl(1). A native module
 cannot be uploaded: with no dynamic linker it has to be built in, as DOOM is.
 
 ## Power
@@ -191,4 +192,6 @@ goes to the panel whole, at 2 MHz, which is about 50 ms of the frame time.
   `QDOS_CAPTURE_STDIO`, which catches what `print` writes through a per-task
   `stdout` rather than a pipe.
 - `main/`: the backend (`hal_esp32.c`), the panel (`sharp_lcd.c`), the matrix
-  (`keymatrix.c`), the console keyboard (`serial_keys.c`) and the entry point.
+  (`keymatrix.c`), the USB port's half of the serial console (`serial_keys.c`;
+  what its bytes mean is `src/hal/serial_console.c`, shared with the
+  simulator) and the entry point.

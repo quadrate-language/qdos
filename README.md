@@ -4,8 +4,12 @@ An operating system for a homebuilt calculator, shipped as firmware. The OS is C
 — bar one file that reads Quadrate's syntax tree, which has no C interface — and
 the shell is [Quadrate](https://github.com/quadrate-language/quadrate).
 
-Target: **Raspberry Pi Zero W**, 400x240 Sharp Memory LCD, 54-key keypad. An
-**ESP32-S3** with 8 MB of PSRAM is a second target; see [esp32/README.md](./esp32/README.md).
+Target: **ESP32-S3** with 8 MB of PSRAM (an ESP32-S3-WROOM-1-N16R8 module),
+400x240 Sharp Memory LCD, 54-key keypad; see [esp32/README.md](./esp32/README.md).
+A calculator has to be on the moment a key is pressed, which a microcontroller
+is and a Linux board is not. The **Raspberry Pi Zero W** is a second target,
+with a Linux backend and a Buildroot image of its own; see
+[firmware/README.md](./firmware/README.md).
 See [docs/design.md](./docs/design.md) for why it is built this way, and
 [docs/hardware.md](./docs/hardware.md) for the parts it is built from.
 
@@ -453,7 +457,11 @@ const qdos_native_module qdos_module = {
 ```bash
 ./cross/build-module.sh foo.c                    # Zero W  -> libfoo.so
 QDOS_ARCH=aarch64 ./cross/build-module.sh foo.c  # Zero 2 W
+cc -shared -fPIC -I include foo.c -o qdos-store/libfoo.so   # the simulator
 ```
+
+The ESP32-S3 has no dynamic linker: there a module is added to the firmware's
+build and to the table in `esp32/main/builtins.c`, as DOOM is.
 
 Then `foo::triple` is callable from the line, from a stored program, and from
 the catalog, and `Tab` completes its words. The signature is what the
@@ -511,9 +519,40 @@ meson test -C build                     # Full suite
 ./tests/run-device-tests.sh             # Exercise /dev/uinput and /dev/fb0 for real
 ./cross/run.sh                          # Cross-compile ARMv6, run tests under QEMU
 QDOS_ARCH=aarch64 ./cross/run.sh        # ... and ARM64
+make esp32-qemu                         # The ESP32-S3 firmware, under Espressif's QEMU
 ```
 
 ## Running on hardware
+
+### ESP32-S3
+
+```bash
+cd esp32 && idf.py build flash monitor
+qdosctl upload hello.qd ../qdos-doom/doom   # Onto the inbox, over the USB port
+```
+
+No Linux underneath: the same shell over a backend of its own, with the panel
+on SPI, the keypad as a GPIO matrix and deep sleep for off. Programs and apps
+reach the inbox over the USB serial port with `qdosctl`; there is no USB drive.
+See [esp32/README.md](./esp32/README.md).
+
+### qdosctl and the simulator
+
+The simulator serves the same serial console on a pseudo-terminal, from the
+same code (`src/hal/serial_console.c`), so `qdosctl` drives it as it drives the
+calculator: uploads land in `qdos-inbox/`, and typing at it is the keyboard.
+It is found through a link at `$XDG_RUNTIME_DIR/qdos-sim-tty` while the
+simulator runs, after any calculator that is plugged in:
+
+```bash
+./build/qdos &                          # says which terminal it is on
+qdosctl upload hello.qd                 # into qdos-inbox/, and a word at once
+qdosctl run 'hello'
+```
+
+Not on Android or in a browser, which have no `qdosctl` to reach it.
+
+### Raspberry Pi
 
 `QDOS_BOARD` selects the target: `zerow` (default, ARMv6) or `zero2w` (ARMv8).
 
@@ -532,25 +571,15 @@ See [firmware/README.md](./firmware/README.md) for what the image contains.
 `upload.sh` writes the same FAT partition the USB gadget hands to a PC, so it
 is the same act as dropping a file, or an app's folder, on the drive that
 appears when the machine is plugged in — minus the gadget, which needs a USB
-device controller and so needs the board. The simulator has the other half: sharing the card there makes
-QDOS stop reading `qdos-inbox/` and hands it to you, and taking it back reads
-it afresh, which is the whole of what the shell has to cope with either way.
-
-### ESP32-S3
-
-```bash
-cd esp32 && idf.py build flash monitor
-```
-
-No Linux underneath: the same shell over a backend of its own, with the panel
-on SPI, the keypad as a GPIO matrix and deep sleep for off. No native modules
-and no USB drive yet. See [esp32/README.md](./esp32/README.md).
+device controller and so needs the board. The Pi's backend offers the drive
+from `SETTINGS`, which hands the inbox to a PC and reads it afresh when it
+comes back.
 
 ## Status
 
-Early. The simulator runs; it cross-compiles to ARMv6 and ARM64 and passes its
-suite under emulation. It has never run on a Pi. The ESP32-S3 build runs under
-Espressif's QEMU and has never run on a chip.
+Early. The simulator runs, and the firmware runs on an ESP32-S3. The Pi build
+cross-compiles to ARMv6 and ARM64 and passes its suite under emulation; it has
+never run on a Pi.
 
 ## Links
 
