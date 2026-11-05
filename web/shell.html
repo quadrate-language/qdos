@@ -812,10 +812,12 @@ pi sqrt                 // and the square root of pi</code></pre>
 				</p>
 				<div class="try">
 					<button class="seq" type="button"
-						data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT5"},{"text":"9-x^2"},{"key":"ENTER"},{"key":"SOFT5"},{"key":"SOFT3"},{"text":"7"},{"text":"3"},{"key":"NEG"},{"key":"ENTER"},{"text":"3"},{"key":"ENTER"}]'
-						aria-label="On the calculator: PLOT, type 9-x^2, Enter, GRAPH, CALC, 7 for the integral, 3, plus-minus, Enter, 3, Enter">
+						data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT5"},{"text":"9-"},{"key":"SOFT2"},{"text":"^2"},{"key":"ENTER"},{"key":"SOFT5"},{"key":"SOFT3"},{"text":"7"},{"text":"3"},{"key":"NEG"},{"key":"ENTER"},{"text":"3"},{"key":"ENTER"}]'
+						aria-label="On the calculator: PLOT, type 9 minus, the x soft key, ^2, Enter, GRAPH, CALC, 7 for the integral, 3, plus-minus, Enter, 3, Enter">
 						<span class="cap soft">PLOT</span>
-						<span class="typed">9-x^2</span>
+						<span class="typed">9-</span>
+						<span class="cap soft">x</span>
+						<span class="typed">^2</span>
 						<span class="cap enter">ENTER</span>
 						<span class="cap soft">GRAPH</span>
 						<span class="cap soft">CALC</span>
@@ -835,34 +837,31 @@ pi sqrt                 // and the square root of pi</code></pre>
 				<p>
 					Everything the keys do, a program can do: <code>cfg::</code> sets the angle
 					mode, and <code>gr::</code> writes the Y= slots, picks a zoom and presses
-					GRAPH. This one builds sine's Taylor series as text, a term longer each
-					time round the loop, and graphs all six. Every term hugs the curve a
-					little further out.
+					GRAPH. The <code>taylor</code> app builds sine's Taylor series as text, a
+					term longer each time round a loop, and graphs all six: every term hugs
+					the curve a little further out, and when you leave, your own Y= and
+					settings are put back as they were. Read it in the calculator's own
+					editor, then run it.
 				</p>
-<pre><code class="qd">// One term of the series, as a formula: -x^3/6, +x^5/120, ...
-def term(k:i64 -- s:str) {
-	k 2 * 1 + -&gt; n
-	k 2 % 1 == if { "-x^" } else { "+x^" }
-	n ui::str ui::cat  "/" ui::cat  n fac ui::str ui::cat
-}
-
-// sin in Y1, and in Y2 to Y6 its series, one term longer each
-fn taylor( -- ) {
-	"rad" cfg::set_angle
-	"sin(x)" 1 gr::set_slot
-	"x" -&gt; p
-	1 6 1 for k {
-		p k 1 + gr::set_slot      // x, then x-x^3/6, ...
-		p k term ui::cat -&gt; p
-	}
-	"trig" gr::zoom
-	gr::graph
-}
-
-taylor</code></pre>
-				<div class="run">
-					<button class="run-button" type="button">Run taylor</button>
-					<span class="result">Esc leaves the graph</span>
+				<div class="try">
+					<button class="seq" type="button"
+						data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"SOFT1"},{"text":"\"taylor\" edit"},{"key":"ENTER"}]'
+						aria-label="On the calculator: LINE, type quote taylor quote edit, Enter">
+						<span class="cap soft">LINE</span>
+						<span class="typed">"taylor" edit</span>
+						<span class="cap enter">ENTER</span>
+					</button>
+					<span class="result">opens it in the editor</span>
+				</div>
+				<div class="try">
+					<button class="seq" type="button"
+						data-seq='[{"key":"ESC"},{"key":"ESC"},{"key":"ESC"},{"key":"SOFT1"},{"text":"taylor"},{"key":"ENTER"}]'
+						aria-label="On the calculator: LINE, type taylor, Enter">
+						<span class="cap soft">LINE</span>
+						<span class="typed">taylor</span>
+						<span class="cap enter">ENTER</span>
+					</button>
+					<span class="result">graphs it; Esc leaves</span>
 				</div>
 			</article>
 
@@ -939,6 +938,7 @@ taylor</code></pre>
 				<dt>quad</dt><dd>Roots, vertex and graph of <i>ax</i>² + <i>bx</i> + <i>c</i>.</dd>
 				<dt>spring</dt><dd>A damped spring in real time, its height traced against time.</dd>
 				<dt>sudoku</dt><dd>Sudoku on the number keys, saved as you go.</dd>
+				<dt>taylor</dt><dd>Sine and five of its Taylor polynomials, written into Y= and graphed.</dd>
 				<dt>triangle</dt><dd>Solve a triangle from any three of its parts.</dd>
 				<dt>units</dt><dd>A value in one unit, shown in every other unit of its kind.</dd>
 			</dl>
@@ -1020,6 +1020,11 @@ taylor</code></pre>
 
 	var Module = {
 		canvas: canvas,
+		// Fetched under the build's own stamp, which web/stamp.cmake writes in:
+		// a page cached from one deploy must not run the code of another
+		locateFile: function (path, prefix) {
+			return prefix + path + '?v=__QDOS_BUILD__';
+		},
 		print: function (text) { console.log(text); },
 		printErr: function (text) { console.error(text); },
 		setStatus: function (text) {
@@ -1124,6 +1129,9 @@ taylor</code></pre>
 
 	document.querySelectorAll('.program').forEach(function (program) {
 		var code = program.querySelector('code.qd');
+		if (!code) {
+			return; // keys of its own, in .try, rather than a listing to Run
+		}
 		var source = code.textContent;
 		code.innerHTML = highlight(source);
 

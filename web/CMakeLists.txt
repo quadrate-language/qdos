@@ -223,6 +223,11 @@ set_property(TARGET qdos APPEND PROPERTY LINK_DEPENDS
 
 set_target_properties(qdos PROPERTIES SUFFIX ".html")
 
+# The page fetches its code under a hash of it; see stamp.cmake
+add_custom_command(TARGET qdos POST_BUILD
+	COMMAND "${CMAKE_COMMAND}" "-Ddir=${CMAKE_CURRENT_BINARY_DIR}" -P "${CMAKE_CURRENT_LIST_DIR}/stamp.cmake"
+	VERBATIM)
+
 target_link_libraries(qdos PRIVATE quadrate)
 target_link_options(qdos PRIVATE
 	--use-port=sdl3

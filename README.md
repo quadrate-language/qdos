@@ -380,6 +380,13 @@ way is saved, as one changed on the page is.
 | `gr::grid ( -- on )`, `gr::set_grid ( on -- )`, `gr::axes`, `gr::set_axes` | FORMAT's grid and axes |
 | `gr::graph ( -- )` | GRAPH: draws what is on, waiting in an app until ESC |
 
+**An app is a visitor.** Whatever it changes through `cfg::` and `gr::` is put
+back when it ends, however it ends — returned, left with ESC, failed or
+stopped — so running one never leaves the user in radians or with their Y=
+overwritten. An app whose purpose is the change says so before it ends:
+`cfg::keep ( -- )` keeps its settings, `gr::keep ( -- )` its slots, window and
+format. At the prompt nothing is put back: that is the user changing things.
+
 Names are taken in either case. A body `gr::set_slot` cannot declare is kept,
 marked `ERR` as Y= keeps it, and the word fails with the reason. `FIT` and
 `BOX` are not offered by `gr::zoom`: one fits what a graph on screen has drawn,
@@ -392,12 +399,16 @@ the other is a cursor.
 gr::graph
 ```
 
-The firmware ships seven apps written this way, each small enough to read and
+`programs/system/taylor` is a whole app this way, and leaves nothing changed
+behind it.
+
+The firmware ships eight apps written this way, each small enough to read and
 edit on the calculator itself: `quad` (roots, complex ones included, and the
 parabola), `units` (a value in every other unit of its kind), `fin` (loan
 payment, amount, rate or term from the other three), `triangle` (any triangle from
 three of its parts), `clock` (a stopwatch and a countdown timer), `mandel`
-(the Mandelbrot set, to pan and zoom) and `sudoku`.
+(the Mandelbrot set, to pan and zoom), `sudoku`, and `taylor` (sine and its
+Taylor polynomials, written into Y= with `gr::` and graphed).
 Sudoku takes three presses a cell, each digit standing where it sits on the
 keypad with 7 at the top left: the box, the cell in the box, then the number.
 

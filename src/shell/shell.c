@@ -427,6 +427,8 @@ struct qdos_shell {
 	qdos_mode edit_from;
 
 	qd_interp* app_interp;				  ///< The app running now, whose words ui:: and the graph words evaluate
+	bool app_keep_cfg;					  ///< The running app called cfg::keep: its settings stay
+	bool app_keep_gr;					  ///< and gr::keep: its slots, window and format stay
 	char app_name[QDOS_PROGRAM_NAME_MAX]; ///< Its name, whose folder ui::save writes into
 	qdos_mode modal_home;				  ///< Where a page a program opened is finished
 	bool ui_window_set;
@@ -3178,6 +3180,83 @@ static void check_program(qdos_shell* sh) {
 	}
 }
 
+/*
+ * What cfg:: and gr:: can change, as an app found it. An app is a visitor:
+ * whatever it changed is put back when it ends, however it ends, unless it
+ * said with cfg::keep or gr::keep that the change is what it was for.
+ */
+typedef struct {
+	bool degrees;
+	qdos_cpx_mode complex;
+	int decimals;
+	int notation;
+	size_t auto_off;
+	plot_slot slots[PLOT_SLOTS];
+	qdos_graph_view plot_view;
+	bool grid_on;
+	bool axes_off;
+} app_found;
+
+static void app_found_take(const qdos_shell* sh, app_found* found) {
+	found->degrees = qdos_math_degrees();
+	found->complex = qdos_cpx_get_mode();
+	found->decimals = sh->decimals;
+	found->notation = sh->notation;
+	found->auto_off = sh->auto_off;
+	memcpy(found->slots, sh->slots, sizeof(found->slots));
+	found->plot_view = sh->plot_view;
+	found->grid_on = sh->grid_on;
+	found->axes_off = sh->axes_off;
+}
+
+static void window_save(qdos_shell* sh);
+static void save_settings(qdos_shell* sh);
+static bool slot_declare(qdos_shell* sh, size_t i);
+static void slot_save(qdos_shell* sh, size_t i);
+
+/** @brief Put back what the app changed and did not keep, writing only what differs */
+static void app_found_put_back(qdos_shell* sh, const app_found* found, bool cfg, bool gr) {
+	bool settings = false;
+	if (cfg) {
+		settings = found->degrees != qdos_math_degrees() || found->complex != qdos_cpx_get_mode() ||
+				   found->decimals != sh->decimals || found->notation != sh->notation ||
+				   found->auto_off != sh->auto_off;
+		qdos_math_set_degrees(found->degrees);
+		qdos_cpx_set_mode(found->complex);
+		sh->decimals = found->decimals;
+		sh->notation = found->notation;
+		sh->auto_off = found->auto_off;
+	}
+	if (gr) {
+		for (size_t i = 0; i < PLOT_SLOTS; i++) {
+			plot_slot* slot = &sh->slots[i];
+			const bool body = strcmp(slot->body, found->slots[i].body) != 0;
+			if (!body && slot->on == found->slots[i].on) {
+				continue;
+			}
+			snprintf(slot->body, sizeof(slot->body), "%s", found->slots[i].body);
+			slot->on = found->slots[i].on;
+			if (body) {
+				slot_declare(sh, i);
+			}
+			slot_save(sh, i);
+		}
+		const qdos_graph_view* v = &found->plot_view;
+		const qdos_graph_view* now = &sh->plot_view;
+		if (v->x0 != now->x0 || v->x1 != now->x1 || v->y0 != now->y0 || v->y1 != now->y1 || v->xscl != now->xscl ||
+				v->yscl != now->yscl) {
+			sh->plot_view = found->plot_view;
+			window_save(sh);
+		}
+		settings = settings || found->grid_on != sh->grid_on || found->axes_off != sh->axes_off;
+		sh->grid_on = found->grid_on;
+		sh->axes_off = found->axes_off;
+	}
+	if (settings) {
+		save_settings(sh);
+	}
+}
+
 /**
  * @brief Run an app, which is a folder on the card holding main.qd
  *
@@ -3205,6 +3284,11 @@ static int run_app(qd_context* ctx, void* userdata) {
 
 	qd_interp* outer = sh->app_interp;
 	const size_t answers_before = sh->ui_answer_count;
+	app_found found;
+	app_found_take(sh, &found);
+	const bool keep_cfg_before = sh->app_keep_cfg, keep_gr_before = sh->app_keep_gr;
+	sh->app_keep_cfg = false;
+	sh->app_keep_gr = false;
 	sh->app_interp = app;
 	sh->ui_window_set = false;
 	sh->ui_points = false;
@@ -3233,6 +3317,11 @@ static int run_app(qd_context* ctx, void* userdata) {
 	sh->app_interp = outer;
 	sh->app_name[0] = '\0';
 	qd_interp_destroy(app);
+
+	// Before anything else, and on every way out: stopped and failed apps too
+	app_found_put_back(sh, &found, !sh->app_keep_cfg, !sh->app_keep_gr);
+	sh->app_keep_cfg = keep_cfg_before;
+	sh->app_keep_gr = keep_gr_before;
 
 	// Stopped rather than finished, so whatever ran the app stops too
 	if (qdos_natives_broken()) {
@@ -3949,9 +4038,18 @@ static qd_interp* word_interp(const qdos_shell* sh) {
 	return (sh->app_interp != NULL) ? sh->app_interp : sh->interp;
 }
 
+/*
+ * Y1 to Y6 are declared in the session, whatever is running: a slot's body may
+ * use the session's words, and an app that writes one with gr::set_slot and
+ * graphs it with gr::graph has no Y1 of its own.
+ */
+static bool is_slot_word(const char* word) {
+	return word[0] == 'Y' && word[1] >= '1' && word[1] < '1' + PLOT_SLOTS && word[2] == '\0';
+}
+
 static bool graph_run(
 		qdos_shell* sh, const char* word, const double* in, size_t count, double* out, size_t outs, const char* shape) {
-	qd_interp* interp = word_interp(sh);
+	qd_interp* interp = is_slot_word(word) ? sh->interp : word_interp(sh);
 	qd_context* ctx = qd_interp_context(interp);
 	const size_t before = qd_interp_depth(interp);
 	for (size_t k = 0; k < count; k++) {
@@ -9613,6 +9711,20 @@ static int native_gr_set_axes(qd_context* ctx, void* userdata) {
 	return 0;
 }
 
+/** `cfg::keep` - ( -- ) the settings this app changed stay when it ends; at the prompt nothing is put back anyway */
+static int native_cfg_keep(qd_context* ctx, void* userdata) {
+	(void)ctx;
+	((qdos_shell*)userdata)->app_keep_cfg = true;
+	return 0;
+}
+
+/** `gr::keep` - ( -- ) and the Y= slots, window and format */
+static int native_gr_keep(qd_context* ctx, void* userdata) {
+	(void)ctx;
+	((qdos_shell*)userdata)->app_keep_gr = true;
+	return 0;
+}
+
 /**
  * `gr::graph` - ( -- ) GRAPH, as the key on Y= does
  *
@@ -9756,6 +9868,7 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "cfg::set_complex", "(s:str -- )", native_cfg_set_complex, sh);
 	qd_interp_register(interp, "cfg::autooff", "( -- min:i64)", native_cfg_autooff, sh);
 	qd_interp_register(interp, "cfg::set_autooff", "(min:i64 -- )", native_cfg_set_autooff, sh);
+	qd_interp_register(interp, "cfg::keep", "( -- )", native_cfg_keep, sh);
 
 	// The graphing pages behind PLOT
 	qd_interp_register(interp, "gr::slot", "(n:i64 -- body:str)", native_gr_slot, sh);
@@ -9770,6 +9883,7 @@ static void register_natives(qdos_shell* sh, qd_interp* interp) {
 	qd_interp_register(interp, "gr::axes", "( -- on:i64)", native_gr_axes, sh);
 	qd_interp_register(interp, "gr::set_axes", "(on:i64 -- )", native_gr_set_axes, sh);
 	qd_interp_register(interp, "gr::graph", "( -- )", native_gr_graph, sh);
+	qd_interp_register(interp, "gr::keep", "( -- )", native_gr_keep, sh);
 
 	qdos_register_math(interp);
 	qdos_register_complex(interp);

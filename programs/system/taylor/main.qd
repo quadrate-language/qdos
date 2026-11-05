@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// sin and the Taylor polynomials that close in on it, in Y1 to Y6
+
+// One term of the series, as a formula: -x^3/6, +x^5/120, ...
+def term(k:i64 -- s:str) {
+	k 2 * 1 + -> n
+	k 2 % 1 == if { "-x^" } else { "+x^" }
+	n ui::str ui::cat "/" ui::cat n fac ui::str ui::cat
+}
+
+// The angle mode, the slots and the zoom are put back when it ends
+fn main() {
+	"rad" cfg::set_angle
+	"sin(x)" 1 gr::set_slot
+	"x" -> p
+	1 6 1 for k {                   // Y2 is x, Y3 x-x^3/6, and so on
+		p k 1 + gr::set_slot
+		p k term ui::cat -> p
+	}
+	"trig" gr::zoom
+	gr::graph                       // until ESC
+}

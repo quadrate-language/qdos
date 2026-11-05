@@ -7829,6 +7829,47 @@ static void run_script_app_frame(const qdos_key_event* script, size_t count, uin
 	memcpy(fb_out, st.prev_fb, (size_t)QDOS_SCREEN_W * QDOS_SCREEN_H);
 }
 
+/** taylor: sin and five polynomials drawn, and the user's angle and slots put back after. */
+static void test_sample_taylor(void) {
+	store_reset();
+	seed_sample("taylor");
+
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"deg\" cfg::set_angle");
+	type_more(script, &n, "\"x+1\" 4 gr::set_slot");
+	type_more(script, &n, "taylor");
+	const size_t graphed = n;
+	key(script, &n, QDOS_KEY_CLEAR); // ESC ends the app
+	type_more(script, &n, "cfg::angle 4 gr::slot");
+
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	static uint8_t graph[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_script_mid(script, n, graphed, fb, graph);
+
+	char line[EDIT_COLS_T + 1];
+	read_small(graph, READOUT_Y0_T, line, sizeof(line));
+	CHECK(strstr(line, "Y1 Y2 Y3 Y4 Y5 Y6") == line);
+	CHECK(strstr(line, "X -6.545:6.545") != NULL); // ZOOM TRIG, in radians
+
+	// And the curves are there, not only their names: sin crosses the left
+	// half of the plot, so ink is found off the axes there
+	size_t ink = 0;
+	for (int y = ROW_CONTENT_FIRST_T * QDOS_CELL_H; y < 8 * QDOS_CELL_H; y++) {
+		for (int x = 10; x < QDOS_SCREEN_W / 2 - 10; x++) {
+			ink += graph[(size_t)y * QDOS_SCREEN_W + x] < 0x80;
+		}
+	}
+	CHECK(ink > 400);
+
+	// The angle and the slots as the app found them
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "DEG") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "x+1") != NULL);
+}
+
 /** mandel: the escape counts for points known to stay and to leave. */
 static void test_sample_mandel_escape(void) {
 	char path[512];
@@ -9354,6 +9395,88 @@ static void test_gr_graph(void) {
 	CHECK(strstr(row, "NO CURVE IS ON") != NULL);
 }
 
+/* ---- an app is a visitor --------------------------------------------------- */
+
+/** Run @p source as an app named "visit", after @p before at the prompt, then @p after */
+static void run_visit(const char* source, const char* before, const char* after, uint8_t* fb) {
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "visit", source);
+	static qdos_key_event script[256];
+	size_t n = 0;
+	type_line(script, &n, before);
+	type_more(script, &n, "visit");
+	type_more(script, &n, after);
+	run_script(script, n, fb);
+}
+
+/** What an app changes is put back when it ends: the settings, the slots and the window. */
+static void test_an_app_puts_back_what_it_changed(void) {
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_visit("fn main( -- ) { \"rad\" cfg::set_angle 4 cfg::set_decimals \"x^3\" 1 gr::set_slot 1 2 gr::set_on "
+			  "\"trig\" gr::zoom 1 gr::set_grid }",
+			"\"deg\" cfg::set_angle \"x+1\" 1 gr::set_slot \"x\" 2 gr::set_slot 0 2 gr::set_on",
+			"cfg::angle cfg::decimals 1 gr::slot 2 gr::on gr::window drop drop drop gr::grid", fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 5, row, sizeof(row));
+	CHECK(strstr(row, "DEG") != NULL);
+	read_level(fb, 4, row, sizeof(row));
+	CHECK(strstr(row, "-1") != NULL); // AUTO, as it was
+	read_level(fb, 3, row, sizeof(row));
+	CHECK(strstr(row, "x+1") != NULL);
+	read_level(fb, 2, row, sizeof(row));
+	CHECK(strstr(row, " 0") != NULL); // Y2 off, as it was
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "-10") != NULL); // the standard window, not ZOOM TRIG's
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 0") != NULL); // no grid
+}
+
+/** cfg::keep and gr::keep say the change is the point, and it stays. */
+static void test_an_app_keeps_what_it_says_to(void) {
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_visit("fn main( -- ) { \"deg\" cfg::set_angle cfg::keep \"x^2\" 1 gr::set_slot }", "\"rad\" cfg::set_angle",
+			"cfg::angle 1 gr::slot", fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "DEG") != NULL); // kept
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "x^2") == NULL); // not kept: gr::keep was not said
+
+	run_visit("fn main( -- ) { \"deg\" cfg::set_angle \"x^2\" 1 gr::set_slot gr::keep }", "\"rad\" cfg::set_angle",
+			"cfg::angle 1 gr::slot", fb);
+	read_level(fb, 1, row, sizeof(row));
+	CHECK(strstr(row, "RAD") != NULL);
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "x^2") != NULL);
+}
+
+/** An app that fails half way leaves nothing changed either. */
+static void test_a_failing_app_puts_back_too(void) {
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	store_reset();
+	seed_app(QDOS_SCOPE_INBOX, "visit", "fn main( -- ) { \"deg\" cfg::set_angle 1 0 / }");
+	qdos_key_event script[128];
+	size_t n = 0;
+	type_line(script, &n, "\"rad\" cfg::set_angle");
+	type_more(script, &n, "visit");
+	key(script, &n, QDOS_KEY_CLEAR); // the failed line stays to be put right; ESC empties it
+	type_more(script, &n, "cfg::angle");
+	run_script(script, n, fb);
+
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, "RAD") != NULL);
+}
+
+/** A changed slot put back is the word again: Y1 computes what it did before the app. */
+static void test_a_slot_put_back_is_declared_again(void) {
+	static uint8_t fb[QDOS_SCREEN_W * QDOS_SCREEN_H];
+	run_visit("fn main( -- ) { \"x*100\" 1 gr::set_slot }", "\"x+1\" 1 gr::set_slot", "2 Y1", fb);
+	char row[QDOS_COLS + 1];
+	read_level(fb, 0, row, sizeof(row));
+	CHECK(strstr(row, " 3") != NULL);
+}
+
 int main(void) {
 	test_operator_evaluates_immediately();
 	test_digits_accumulate();
@@ -9642,6 +9765,11 @@ int main(void) {
 	test_sample_tri();
 	test_sample_clock();
 	test_sample_mandel_escape();
+	test_sample_taylor();
+	test_an_app_puts_back_what_it_changed();
+	test_an_app_keeps_what_it_says_to();
+	test_a_failing_app_puts_back_too();
+	test_a_slot_put_back_is_declared_again();
 	test_sample_mandel_draws();
 	test_sample_mandel_zooms();
 	test_a_blind_loop_in_an_app_is_stopped();
