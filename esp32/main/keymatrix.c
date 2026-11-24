@@ -118,6 +118,7 @@ static bool scan_once(bool down[QDOS_PAD_ROWS][QDOS_PAD_COLS], uint8_t streak[QD
 			streak[r][c] = 0;
 			down[r][c] = now;
 			if (now) {
+				ESP_LOGI(TAG, "key row %d col %d", r, c);
 				const qdos_input in = {.pad = true, .row = (uint8_t)r, .col = (uint8_t)c};
 				xQueueSend(g_out, &in, 0);
 			}
